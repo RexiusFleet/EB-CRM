@@ -1,0 +1,1097 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rexius Blower Quotes</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6b3c'/%3E%3Ctext x='16' y='23' font-family='system-ui,sans-serif' font-size='19' font-weight='700' fill='%23fff' text-anchor='middle'%3ER%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#f6f7f5; --panel:#ffffff; --panel-2:#fbfcfa; --ink:#1b2019; --muted:#5f6b5c;
+  --line:#e0e4dd; --line-2:#eef1ec; --accent:#2f6b3c; --accent-ink:#ffffff;
+  --accent-soft:#e8f1e9; --warn:#a8620f; --warn-soft:#fdf1e2; --danger:#a32f2f;
+  --danger-soft:#fbeaea; --good:#2f6b3c; --shadow:0 1px 2px rgba(20,30,18,.06),0 4px 14px rgba(20,30,18,.05);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
+  --line:#2a3025; --line-2:#222719; --accent:#6fbf7f; --accent-ink:#0f1410;
+  --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585;
+  --danger-soft:#2a1717; --good:#6fbf7f; --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
+}}
+:root[data-theme="dark"]{
+  --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
+  --line:#2a3025; --line-2:#222719; --accent:#6fbf7f; --accent-ink:#0f1410;
+  --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585;
+  --danger-soft:#2a1717; --good:#6fbf7f; --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}
+a{color:var(--accent)}
+button{font:inherit;cursor:pointer}
+input,select,textarea{font:inherit;color:inherit}
+.hide{display:none !important}
+
+/* ---------- chrome ---------- */
+header.top{position:sticky;top:0;z-index:50;background:var(--panel);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:16px;padding:10px 18px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:9px;font-weight:650;letter-spacing:-.02em;white-space:nowrap}
+.brand .dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;
+  color:var(--accent-ink);font-size:12px;font-weight:800}
+nav.tabs{display:flex;gap:2px;flex:1;flex-wrap:wrap}
+nav.tabs button{background:none;border:0;padding:7px 12px;border-radius:7px;color:var(--muted);font-weight:550;font-size:14px}
+nav.tabs button:hover{background:var(--line-2);color:var(--ink)}
+nav.tabs button[aria-current="true"]{background:var(--accent-soft);color:var(--accent)}
+.userbox{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.pill{border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;background:var(--panel-2)}
+.pill.demo{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
+.pill.live{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+main{max-width:1400px;margin:0 auto;padding:20px 18px 80px}
+
+/* ---------- primitives ---------- */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.card>h3{padding:13px 16px;border-bottom:1px solid var(--line-2);font-size:13px;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.card>.body{padding:16px}
+.grid{display:grid;gap:16px}
+.btn{background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:9px 15px;font-weight:600;font-size:14px}
+.btn:hover{filter:brightness(1.07)}
+.btn.ghost{background:none;border:1px solid var(--line);color:var(--ink)}
+.btn.ghost:hover{background:var(--line-2);filter:none}
+.btn.sm{padding:5px 10px;font-size:13px;border-radius:6px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+label.f{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;letter-spacing:.02em}
+input[type=text],input[type=number],input[type=email],input[type=password],select,textarea{
+  width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2)}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.row>*{flex:1;min-width:0}
+.muted{color:var(--muted)}
+.small{font-size:12.5px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+  font-weight:600;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid var(--line-2);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.scroll{overflow-x:auto}
+.tag{display:inline-block;font-size:11px;padding:1.5px 7px;border-radius:999px;border:1px solid var(--line);
+  background:var(--panel-2);color:var(--muted);white-space:nowrap}
+.tag.g{background:var(--accent-soft);border-color:transparent;color:var(--accent)}
+.tag.w{background:var(--warn-soft);border-color:transparent;color:var(--warn)}
+.tag.d{background:var(--danger-soft);border-color:transparent;color:var(--danger)}
+.note{background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 30%,transparent);
+  color:var(--warn);border-radius:9px;padding:10px 12px;font-size:13px}
+.note.bad{background:var(--danger-soft);border-color:color-mix(in srgb,var(--danger) 30%,transparent);color:var(--danger)}
+.note.ok{background:var(--accent-soft);border-color:transparent;color:var(--accent)}
+.empty{padding:34px 16px;text-align:center;color:var(--muted);font-size:14px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);
+  border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* ---------- search ---------- */
+.searchwrap{position:relative;flex:1;min-width:240px;max-width:520px}
+.searchwrap input{padding-left:32px}
+.searchwrap svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.5}
+.results{position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;box-shadow:var(--shadow);max-height:60vh;overflow:auto;z-index:60}
+.results button{display:block;width:100%;text-align:left;background:none;border:0;padding:9px 12px;
+  border-bottom:1px solid var(--line-2)}
+.results button:hover{background:var(--line-2)}
+.results .a{font-weight:600;font-size:14px}
+.results .b{font-size:12px;color:var(--muted);margin-top:1px}
+
+/* ---------- quote builder ---------- */
+.qgrid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
+@media(max-width:1080px){.qgrid{grid-template-columns:1fr}}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px dashed var(--line-2);font-size:13.5px}
+.kv:last-child{border-bottom:0}
+.kv .k{color:var(--muted)}
+.kv .v{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:550}
+.kv.total{border-top:2px solid var(--line);margin-top:6px;padding-top:10px;font-size:16px;font-weight:650}
+.kv.total .v{font-size:19px}
+.basis{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.4}
+.basis b{color:var(--accent);font-weight:600}
+.hrbox{border:1px solid var(--line);border-radius:10px;padding:11px 12px;background:var(--panel-2)}
+.hrbox .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px}
+.hrbox .top .lbl{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+.range{height:4px;border-radius:2px;background:var(--line);position:relative;margin-top:8px}
+.range .band{position:absolute;height:100%;background:var(--accent-soft);border-radius:2px}
+.range .mark{position:absolute;width:2px;height:10px;top:-3px;background:var(--accent);border-radius:1px}
+.timeline{position:relative;padding-left:18px}
+.timeline:before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:var(--line)}
+.tl{position:relative;padding:9px 0 9px 4px;border-bottom:1px solid var(--line-2)}
+.tl:last-child{border-bottom:0}
+.tl:before{content:"";position:absolute;left:-17px;top:15px;width:9px;height:9px;border-radius:50%;
+  background:var(--panel);border:2px solid var(--accent)}
+.tl.q:before{border-color:var(--muted)}
+.tl .h{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}
+.tl .h .t{font-weight:600;font-size:13.5px}
+.tl .h .d{font-size:12px;color:var(--muted);font-family:var(--mono)}
+.tl .m{font-size:12.5px;color:var(--muted);margin-top:3px}
+.tl .n{font-size:12px;color:var(--muted);margin-top:5px;padding:6px 9px;background:var(--panel-2);
+  border-radius:7px;border:1px solid var(--line-2);white-space:pre-wrap}
+.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px}
+.stat .s{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.stat .s .l{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600}
+.stat .s .v{font-size:23px;font-weight:650;font-family:var(--mono);margin-top:3px;letter-spacing:-.02em}
+.stat .s .sub{font-size:12px;color:var(--muted);margin-top:1px}
+.bar{height:7px;border-radius:4px;background:var(--line);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+dialog{border:0;border-radius:14px;padding:0;background:var(--panel);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.3);
+  max-width:440px;width:calc(100vw - 32px)}
+dialog::backdrop{background:rgba(10,14,9,.55)}
+.dlg{padding:22px}
+.dlg h2{font-size:18px;margin-bottom:4px}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand"><span class="dot">R</span> Blower Quotes</div>
+  <div class="searchwrap" id="searchwrap">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+      <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input type="text" id="search" placeholder="Search address, customer, or phone…" autocomplete="off">
+    <div class="results hide" id="results"></div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-view="quote" aria-current="true">New Quote</button>
+    <button data-view="quotes">Saved Quotes</button>
+    <button data-view="dash">Dashboard</button>
+    <button data-view="rates">Rate Card</button>
+  </nav>
+  <div class="userbox">
+    <span class="pill" id="modepill">…</span>
+    <span id="whoami"></span>
+    <button class="btn ghost sm" id="authbtn">Sign in</button>
+  </div>
+</header>
+
+<main>
+  <div id="boot" class="card"><div class="empty"><span class="spin"></span> Loading…</div></div>
+
+  <!-- ============================ NEW QUOTE ============================ -->
+  <section id="view-quote" class="hide">
+    <div class="qgrid">
+
+      <!-- LEFT: job + history -->
+      <div class="grid">
+        <div class="card">
+          <h3>Job site <span id="sitetag"></span></h3>
+          <div class="body grid" style="gap:12px">
+            <div class="row">
+              <div style="flex:2"><label class="f">Customer name</label>
+                <input type="text" id="q_customer" placeholder="Name on the job"></div>
+              <div><label class="f">Phone</label><input type="text" id="q_phone"></div>
+            </div>
+            <div class="row">
+              <div style="flex:2"><label class="f">Address</label>
+                <input type="text" id="q_address" placeholder="1234 Example St, Eugene"></div>
+              <div><label class="f">City</label><input type="text" id="q_city"></div>
+              <div style="max-width:110px"><label class="f">ZIP</label><input type="text" id="q_zip"></div>
+            </div>
+            <div id="sitebanner"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>History at this address <span id="histcount" class="muted"></span></h3>
+          <div class="body" id="history"><div class="empty">Search an address to pull its history.</div></div>
+        </div>
+
+        <div class="card">
+          <h3>Comparable jobs <span class="muted" id="compsub"></span></h3>
+          <div class="body scroll" id="comparables"><div class="empty">Pick a product and volume.</div></div>
+        </div>
+      </div>
+
+      <!-- RIGHT: the quote -->
+      <div class="grid">
+        <div class="card">
+          <h3>Quote</h3>
+          <div class="body grid" style="gap:14px">
+            <div class="row">
+              <div style="flex:2"><label class="f">Product</label><select id="q_product"></select></div>
+              <div><label class="f">Yards</label><input type="number" id="q_yards" min="0" step="0.5" value="15"></div>
+            </div>
+            <div id="costwarn"></div>
+
+            <div class="grid" style="gap:10px">
+              <div class="hrbox">
+                <div class="top"><span class="lbl">Drive time (round trip)</span>
+                  <span><input type="number" id="q_drive" step="0.25" min="0" style="width:88px;text-align:right"
+                        class="mono"> <span class="small muted">hr</span></span></div>
+                <div class="basis" id="drivebasis"></div>
+              </div>
+              <div class="hrbox">
+                <div class="top"><span class="lbl">Blow time (on site)</span>
+                  <span><input type="number" id="q_blow" step="0.25" min="0" style="width:88px;text-align:right"
+                        class="mono"> <span class="small muted">hr</span></span></div>
+                <div class="basis" id="blowbasis"></div>
+                <div class="range hide" id="blowrange"><i class="band"></i><i class="mark"></i></div>
+              </div>
+              <div class="row">
+                <div><label class="f">Prep hr</label><input type="number" id="q_prep" step="0.25" value="0.5" class="mono"></div>
+                <div><label class="f">Helpers</label><input type="number" id="q_helpers" step="1" min="0" value="1" class="mono"></div>
+                <div><label class="f">Prevailing wage</label>
+                  <select id="q_pw"><option value="0">No</option><option value="1">Yes</option></select></div>
+              </div>
+            </div>
+
+            <div style="border-top:1px solid var(--line-2);padding-top:12px">
+              <div class="kv"><span class="k">Equipment hours <span class="small">prep + drive + blow</span></span>
+                <span class="v" id="o_eqhr">—</span></div>
+              <div class="kv"><span class="k">Labor hours <span class="small">equip × (1 + helpers)</span></span>
+                <span class="v" id="o_labhr">—</span></div>
+            </div>
+
+            <div style="border-top:1px solid var(--line-2);padding-top:12px">
+              <div class="kv"><span class="k" id="k_mat">Material</span><span class="v" id="o_mat">—</span></div>
+              <div class="kv"><span class="k" id="k_lab">Labor</span><span class="v" id="o_lab">—</span></div>
+              <div class="kv"><span class="k" id="k_eq">Equipment</span><span class="v" id="o_eq">—</span></div>
+              <div class="kv"><span class="k" id="k_oh">Overhead</span><span class="v" id="o_oh">—</span></div>
+              <div class="kv"><span class="k">Cost</span><span class="v" id="o_cost">—</span></div>
+              <div class="kv"><span class="k">Markup <span class="small" id="o_mkpct"></span></span>
+                <span class="v" id="o_mk">—</span></div>
+              <div class="kv total"><span class="k">Target price</span><span class="v" id="o_target">—</span></div>
+            </div>
+
+            <div class="row" style="align-items:flex-end">
+              <div><label class="f">Bid amount</label><input type="number" id="q_bid" step="1" class="mono num"></div>
+              <div style="max-width:150px"><label class="f">Status</label>
+                <select id="q_status"><option>draft</option><option>sent</option><option>won</option><option>lost</option></select></div>
+            </div>
+            <div id="marginnote"></div>
+
+            <div>
+              <div class="kv"><span class="k">Material revenue <span class="small">bid − labor − equip</span></span>
+                <span class="v" id="o_mrev">—</span></div>
+              <div class="kv"><span class="k">Labor revenue</span><span class="v" id="o_lrev">—</span></div>
+              <div class="kv"><span class="k">Equipment revenue</span><span class="v" id="o_erev">—</span></div>
+            </div>
+
+            <div><label class="f">Notes</label><textarea id="q_notes" rows="2"
+                 placeholder="Access, hose pull, gate code, staging…"></textarea></div>
+            <div class="row">
+              <button class="btn" id="savequote">Save quote</button>
+              <button class="btn ghost" id="newquote">Clear</button>
+            </div>
+            <div id="savemsg"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ SAVED QUOTES ============================ -->
+  <section id="view-quotes" class="hide">
+    <div class="card"><h3>Saved quotes <span class="muted" id="qcount"></span></h3>
+      <div class="body scroll" id="quoteslist"></div></div>
+  </section>
+
+  <!-- ============================ DASHBOARD ============================ -->
+  <section id="view-dash" class="hide">
+    <div class="grid" style="gap:16px">
+      <div class="stat" id="dashstats"></div>
+      <div class="card"><h3>Blow time per yard by product <span class="muted small">from quote history</span></h3>
+        <div class="body scroll" id="dashprod"></div></div>
+      <div class="card"><h3>Quote activity by rep</h3><div class="body scroll" id="dashrep"></div></div>
+      <div class="card"><h3>Delivered work by year <span class="muted small">ERP orders</span></h3>
+        <div class="body scroll" id="dashyear"></div></div>
+    </div>
+  </section>
+
+  <!-- ============================ RATE CARD ============================ -->
+  <section id="view-rates" class="hide">
+    <div class="grid" style="gap:16px">
+      <div id="ratesadminnote"></div>
+      <div class="card"><h3>Product costs <span class="muted small">cost per unit ÷ yards per unit = cost per yard</span></h3>
+        <div class="body scroll" id="ratetable"></div></div>
+      <div class="row" style="align-items:flex-start">
+        <div class="card" style="flex:1"><h3>Markup by volume</h3><div class="body scroll" id="markuptable"></div></div>
+        <div class="card" style="flex:1"><h3>Rates &amp; constants</h3><div class="body scroll" id="settingstable"></div></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="authdlg"><form method="dialog" class="dlg" id="authform">
+  <h2>Sign in</h2>
+  <p class="muted small" style="margin:4px 0 16px">Use your Rexius email and the password an admin set up for you.</p>
+  <div class="grid" style="gap:12px">
+    <div><label class="f">Email</label><input type="email" id="au_email" required></div>
+    <div><label class="f">Password</label><input type="password" id="au_pw" required></div>
+    <div id="autherr"></div>
+    <div class="row"><button class="btn" id="au_go" value="go">Sign in</button>
+      <button class="btn ghost" value="cancel" formnovalidate>Cancel</button></div>
+  </div>
+</form></dialog>
+
+<script src="engine.js"></script>
+<script>
+/* ===========================================================================
+   CONFIG -- fill these in after you create the Supabase project.
+   Leave blank to run in offline demo mode against data/bundle.json.
+   The anon key is safe to publish: every RLS policy requires a logged-in
+   user, so the key alone reads nothing.
+   =========================================================================== */
+const CONFIG = {
+  SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',   // e.g. 'https://abcdefgh.supabase.co'
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
+};
+
+/* =============================== helpers ================================= */
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const money = n => n==null||isNaN(n) ? '—' : '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+const money2 = n => n==null||isNaN(n) ? '—' : '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const hrs = n => n==null||isNaN(n) ? '—' : Number(n).toFixed(2).replace(/\.00$/,'')+' hr';
+const pctf = n => n==null||isNaN(n) ? '—' : (n*100).toFixed(1)+'%';
+const dfmt = d => !d ? '' : new Date(d+'T12:00:00').toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'});
+const debounce=(f,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),ms)}};
+
+/* ---- shared address normalizer: must mirror addr.py exactly ---- */
+const SUFFIX={avenue:'ave',aven:'ave',av:'ave',ave:'ave',street:'st',stret:'st',str:'st',st:'st',road:'rd',rd:'rd',
+ drive:'dr',driv:'dr',dr:'dr',lane:'ln',ln:'ln',court:'ct',crt:'ct',ct:'ct',boulevard:'blvd',blvd:'blvd',blv:'blvd',
+ place:'pl',pl:'pl',terrace:'ter',terr:'ter',ter:'ter',circle:'cir',cir:'cir',crcl:'cir',parkway:'pkwy',pkwy:'pkwy',
+ pky:'pkwy',highway:'hwy',hwy:'hwy',way:'way',wy:'way',loop:'loop',trail:'trl',trl:'trl',square:'sq',sq:'sq',
+ crossing:'xing',xing:'xing',heights:'hts',hts:'hts',ridge:'rdg',rdg:'rdg',view:'vw',vw:'vw',north:'n',south:'s',
+ east:'e',west:'w',northeast:'ne',northwest:'nw',southeast:'se',southwest:'sw',saint:'st',mount:'mt',mt:'mt'};
+const CITIES=['eugene','springfield','spfld','spr','eug','coburg','creswell','veneta','junction city','j city',
+ 'j. city','jct city','harrisburg','cottage grove','c grove','c. grove','goshen','pleasant hill','marcola',
+ 'walterville','leaburg','vida','blue river','lowell','dexter','fall creek','elmira','noti','crow','florence',
+ 'mapleton','corvallis','albany','salem','philomath','monroe','brownsville','halsey','sweet home','lebanon',
+ 'roseburg','sutherlin','oakland','winchester','coos bay','north bend','reedsport','bandon','newport','waldport',
+ 'yachats','toledo','sisters','bend','redmond','portland','gresham','oakridge','westfir','drain','yoncalla',
+ 'curtin','deadwood','swisshome','triangle lake','blachly','alvadore','santa clara','thurston','jasper','trent'];
+const CITY_RE=new RegExp('[,\\s]+(?:'+CITIES.slice().sort((a,b)=>b.length-a.length)
+  .map(c=>c.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|')+')\\.?\\s*$','i');
+const STATE_RE=/[,\s]+(?:or|ore|oregon|wa|washington|ca|bc)\.?\s*$/i;
+const ZIP_END_RE=/[,\s]+(\d{5})(?:-\d{4})?\s*$/;
+const UNIT_RE=/\s+(?:apt|apartment|unit|ste|suite|bldg|building|lot|space|spc|#)\s*[\w-]*\s*$/i;
+const NOISE_RE=/\([^)]*\)|\b(?:behind|back of|next to|across from)\b.*$/i;
+function streetKey(addr){
+  if(!addr) return '';
+  let s=String(addr).toLowerCase().trim().replace(NOISE_RE,' ').replace(/\s+/g,' ').trim();
+  let prev=null;
+  while(prev!==s){ prev=s;
+    s=s.replace(ZIP_END_RE,'').trim().replace(/,$/,'');
+    s=s.replace(STATE_RE,'').trim().replace(/,$/,'');
+    s=s.replace(CITY_RE,'').trim().replace(/,$/,'');
+    s=s.replace(UNIT_RE,'').trim().replace(/,$/,'');
+  }
+  s=s.replace(/[.,#]/g,' ').replace(/\b(\d+)(?:st|nd|rd|th)\b/g,'$1');
+  return s.split(/\s+/).filter(Boolean).map(t=>SUFFIX[t]||t).join(' ').trim();
+}
+function extractZip(a){const m=String(a||'').match(/\b(\d{5})(?:-\d{4})?\b/);return m?m[1]:'';}
+function extractCity(a){
+  if(!a) return '';
+  let s=String(a).replace(/\s+/g,' ').trim().replace(ZIP_END_RE,'').trim().replace(/,$/,'')
+        .replace(STATE_RE,'').trim().replace(/,$/,'');
+  const m=s.match(CITY_RE);
+  let c = m ? m[0].replace(/^[,\s]+/,'').replace(/\.$/,'') : (s.split(',').length>1 ? s.split(',').pop().trim() : '');
+  if(!c) return '';
+  c=c.replace(/\b\w/g,x=>x.toUpperCase());
+  return ({Spfld:'Springfield',Spr:'Springfield',Eug:'Eugene','C Grove':'Cottage Grove',
+           'J City':'Junction City'})[c]||c;
+}
+
+/* ============================ data adapters ============================== */
+const LIVE = !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
+const State = { user:null, token:null, isAdmin:false, ref:null, site:null, comps:[] };
+
+/* ---- Supabase REST (hand-rolled: no SDK, nothing to load from a CDN) ---- */
+const SB = {
+  h(extra){
+    const h = Object.assign({apikey:CONFIG.SUPABASE_ANON_KEY,'Content-Type':'application/json'}, extra||{});
+    if(State.token) h.Authorization = 'Bearer '+State.token;
+    return h;
+  },
+  async rest(path, opts){
+    const r = await fetch(CONFIG.SUPABASE_URL+'/rest/v1/'+path, Object.assign({headers:SB.h(opts&&opts.headers)}, opts));
+    if(!r.ok) throw new Error((await r.text())||r.statusText);
+    return r.status===204 ? null : r.json();
+  },
+  async signIn(email,password){
+    const r = await fetch(CONFIG.SUPABASE_URL+'/auth/v1/token?grant_type=password',
+      {method:'POST',headers:{apikey:CONFIG.SUPABASE_ANON_KEY,'Content-Type':'application/json'},
+       body:JSON.stringify({email,password})});
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error_description||j.msg||j.message||'Sign-in failed');
+    State.token=j.access_token; State.user=j.user;
+    try{ localStorage.setItem('rx_tok', JSON.stringify({t:j.access_token,r:j.refresh_token,u:j.user})); }catch(e){}
+    return j;
+  },
+  async restore(){
+    let s=null; try{ s=JSON.parse(localStorage.getItem('rx_tok')||'null'); }catch(e){}
+    if(!s||!s.r) return false;
+    const r = await fetch(CONFIG.SUPABASE_URL+'/auth/v1/token?grant_type=refresh_token',
+      {method:'POST',headers:{apikey:CONFIG.SUPABASE_ANON_KEY,'Content-Type':'application/json'},
+       body:JSON.stringify({refresh_token:s.r})});
+    if(!r.ok){ try{localStorage.removeItem('rx_tok');}catch(e){} return false; }
+    const j = await r.json();
+    State.token=j.access_token; State.user=j.user;
+    try{ localStorage.setItem('rx_tok', JSON.stringify({t:j.access_token,r:j.refresh_token,u:j.user})); }catch(e){}
+    return true;
+  },
+  signOut(){ State.token=null; State.user=null; State.isAdmin=false;
+    try{ localStorage.removeItem('rx_tok'); }catch(e){} }
+};
+
+const DemoDB = {
+  mode:'demo', B:null,
+  async init(){
+    const r = await fetch('data/bundle.json');
+    if(!r.ok) throw new Error('bundle.json not found — serve this folder over http, or fill in CONFIG.');
+    this.B = await r.json();
+    this._sitesByKey = new Map(this.B.sites.map(s=>[s.site_key,s]));
+    this._ordBySite = groupBy(this.B.orders,'site_key');
+    this._qhBySite  = groupBy(this.B.quote_history,'site_key');
+    this._quotes = loadLocalQuotes();
+    return this.reference();
+  },
+  reference(){
+    return {rate_card:this.B.rate_card, markup_curve:this.B.markup_curve, settings:this.B.settings,
+            blow_benchmarks:this.B.blow_benchmarks, drive_zones:this.B.drive_zones};
+  },
+  async search(q){
+    const s=q.toLowerCase().trim(); if(s.length<2) return [];
+    const out=new Map();
+    const add=(key,addr,city,zip,name,when)=>{
+      if(!key) return;
+      const e=out.get(key)||{site_key:key,address1:addr,city,zip,names:new Set(),n:0,last:null};
+      if(name) e.names.add(name); e.n++; if(when&&(!e.last||when>e.last)) e.last=when;
+      if(!e.address1&&addr) e.address1=addr; if(!e.city&&city) e.city=city;
+      out.set(key,e);
+    };
+    for(const o of this.B.orders){
+      if((o.ship_addr1||'').toLowerCase().includes(s)||(o.customer_name||'').toLowerCase().includes(s)
+        ||(o.ship_city||'').toLowerCase().includes(s))
+        add(o.site_key,o.ship_addr1,o.ship_city,o.ship_zip,o.customer_name,o.ord_date);
+      if(out.size>400) break;
+    }
+    for(const q2 of this.B.quote_history){
+      if((q2.address_raw||'').toLowerCase().includes(s)||(q2.customer_name||'').toLowerCase().includes(s)
+        ||String(q2.phone||'').includes(s))
+        add(q2.site_key,q2.address_raw,q2.city,q2.zip,q2.customer_name,q2.quote_date);
+      if(out.size>400) break;
+    }
+    return Array.from(out.values()).sort((a,b)=>(b.last||'').localeCompare(a.last||'')).slice(0,25);
+  },
+  async siteHistory(key){
+    return {orders:(this._ordBySite.get(key)||[]).slice(), quotes:(this._qhBySite.get(key)||[]).slice(),
+            lines:this.B.order_lines};
+  },
+  async comparables(product,yards){
+    const lo=yards*0.6, hi=yards*1.6;
+    return this.B.quote_history
+      .filter(q=>q.product===product && q.yards>=lo && q.yards<=hi && q.blow_hours!=null)
+      .sort((a,b)=>(b.quote_date||'').localeCompare(a.quote_date||'')).slice(0,12);
+  },
+  async listQuotes(){ return this._quotes.slice().sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')); },
+  async saveQuote(q){ q.id='local-'+Date.now(); q.created_at=new Date().toISOString();
+    this._quotes.push(q); saveLocalQuotes(this._quotes); return q; },
+  async updateRate(product,patch){
+    const r=this.B.rate_card.find(x=>x.product===product); if(!r) return;
+    Object.assign(r,patch);
+    r.cost_per_yard = r.unit_cost==null?null:r.unit_cost/(r.yards_per_unit||7.5);
+    r.needs_cost = r.unit_cost==null;
+    return r;
+  },
+  async ordersAll(){ return this.B.orders; },
+  async quoteHistoryAll(){ return this.B.quote_history; }
+};
+
+const LiveDB = {
+  mode:'live',
+  async init(){
+    const [rate_card,markup_curve,settingsRows,blow_benchmarks,drive_zones] = await Promise.all([
+      SB.rest('rate_card?select=*&order=product'),
+      SB.rest('markup_curve?select=*&order=min_yards'),
+      SB.rest('settings?select=*'),
+      SB.rest('blow_benchmarks?select=*'),
+      SB.rest('drive_zones?select=*')
+    ]);
+    const settings={}; settingsRows.forEach(r=>settings[r.key]=Number(r.value));
+    if(State.user){
+      try{ const p=await SB.rest('profiles?select=is_admin&id=eq.'+State.user.id);
+           State.isAdmin=!!(p&&p[0]&&p[0].is_admin); }catch(e){}
+    }
+    return {rate_card,markup_curve,settings,blow_benchmarks,drive_zones};
+  },
+  async search(q){
+    const s=encodeURIComponent('%'+q.trim()+'%');
+    const [o,h]=await Promise.all([
+      SB.rest(`orders?select=site_key,ship_addr1,ship_city,ship_zip,customer_name,ord_date&or=(ship_addr1.ilike.${s},customer_name.ilike.${s})&limit=60`),
+      SB.rest(`quote_history?select=site_key,address_raw,city,zip,customer_name,quote_date&or=(address_raw.ilike.${s},customer_name.ilike.${s})&limit=60`)
+    ]);
+    const out=new Map();
+    const add=(key,addr,city,zip,name,when)=>{ if(!key)return;
+      const e=out.get(key)||{site_key:key,address1:addr,city,zip,names:new Set(),n:0,last:null};
+      if(name)e.names.add(name); e.n++; if(when&&(!e.last||when>e.last))e.last=when;
+      if(!e.address1&&addr)e.address1=addr; if(!e.city&&city)e.city=city; out.set(key,e); };
+    o.forEach(r=>add(r.site_key,r.ship_addr1,r.ship_city,r.ship_zip,r.customer_name,r.ord_date));
+    h.forEach(r=>add(r.site_key,r.address_raw,r.city,r.zip,r.customer_name,r.quote_date));
+    return Array.from(out.values()).sort((a,b)=>(b.last||'').localeCompare(a.last||'')).slice(0,25);
+  },
+  async siteHistory(key){
+    const k=encodeURIComponent(key);
+    const [orders,quotes]=await Promise.all([
+      SB.rest(`orders?select=*&site_key=eq.${k}&order=ord_date.desc`),
+      SB.rest(`quote_history?select=*&site_key=eq.${k}&order=quote_date.desc`)
+    ]);
+    let lines={};
+    if(orders.length){
+      const ids=orders.slice(0,25).map(o=>`"${o.ord_nbr}"`).join(',');
+      const rows=await SB.rest(`order_lines?select=ord_nbr,line_kind,descr,qty,unit,ext_price&ord_nbr=in.(${ids})`);
+      rows.forEach(r=>{(lines[r.ord_nbr]=lines[r.ord_nbr]||[]).push({k:r.line_kind,d:r.descr,q:r.qty,u:r.unit,e:r.ext_price});});
+    }
+    return {orders,quotes,lines};
+  },
+  async comparables(product,yards){
+    const p=encodeURIComponent(product);
+    return SB.rest(`quote_history?select=*&product=eq.${p}&yards=gte.${(yards*0.6).toFixed(2)}&yards=lte.${(yards*1.6).toFixed(2)}&blow_hours=not.is.null&order=quote_date.desc&limit=12`);
+  },
+  async listQuotes(){ return SB.rest('quotes?select=*&order=created_at.desc&limit=300'); },
+  async saveQuote(q){
+    q.created_by = State.user && State.user.id;
+    const r = await SB.rest('quotes', {method:'POST', headers:{Prefer:'return=representation'}, body:JSON.stringify(q)});
+    return r[0];
+  },
+  async updateRate(product,patch){
+    const r = await SB.rest('rate_card?product=eq.'+encodeURIComponent(product),
+      {method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(patch)});
+    return r[0];
+  },
+  async ordersAll(){ return SB.rest('orders?select=ord_date,primary_product,total_yards,labor_hours,equip_hours,invc_tot,sales_person_id,order_type&limit=6000'); },
+  async quoteHistoryAll(){ return SB.rest('quote_history?select=quote_date,sales_person,product,yards,blow_hours,drive_hours,bid_amount&limit=4000'); }
+};
+
+let DB = LIVE ? LiveDB : DemoDB;
+
+function groupBy(arr,k){const m=new Map();for(const r of arr){const v=r[k];if(!v)continue;
+  if(!m.has(v))m.set(v,[]);m.get(v).push(r);}return m;}
+function loadLocalQuotes(){try{return JSON.parse(localStorage.getItem('rx_quotes')||'[]')}catch(e){return[]}}
+function saveLocalQuotes(q){try{localStorage.setItem('rx_quotes',JSON.stringify(q))}catch(e){}}
+
+/* ============================== boot ==================================== */
+async function boot(){
+  $('#modepill').textContent = LIVE ? 'Supabase' : 'Demo data';
+  $('#modepill').className = 'pill '+(LIVE?'live':'demo');
+  if(LIVE){ try{ await SB.restore(); }catch(e){} }
+  try{
+    State.ref = await DB.init();
+  }catch(e){
+    $('#boot').innerHTML = '<div class="body"><div class="note bad"><b>Could not load data.</b><br>'+
+      esc(e.message)+'</div></div>';
+    return;
+  }
+  $('#boot').classList.add('hide');
+  renderAuth();
+  fillProducts();
+  recalc();
+  show('quote');
+  wire();
+}
+
+function renderAuth(){
+  const signedIn = !!State.user;
+  $('#whoami').textContent = signedIn ? (State.user.email||'') : (LIVE?'':'offline');
+  $('#authbtn').textContent = signedIn ? 'Sign out' : 'Sign in';
+  $('#authbtn').classList.toggle('hide', !LIVE);
+  $('#savequote').disabled = LIVE && !signedIn;
+}
+
+function show(v){
+  $$('#tabs button').forEach(b=>b.setAttribute('aria-current', String(b.dataset.view===v)));
+  ['quote','quotes','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  if(v==='quotes') renderQuotesList();
+  if(v==='dash')   renderDash();
+  if(v==='rates')  renderRates();
+}
+
+/* ============================ quote builder ============================== */
+function fillProducts(){
+  const sel=$('#q_product'); sel.innerHTML='';
+  const cats={bark:'Bark & mulch',soil_compost:'Soil & compost',rock:'Rock',other:'Other'};
+  const groups={};
+  State.ref.rate_card.filter(r=>r.active!==false).forEach(r=>{(groups[r.category||'other']=groups[r.category||'other']||[]).push(r)});
+  Object.keys(cats).forEach(c=>{
+    if(!groups[c]||!groups[c].length) return;
+    const og=el('optgroup'); og.label=cats[c];
+    groups[c].sort((a,b)=>a.product.localeCompare(b.product)).forEach(r=>{
+      const o=el('option'); o.value=r.product;
+      o.textContent = r.product + (r.needs_cost?'  — needs cost':'');
+      og.appendChild(o);
+    });
+    sel.appendChild(og);
+  });
+  sel.value = 'Hemlock';
+  if(!sel.value) sel.selectedIndex = 0;
+}
+
+function currentRate(){
+  const p=$('#q_product').value;
+  return State.ref.rate_card.find(r=>r.product===p) || null;
+}
+
+function estimateCtx(){
+  return {
+    product: $('#q_product').value,
+    yards: parseFloat($('#q_yards').value)||0,
+    city: $('#q_city').value || extractCity($('#q_address').value),
+    zip: $('#q_zip').value || extractZip($('#q_address').value),
+    siteHistory: State.site ? {quotes:State.site.quotes, orders:State.site.orders} : {quotes:[],orders:[]},
+    blowBenchmarks: State.ref.blow_benchmarks,
+    driveZones: State.ref.drive_zones,
+    settings: State.ref.settings
+  };
+}
+
+let autoFill = {drive:true, blow:true};   // stop overwriting once the rep types
+
+function suggest(){
+  const ctx = estimateCtx();
+  if(!ctx.yards){ return; }
+  const d = Engine.estimateDrive(ctx);
+  const b = Engine.estimateBlow(ctx);
+  if(autoFill.drive) $('#q_drive').value = d.hours;
+  if(autoFill.blow)  $('#q_blow').value  = b.hours;
+
+  $('#drivebasis').innerHTML = basisLabel(d.basis) + esc(d.detail) +
+    (autoFill.drive?'':' <span class="tag">overridden</span>');
+  $('#blowbasis').innerHTML  = basisLabel(b.basis) + esc(b.detail) +
+    (autoFill.blow?'':' <span class="tag">overridden</span>');
+
+  // Range bar: pad the domain either side of the typical band so the band
+  // reads as a band, and the rep's current value as a position within it.
+  const rg=$('#blowrange');
+  if(b.low!=null && b.high!=null && b.high>b.low){
+    rg.classList.remove('hide');
+    const cur=parseFloat($('#q_blow').value)||b.hours;
+    const pad=(b.high-b.low)*0.6;
+    const lo=Math.min(b.low-pad,cur), hi=Math.max(b.high+pad,cur), span=(hi-lo)||1;
+    const pos=v=>Math.max(0,Math.min(100,(v-lo)/span*100));
+    rg.querySelector('.band').style.left=pos(b.low)+'%';
+    rg.querySelector('.band').style.width=(pos(b.high)-pos(b.low))+'%';
+    rg.querySelector('.mark').style.left=pos(cur)+'%';
+    const outside = cur<b.low || cur>b.high;
+    rg.title='Typical range '+b.low+'–'+b.high+' hr';
+    $('#blowbasis').innerHTML += ' <span class="tag'+(outside?' w':'')+'">typical '+
+      b.low+'–'+b.high+' hr'+(outside?' · outside':'')+'</span>';
+  } else rg.classList.add('hide');
+}
+
+function basisLabel(b){
+  const map={site_product:['site history','g'],site_scaled:['site history','g'],site:['site history','g'],
+             product_band:['product + volume',''],product:['product average',''],
+             zone:['city average',''],default:['company default','w'],fallback:['no data','d']};
+  const m=map[b]||['',''];
+  return '<span class="tag '+m[1]+'" style="margin-right:6px">'+esc(m[0])+'</span>';
+}
+
+function recalc(){
+  suggest();
+  const ctx = estimateCtx();
+  const rc = currentRate();
+  const yards = ctx.yards;
+  const prep = parseFloat($('#q_prep').value)||0;
+  const helpers = parseFloat($('#q_helpers').value)||0;
+  const drive = parseFloat($('#q_drive').value)||0;
+  const blow = parseFloat($('#q_blow').value)||0;
+  const equipHours = prep+drive+blow;
+  const laborHours = equipHours*(1+helpers);
+
+  $('#o_eqhr').textContent = hrs(equipHours);
+  $('#o_labhr').textContent = hrs(laborHours);
+
+  const p = Engine.price({
+    yards, rateCardRow: rc, settings: State.ref.settings,
+    markupCurve: State.ref.markup_curve, equipHours, laborHours,
+    prevailingWage: $('#q_pw').value==='1',
+    bidAmount: $('#q_bid').value===''?null:parseFloat($('#q_bid').value)
+  });
+
+  $('#costwarn').innerHTML = (rc && rc.needs_cost)
+    ? '<div class="note"><b>'+esc(rc.product)+'</b> has no 2026 cost yet, so this quote can\'t be priced. '+
+      'Set it on the Rate Card tab.</div>' : '';
+
+  $('#k_mat').innerHTML = 'Material <span class="small">'+(p.costPerYard!=null?money2(p.costPerYard)+'/yd × '+yards+' yd':'—')+'</span>';
+  $('#k_lab').innerHTML = 'Labor <span class="small">'+hrs(laborHours)+' × $'+p.laborRate+'</span>';
+  $('#k_eq').innerHTML  = 'Equipment <span class="small">'+hrs(equipHours)+' × $'+State.ref.settings.equipment_rate+'</span>';
+  $('#k_oh').innerHTML  = 'Overhead <span class="small">'+esc(p.overheadBasis)+'</span>';
+
+  $('#o_mat').textContent=money2(p.materialCost); $('#o_lab').textContent=money2(p.laborCost);
+  $('#o_eq').textContent=money2(p.equipCost);     $('#o_oh').textContent=money2(p.overhead);
+  $('#o_cost').textContent=money2(p.cost);
+  $('#o_mkpct').textContent='('+(p.markup*100).toFixed(0)+'% at '+yards+' yd)';
+  $('#o_mk').textContent = p.cost==null?'—':money2(p.targetPrice-p.cost);
+  $('#o_target').textContent=money(p.targetPrice);
+  if($('#q_bid').value==='' && p.targetPrice!=null) $('#q_bid').placeholder = Math.round(p.targetPrice);
+  $('#o_mrev').textContent=money2(p.materialRev);
+  $('#o_lrev').textContent=money2(p.laborRev);
+  $('#o_erev').textContent=money2(p.equipRev);
+
+  const gm=p.grossMargin;
+  $('#marginnote').innerHTML = gm==null ? '' :
+    (gm < 0
+      ? '<div class="note bad">Bid is <b>'+money2(p.cost-p.bidAmount)+' below cost</b> — margin '+pctf(gm)+'.</div>'
+      : gm < p.markup*0.5
+        ? '<div class="note">Margin '+pctf(gm)+' — below the '+(p.markup*100).toFixed(0)+'% target for '+yards+' yd.</div>'
+        : '<div class="note ok">Margin '+pctf(gm)+' on '+money(p.cost)+' of cost.</div>');
+
+  State.lastPrice = p;
+  renderComparables();
+}
+
+async function renderComparables(){
+  const prod=$('#q_product').value, yards=parseFloat($('#q_yards').value)||0;
+  if(!yards){ $('#comparables').innerHTML='<div class="empty">Enter yards.</div>'; return; }
+  const rows = await DB.comparables(prod, yards);
+  $('#compsub').textContent = rows.length ? prod+' · '+Math.round(yards*0.6)+'–'+Math.round(yards*1.6)+' yd' : '';
+  if(!rows.length){ $('#comparables').innerHTML='<div class="empty">No past quotes for '+esc(prod)+' near '+yards+' yd.</div>'; return; }
+  const t=el('table');
+  t.innerHTML='<thead><tr><th>Date</th><th>Address</th><th class="num">Yd</th><th class="num">Blow</th>'+
+    '<th class="num">Drive</th><th class="num">Labor</th><th class="num">Equip</th><th class="num">Bid</th></tr></thead>';
+  const tb=el('tbody');
+  rows.forEach(r=>{
+    const tr=el('tr');
+    tr.innerHTML='<td class="mono small">'+dfmt(r.quote_date)+'</td>'+
+      '<td class="small">'+esc((r.address_raw||'').slice(0,32))+'</td>'+
+      '<td class="num">'+(r.yards??'—')+'</td>'+
+      '<td class="num">'+(r.blow_hours??'—')+'</td>'+
+      '<td class="num">'+(r.drive_hours??'—')+'</td>'+
+      '<td class="num">'+(r.labor_hours??'—')+'</td>'+
+      '<td class="num">'+(r.equip_hours??'—')+'</td>'+
+      '<td class="num">'+money(r.bid_amount)+'</td>';
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  $('#comparables').innerHTML=''; $('#comparables').appendChild(t);
+  const foot=el('div','small muted',
+    'Reference only — these prices do not affect the quote above, which is priced from the current rate card.');
+  foot.style.marginTop='10px'; $('#comparables').appendChild(foot);
+}
+
+/* ============================ site + history ============================= */
+async function loadSite(key, seed){
+  const h = await DB.siteHistory(key);
+  State.site = {key, orders:h.orders||[], quotes:h.quotes||[], lines:h.lines||{}};
+  const first = (h.quotes&&h.quotes[0]) || null;
+  const fo = (h.orders&&h.orders[0]) || null;
+  $('#q_address').value = (seed&&seed.address1) || (fo&&fo.ship_addr1) || (first&&first.address_raw) || '';
+  $('#q_city').value    = (seed&&seed.city) || (fo&&fo.ship_city) || (first&&first.city) || '';
+  $('#q_zip').value     = (seed&&seed.zip) || (fo&&fo.ship_zip) || (first&&first.zip) || '';
+  $('#q_customer').value= (fo&&fo.customer_name) || (first&&first.customer_name) || '';
+  $('#q_phone').value   = (first&&first.phone) || '';
+  autoFill={drive:true,blow:true};
+  renderHistory();
+  recalc();
+}
+
+function renderHistory(){
+  const s=State.site;
+  const box=$('#history');
+  if(!s){ box.innerHTML='<div class="empty">Search an address to pull its history.</div>'; return; }
+  const items=[];
+  s.orders.forEach(o=>items.push({t:'order',date:o.ord_date,o}));
+  s.quotes.forEach(q=>items.push({t:'quote',date:q.quote_date,q}));
+  items.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  $('#histcount').textContent = items.length ? '· '+s.orders.length+' delivered, '+s.quotes.length+' quoted' : '';
+  $('#sitetag').innerHTML = items.length
+    ? '<span class="tag g">'+items.length+' prior record'+(items.length>1?'s':'')+'</span>'
+    : '<span class="tag w">new address</span>';
+  $('#sitebanner').innerHTML = items.length ? '' :
+    '<div class="note">No history at this address — drive and blow time will fall back to city and product averages.</div>';
+
+  if(!items.length){ box.innerHTML='<div class="empty">No prior jobs at this address.</div>'; return; }
+  const tl=el('div','timeline');
+  items.slice(0,30).forEach(it=>{
+    const d=el('div','tl'+(it.t==='quote'?' q':''));
+    if(it.t==='order'){
+      const o=it.o;
+      const lines=(s.lines[o.ord_nbr]||[]);
+      const disc=lines.filter(l=>l.k==='discount');
+      d.innerHTML='<div class="h"><span class="t">'+esc(o.primary_product||'Order')+
+        (o.total_yards?' · '+o.total_yards+' yd':'')+'</span>'+
+        '<span class="d">'+dfmt(o.ord_date)+' <span class="tag g">delivered</span></span></div>'+
+        '<div class="m">'+
+          (o.labor_hours?'Labor '+o.labor_hours+' hr · ':'')+
+          (o.equip_hours?'Equip '+o.equip_hours+' hr · ':'')+
+          'Invoiced '+money(o.invc_tot)+
+          (o.customer_name?' · '+esc(o.customer_name):'')+'</div>'+
+        (disc.length?'<div class="m">'+disc.map(l=>'<span class="tag w">'+esc(l.d)+' '+money(l.e)+'</span>').join(' ')+'</div>':'')+
+        (o.sum_descr?'<div class="n">'+esc(o.sum_descr)+(o.spcl_inst?'\n'+esc(o.spcl_inst):'')+'</div>':'');
+    } else {
+      const q=it.q;
+      d.innerHTML='<div class="h"><span class="t">'+esc(q.product||'Quote')+
+        (q.yards?' · '+q.yards+' yd':'')+'</span>'+
+        '<span class="d">'+dfmt(q.quote_date)+' <span class="tag">quoted</span></span></div>'+
+        '<div class="m">'+
+          (q.drive_hours!=null?'Drive '+q.drive_hours+' hr · ':'')+
+          (q.blow_hours!=null?'Blow '+q.blow_hours+' hr · ':'')+
+          (q.labor_hours!=null?'Labor '+q.labor_hours+' hr · ':'')+
+          'Bid '+money(q.bid_amount)+
+          (q.sales_person?' · '+esc(q.sales_person):'')+'</div>'+
+        (q.notes?'<div class="n">'+esc(q.notes)+'</div>':'');
+    }
+    tl.appendChild(d);
+  });
+  box.innerHTML=''; box.appendChild(tl);
+  const f=el('div','small muted','Prices shown are historical reference. New quotes price from the current rate card.');
+  f.style.marginTop='10px'; box.appendChild(f);
+}
+
+/* ============================== search UI =============================== */
+const doSearch = debounce(async ()=>{
+  const q=$('#search').value.trim();
+  const box=$('#results');
+  if(q.length<2){ box.classList.add('hide'); return; }
+  let rows=[];
+  try{ rows = await DB.search(q); }catch(e){ }
+  if(!rows.length){ box.innerHTML='<div class="empty small">No match for “'+esc(q)+'”</div>'; box.classList.remove('hide'); return; }
+  box.innerHTML='';
+  rows.forEach(r=>{
+    const b=el('button');
+    const names=Array.from(r.names).filter(Boolean).slice(0,2).join(', ');
+    b.innerHTML='<div class="a">'+esc(r.address1||r.site_key)+'</div>'+
+      '<div class="b">'+esc([names, r.city, r.n+' record'+(r.n>1?'s':''), r.last?('last '+dfmt(r.last)):'']
+        .filter(Boolean).join(' · '))+'</div>';
+    b.onclick=()=>{ box.classList.add('hide'); $('#search').value=''; show('quote'); loadSite(r.site_key,r); };
+    box.appendChild(b);
+  });
+  box.classList.remove('hide');
+},220);
+
+/* ============================ saved quotes ============================== */
+async function renderQuotesList(){
+  const box=$('#quoteslist');
+  box.innerHTML='<div class="empty"><span class="spin"></span></div>';
+  let rows=[]; try{ rows=await DB.listQuotes(); }catch(e){ box.innerHTML='<div class="note bad">'+esc(e.message)+'</div>'; return; }
+  $('#qcount').textContent = rows.length ? '· '+rows.length : '';
+  if(!rows.length){ box.innerHTML='<div class="empty">No quotes saved yet.'+
+    (DB.mode==='demo'?' In demo mode these are kept in this browser only.':'')+'</div>'; return; }
+  const t=el('table');
+  t.innerHTML='<thead><tr><th>Saved</th><th>Rep</th><th>Customer</th><th>Address</th><th>Product</th>'+
+    '<th class="num">Yd</th><th class="num">Cost</th><th class="num">Bid</th><th class="num">Margin</th><th>Status</th></tr></thead>';
+  const tb=el('tbody');
+  rows.forEach(r=>{
+    const tr=el('tr');
+    const gm=r.gross_margin;
+    tr.innerHTML='<td class="mono small">'+esc((r.created_at||'').slice(0,10))+'</td>'+
+      '<td class="small">'+esc(r.rep_name||'')+'</td>'+
+      '<td class="small">'+esc(r.customer_name||'')+'</td>'+
+      '<td class="small">'+esc((r.address_raw||'').slice(0,30))+'</td>'+
+      '<td class="small">'+esc(r.product||'')+'</td>'+
+      '<td class="num">'+(r.yards??'')+'</td>'+
+      '<td class="num">'+money(r.total_cost)+'</td>'+
+      '<td class="num">'+money(r.bid_amount)+'</td>'+
+      '<td class="num">'+(gm==null?'—':'<span class="'+(gm<0?'tag d':'')+'">'+pctf(gm)+'</span>')+'</td>'+
+      '<td><span class="tag'+(r.status==='won'?' g':r.status==='lost'?' d':'')+'">'+esc(r.status||'draft')+'</span></td>';
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb); box.innerHTML=''; box.appendChild(t);
+}
+
+/* ============================== dashboard =============================== */
+async function renderDash(){
+  const [orders, qh] = await Promise.all([DB.ordersAll(), DB.quoteHistoryAll()]);
+  const blow = qh.filter(q=>q.blow_hours!=null && q.yards>0);
+  const bids = qh.filter(q=>q.bid_amount>0);
+  const stats=[
+    ['Delivered jobs', orders.length.toLocaleString(), 'ERP orders on file'],
+    ['Quotes on file', qh.length.toLocaleString(), 'from the pricing workbook'],
+    ['Job sites', new Set(orders.map(o=>o.site_key).filter(Boolean)).size.toLocaleString(), 'distinct addresses'],
+    ['Median bid', money(med(bids.map(q=>q.bid_amount))), 'across quote history'],
+  ];
+  $('#dashstats').innerHTML = stats.map(s=>
+    '<div class="s"><div class="l">'+s[0]+'</div><div class="v">'+s[1]+'</div><div class="sub">'+s[2]+'</div></div>').join('');
+
+  // blow hr/yd by product
+  const byP={};
+  blow.forEach(q=>{(byP[q.product]=byP[q.product]||[]).push(q.blow_hours/q.yards)});
+  const rows=Object.entries(byP).filter(([,v])=>v.length>=8)
+    .map(([p,v])=>({p,n:v.length,m:med(v)})).sort((a,b)=>a.m-b.m);
+  const mx=Math.max(...rows.map(r=>r.m),0.01);
+  $('#dashprod').innerHTML = '<table><thead><tr><th>Product</th><th class="num">Quotes</th>'+
+    '<th class="num">Blow hr/yd</th><th style="width:36%"></th></tr></thead><tbody>'+
+    rows.map(r=>'<tr><td>'+esc(r.p)+'</td><td class="num">'+r.n+'</td><td class="num">'+r.m.toFixed(3)+'</td>'+
+      '<td><div class="bar"><i style="width:'+(r.m/mx*100).toFixed(0)+'%"></i></div></td></tr>').join('')+
+    '</tbody></table>';
+
+  // by rep
+  const byR={};
+  qh.forEach(q=>{const k=q.sales_person||'—'; byR[k]=byR[k]||{n:0,bid:[]}; byR[k].n++;
+    if(q.bid_amount>0) byR[k].bid.push(q.bid_amount);});
+  const rr=Object.entries(byR).map(([k,v])=>({k,n:v.n,m:med(v.bid),t:v.bid.reduce((a,b)=>a+b,0)}))
+    .sort((a,b)=>b.n-a.n).slice(0,12);
+  $('#dashrep').innerHTML='<table><thead><tr><th>Rep</th><th class="num">Quotes</th>'+
+    '<th class="num">Median bid</th><th class="num">Total quoted</th></tr></thead><tbody>'+
+    rr.map(r=>'<tr><td>'+esc(r.k)+'</td><td class="num">'+r.n+'</td><td class="num">'+money(r.m)+
+      '</td><td class="num">'+money(r.t)+'</td></tr>').join('')+'</tbody></table>';
+
+  // by year
+  const byY={};
+  orders.forEach(o=>{ if(!o.ord_date)return; const y=String(o.ord_date).slice(0,4);
+    byY[y]=byY[y]||{n:0,yd:0,rev:0}; byY[y].n++; byY[y].yd+=(+o.total_yards||0); byY[y].rev+=(+o.invc_tot||0);});
+  $('#dashyear').innerHTML='<table><thead><tr><th>Year</th><th class="num">Jobs</th>'+
+    '<th class="num">Yards</th><th class="num">Invoiced</th><th class="num">Avg / job</th></tr></thead><tbody>'+
+    Object.keys(byY).sort().map(y=>{const v=byY[y];
+      return '<tr><td class="mono">'+y+'</td><td class="num">'+v.n+'</td><td class="num">'+
+        Math.round(v.yd).toLocaleString()+'</td><td class="num">'+money(v.rev)+'</td><td class="num">'+
+        money(v.rev/v.n)+'</td></tr>';}).join('')+'</tbody></table>';
+}
+function med(a){ if(!a||!a.length) return null; const s=a.slice().sort((x,y)=>x-y);
+  const m=Math.floor(s.length/2); return s.length%2?s[m]:(s[m-1]+s[m])/2; }
+
+/* ============================== rate card =============================== */
+function renderRates(){
+  const canEdit = DB.mode==='demo' || State.isAdmin;
+  $('#ratesadminnote').innerHTML = canEdit
+    ? (DB.mode==='demo'
+        ? '<div class="note">Demo mode — edits here stay in this browser and are not saved to Supabase.</div>'
+        : '')
+    : '<div class="note">You can see the rate card but only an admin can change it.</div>';
+
+  const rows = State.ref.rate_card.slice().sort((a,b)=>
+    (a.needs_cost===b.needs_cost) ? a.product.localeCompare(b.product) : (a.needs_cost?-1:1));
+  const t=el('table');
+  t.innerHTML='<thead><tr><th>Product</th><th>Category</th><th class="num">Cost / unit</th>'+
+    '<th class="num">Yd / unit</th><th class="num">Cost / yd</th><th></th></tr></thead>';
+  const tb=el('tbody');
+  rows.forEach(r=>{
+    const tr=el('tr');
+    tr.innerHTML='<td>'+esc(r.product)+(r.needs_cost?' <span class="tag w">needs cost</span>':'')+'</td>'+
+      '<td class="small muted">'+esc((r.category||'').replace('_',' & '))+'</td>'+
+      '<td class="num"><input type="number" step="0.01" class="mono num" style="width:110px" '+
+        'value="'+(r.unit_cost??'')+'" data-p="'+esc(r.product)+'" '+(canEdit?'':'disabled')+'></td>'+
+      '<td class="num mono">'+(r.yards_per_unit??7.5)+'</td>'+
+      '<td class="num mono">'+(r.cost_per_yard!=null?money2(r.cost_per_yard):'—')+'</td>'+
+      '<td class="small muted">'+(r.erp_code?'ERP '+esc(r.erp_code):'')+'</td>';
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  $('#ratetable').innerHTML=''; $('#ratetable').appendChild(t);
+  t.querySelectorAll('input[data-p]').forEach(inp=>{
+    inp.onchange = async ()=>{
+      const v = inp.value===''?null:parseFloat(inp.value);
+      await DB.updateRate(inp.dataset.p, {unit_cost:v, needs_cost:v==null});
+      const r=State.ref.rate_card.find(x=>x.product===inp.dataset.p);
+      if(r){ r.unit_cost=v; r.cost_per_yard = v==null?null:v/(r.yards_per_unit||7.5); r.needs_cost = v==null; }
+      renderRates(); fillProducts(); recalc();
+    };
+  });
+
+  $('#markuptable').innerHTML='<table><thead><tr><th>From (yards)</th><th class="num">Markup</th></tr></thead><tbody>'+
+    State.ref.markup_curve.slice().sort((a,b)=>a.min_yards-b.min_yards)
+      .map(m=>'<tr><td class="mono">'+m.min_yards+' yd and up</td><td class="num">'+(m.markup*100).toFixed(0)+'%</td></tr>').join('')+
+    '</tbody></table>';
+
+  const labels={labor_rate_blended:'Labor rate (blended)',driver_wage:'Driver wage',helper_wage:'Helper wage',
+    prevailing_wage:'Prevailing wage',equipment_rate:'Equipment rate',overhead_per_yard:'Overhead per yard',
+    overhead_per_equip_hour:'Overhead per equipment hour',overhead_yard_threshold:'Overhead switch (yards)',
+    prep_hours_default:'Default prep hours',helpers_default:'Default helpers',yards_per_unit:'Yards per truck unit'};
+  $('#settingstable').innerHTML='<table><thead><tr><th>Setting</th><th class="num">Value</th></tr></thead><tbody>'+
+    Object.entries(State.ref.settings).map(([k,v])=>
+      '<tr><td>'+esc(labels[k]||k)+'</td><td class="num mono">'+v+'</td></tr>').join('')+'</tbody></table>';
+}
+
+/* ================================ save ================================== */
+async function saveQuote(){
+  const p = State.lastPrice; if(!p) return;
+  const rc = currentRate();
+  if(rc && rc.needs_cost){ msg('Set a cost for '+rc.product+' first.', true); return; }
+  const addr=$('#q_address').value.trim();
+  const ctx=estimateCtx();
+  const d=Engine.estimateDrive(ctx), b=Engine.estimateBlow(ctx);
+  const q={
+    rep_name: (State.user&&State.user.email) || 'demo',
+    status: $('#q_status').value,
+    customer_name: $('#q_customer').value.trim()||null,
+    phone: $('#q_phone').value.trim()||null,
+    address_raw: addr||null,
+    city: $('#q_city').value.trim()||extractCity(addr)||null,
+    zip: $('#q_zip').value.trim()||extractZip(addr)||null,
+    site_key: streetKey(addr)||null,
+    product: $('#q_product').value,
+    yards: parseFloat($('#q_yards').value)||0,
+    prep_hours: parseFloat($('#q_prep').value)||0,
+    drive_hours: parseFloat($('#q_drive').value)||0,
+    blow_hours: parseFloat($('#q_blow').value)||0,
+    helpers: parseFloat($('#q_helpers').value)||0,
+    equip_hours: parseFloat($('#o_eqhr').textContent)||null,
+    labor_hours: parseFloat($('#o_labhr').textContent)||null,
+    prevailing_wage: $('#q_pw').value==='1',
+    est_drive_hours: d.hours, est_blow_hours: b.hours,
+    est_basis: {drive:{basis:d.basis,n:d.n,detail:d.detail}, blow:{basis:b.basis,n:b.n,detail:b.detail}},
+    cost_per_yard: p.costPerYard, material_cost: p.materialCost, labor_cost: p.laborCost,
+    equip_cost: p.equipCost, overhead: p.overhead, total_cost: p.cost, markup: p.markup,
+    target_price: p.targetPrice, bid_amount: p.bidAmount,
+    material_rev: p.materialRev, labor_rev: p.laborRev, equip_rev: p.equipRev,
+    gross_margin: p.grossMargin,
+    notes: $('#q_notes').value.trim()||null
+  };
+  try{
+    await DB.saveQuote(q);
+    msg('Saved.'+(DB.mode==='demo'?' (demo mode — this browser only)':''), false);
+    if(State.site && State.site.key===q.site_key){
+      State.site.quotes.unshift({quote_date:new Date().toISOString().slice(0,10),product:q.product,yards:q.yards,
+        drive_hours:q.drive_hours,blow_hours:q.blow_hours,labor_hours:q.labor_hours,equip_hours:q.equip_hours,
+        bid_amount:q.bid_amount,sales_person:q.rep_name,notes:q.notes,address_raw:q.address_raw});
+      renderHistory();
+    }
+  }catch(e){ msg(e.message,true); }
+}
+function msg(t,bad){ $('#savemsg').innerHTML='<div class="note '+(bad?'bad':'ok')+'">'+esc(t)+'</div>';
+  setTimeout(()=>{$('#savemsg').innerHTML='';},4500); }
+
+/* ================================ wiring ================================ */
+function wire(){
+  $('#search').addEventListener('input', doSearch);
+  document.addEventListener('click', e=>{ if(!$('#searchwrap').contains(e.target)) $('#results').classList.add('hide'); });
+  $$('#tabs button').forEach(b=>b.onclick=()=>show(b.dataset.view));
+  ['q_product','q_yards','q_prep','q_helpers','q_pw'].forEach(id=>$('#'+id).addEventListener('input',()=>{
+    if(id==='q_product'||id==='q_yards'){ autoFill={drive:autoFill.drive,blow:true}; }
+    recalc();
+  }));
+  $('#q_drive').addEventListener('input',()=>{autoFill.drive=false; recalc();});
+  $('#q_blow').addEventListener('input',()=>{autoFill.blow=false; recalc();});
+  $('#q_bid').addEventListener('input',recalc);
+  $('#q_address').addEventListener('change',()=>{
+    const k=streetKey($('#q_address').value);
+    if(!$('#q_city').value) $('#q_city').value=extractCity($('#q_address').value);
+    if(!$('#q_zip').value)  $('#q_zip').value=extractZip($('#q_address').value);
+    if(k) loadSite(k,{address1:$('#q_address').value,city:$('#q_city').value,zip:$('#q_zip').value});
+  });
+  $('#savequote').onclick=saveQuote;
+  $('#newquote').onclick=()=>{
+    ['q_customer','q_phone','q_address','q_city','q_zip','q_notes','q_bid'].forEach(i=>$('#'+i).value='');
+    State.site=null; autoFill={drive:true,blow:true}; renderHistory(); recalc();
+  };
+  $('#authbtn').onclick=async()=>{
+    if(State.user){ SB.signOut(); renderAuth(); location.reload(); return; }
+    $('#authdlg').showModal();
+  };
+  $('#authform').addEventListener('submit', async e=>{
+    if(e.submitter && e.submitter.value!=='go') return;
+    e.preventDefault();
+    $('#autherr').innerHTML='<div class="small muted"><span class="spin"></span> Signing in…</div>';
+    try{
+      await SB.signIn($('#au_email').value, $('#au_pw').value);
+      $('#authdlg').close();
+      State.ref = await DB.init();
+      renderAuth(); fillProducts(); recalc();
+    }catch(err){ $('#autherr').innerHTML='<div class="note bad">'+esc(err.message)+'</div>'; }
+  });
+}
+
+boot();
+</script>
+</body>
+</html>
