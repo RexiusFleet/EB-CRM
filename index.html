@@ -416,6 +416,44 @@ function extractCity(a){
 const LIVE = !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
 const State = { user:null, token:null, isAdmin:false, ref:null, site:null, comps:[] };
 
+/* ---- request tracing, so a hang can always explain itself ---- */
+const Diag = {
+  log: [],
+  start(label){
+    const rec = {label, t0: Date.now(), status:'pending'};
+    Diag.log.push(rec);
+    if(Diag.log.length>40) Diag.log.shift();
+    return rec;
+  },
+  end(rec, status, note){
+    if(!rec) return;
+    rec.status=status; rec.ms=Date.now()-rec.t0; if(note) rec.note=String(note).slice(0,140);
+  },
+  pending(){ return Diag.log.filter(r=>r.status==='pending'); },
+  html(){
+    if(!Diag.log.length) return '<div class="small muted">No requests were attempted.</div>';
+    return '<div class="scroll"><table style="margin-top:10px"><thead><tr><th>Request</th>'+
+      '<th>Result</th><th class="num">ms</th></tr></thead><tbody>'+
+      Diag.log.slice(-12).map(r=>'<tr><td class="small mono">'+esc(r.label)+'</td>'+
+        '<td class="small"><span class="tag'+(r.status==='pending'?' w':r.status==='ok'?' g':' d')+'">'+
+        esc(r.status)+'</span>'+(r.note?'<br><span class="small muted">'+esc(r.note)+'</span>':'')+'</td>'+
+        '<td class="num small">'+(r.ms==null?'—':r.ms)+'</td></tr>').join('')+'</tbody></table></div>';
+  }
+};
+
+/* Never await a network call without a deadline. An unresolved promise leaves
+   the user staring at a spinner with nothing to act on. */
+function withTimeout(promise, ms, label){
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      const e = new Error('Timed out after '+Math.round(ms/1000)+'s waiting for '+label);
+      e.status = 'timeout';
+      reject(e);
+    }, ms);
+    promise.then(v=>{clearTimeout(t); resolve(v);}, e=>{clearTimeout(t); reject(e);});
+  });
+}
+
 /* ---- Supabase REST (hand-rolled: no SDK, nothing to load from a CDN) ---- */
 const SB = {
   h(extra){
@@ -425,19 +463,25 @@ const SB = {
   },
   async rest(path, opts){
     const base = String(CONFIG.SUPABASE_URL||'').replace(/\/+$/,'');   // tolerate trailing slash
+    const rec = Diag.start((opts&&opts.method||'GET')+' /rest/v1/'+String(path).split('?')[0]);
     let r;
     try{
       r = await fetch(base+'/rest/v1/'+path, Object.assign({headers:SB.h(opts&&opts.headers)}, opts));
     }catch(networkErr){
-      const e=new Error('Could not reach '+base+' — check the URL and your connection.');
+      Diag.end(rec,'network error', networkErr.message);
+      const e=new Error('Could not reach '+base+' — check the URL, and that this page is allowed to call it.');
       e.status=0; throw e;
     }
     if(!r.ok){
-      const e = new Error((await r.text())||r.statusText);
+      const body = (await r.text())||r.statusText;
+      Diag.end(rec, 'HTTP '+r.status, body);
+      const e = new Error(body);
       e.status = r.status;      // carried so the UI can tell 401 from 404
       throw e;
     }
-    return r.status===204 ? null : r.json();
+    const out = r.status===204 ? null : await r.json();
+    Diag.end(rec,'ok', Array.isArray(out) ? out.length+' rows' : '');
+    return out;
   },
   async signIn(email,password){
     const base = String(CONFIG.SUPABASE_URL||'').replace(/\/+$/,'');
@@ -470,9 +514,40 @@ const SB = {
 const DemoDB = {
   mode:'demo', B:null,
   async init(){
-    const r = await fetch('data/bundle.json');
-    if(!r.ok) throw new Error('bundle.json not found — serve this folder over http, or fill in CONFIG.');
-    this.B = await r.json();
+    const rec = Diag.start('GET data/bundle.json');
+    let r;
+    try{ r = await fetch('data/bundle.json'); }
+    catch(e){
+      Diag.end(rec,'network error',e.message);
+      const err=new Error('Could not fetch data/bundle.json. If you opened this file directly '+
+        'from disk, browsers block that — serve the folder over http instead.');
+      err.status=0; throw err;
+    }
+    if(!r.ok){
+      Diag.end(rec,'HTTP '+r.status);
+      const err=new Error('data/bundle.json returned HTTP '+r.status+'. Either the file is missing '+
+        'from the repo, or you meant to run against Supabase — fill in CONFIG at the bottom of index.html.');
+      err.status=r.status; throw err;
+    }
+    // Stream it so a 7 MB file on a slow link shows progress instead of
+    // looking frozen. Falls back to r.json() if streaming isn't available.
+    const total = Number(r.headers.get('content-length')||0);
+    if(r.body && r.body.getReader && total){
+      const reader=r.body.getReader(); const chunks=[]; let got=0;
+      for(;;){
+        const {done,value}=await reader.read();
+        if(done) break;
+        chunks.push(value); got+=value.length;
+        const pctDone=Math.round(got/total*100);
+        const el2=$('#bootpct'); if(el2) el2.textContent=pctDone+'%';
+      }
+      let buf=new Uint8Array(got), off=0;
+      for(const c of chunks){ buf.set(c,off); off+=c.length; }
+      this.B = JSON.parse(new TextDecoder().decode(buf));
+    } else {
+      this.B = await r.json();
+    }
+    Diag.end(rec,'ok',(this.B.orders||[]).length+' orders');
     this._sitesByKey = new Map(this.B.sites.map(s=>[s.site_key,s]));
     this._ordBySite = groupBy(this.B.orders,'site_key');
     this._qhBySite  = groupBy(this.B.quote_history,'site_key');
@@ -637,14 +712,21 @@ async function boot(){
   await loadData();       // 2. data load may fail; the app survives it
 }
 
+function targetLabel(){
+  return LIVE ? String(CONFIG.SUPABASE_URL).replace(/\/+$/,'')
+              : 'data/bundle.json (offline demo data, ~7 MB)';
+}
+
 async function loadData(){
   $('#boot').classList.remove('hide');
-  $('#boot').innerHTML = '<div class="empty"><span class="spin"></span> Loading…</div>';
+  $('#boot').innerHTML = '<div class="empty"><span class="spin"></span> Loading from '+
+    esc(targetLabel())+'… <span id="bootpct" class="mono"></span></div>';
   try{
-    State.ref = await DB.init();
+    State.ref = await withTimeout(DB.init(), 20000, LIVE ? 'Supabase' : 'data/bundle.json');
   }catch(e){
     State.ref = State.ref && State.ref.rate_card ? State.ref : EMPTY_REF();
-    $('#boot').innerHTML = '<div class="body">'+loadErrorHtml(e)+'</div>';
+    $('#boot').innerHTML = '<div class="body">'+loadErrorHtml(e)+diagBlock()+'</div>';
+    const rt=$('#retryload'); if(rt) rt.onclick=()=>loadData();
     renderAuth(); fillProducts(); recalc();
     return false;
   }
@@ -668,8 +750,29 @@ async function loadData(){
   return true;
 }
 
+function diagBlock(){
+  const pend = Diag.pending();
+  return '<details style="margin-top:12px"><summary class="small muted" style="cursor:pointer">'+
+    'Diagnostics — what the app tried</summary>'+
+    '<div class="small muted" style="margin-top:8px">Mode: <b>'+(LIVE?'Supabase':'offline demo')+'</b><br>'+
+    'Target: <span class="mono">'+esc(targetLabel())+'</span><br>'+
+    'Signed in: <b>'+(State.user?esc(State.user.email||'yes'):'no')+'</b>'+
+    (pend.length?'<br>Still pending: <span class="mono">'+esc(pend.map(r=>r.label).join(', '))+'</span>':'')+
+    '</div>'+Diag.html()+'</details>'+
+    '<div style="margin-top:12px"><button class="btn ghost sm" id="retryload">Retry</button></div>';
+}
+
 function loadErrorHtml(e){
   const s = e && e.status;
+  if(s==='timeout'){
+    return '<div class="note bad"><b>The data request never came back.</b><br>'+
+      (LIVE
+        ? 'Supabase did not respond within 20 seconds. Check that the project is running and not paused '+
+          '(free projects pause after inactivity), and that the URL below is right.'
+        : 'The demo data file did not finish downloading. If you are hosting on GitHub Pages, note that '+
+          'files over 100 MB are rejected and large files can be slow — or fill in CONFIG to use Supabase instead.')+
+      '</div>';
+  }
   const detail = '<div class="small muted" style="margin-top:8px">'+esc(String(e.message||'').slice(0,300))+'</div>';
   if(s===401 || s===403 || /jwt|permission denied|not authorized/i.test(e.message||'')){
     return '<div class="note"><b>Not authorized yet — sign in.</b><br>'+
