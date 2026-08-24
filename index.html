@@ -37,6 +37,10 @@ input,select,textarea{font:inherit;color:inherit}
 /* ---------- chrome ---------- */
 header.top{position:sticky;top:0;z-index:50;background:var(--panel);border-bottom:1px solid var(--line);
   display:flex;align-items:center;gap:16px;padding:10px 18px;flex-wrap:wrap}
+/* the auth control must never be the thing that gets squeezed off-screen */
+.userbox{flex:0 0 auto;margin-left:auto}
+.userbox #authbtn{white-space:nowrap}
+@media(max-width:900px){nav.tabs{order:3;width:100%}.searchwrap{max-width:none}}
 .brand{display:flex;align-items:center;gap:9px;font-weight:650;letter-spacing:-.02em;white-space:nowrap}
 .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;
   color:var(--accent-ink);font-size:12px;font-weight:800}
@@ -357,7 +361,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
    The anon key is safe to publish: every RLS policy requires a logged-in
    user, so the key alone reads nothing.
    =========================================================================== */
-const BUILD = '2026-08-24i';   // shown in the header; check it after deploying
+const BUILD = '2026-08-24j';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -906,9 +910,18 @@ async function loadData(){
   const empty = !State.ref.rate_card || !State.ref.rate_card.length;
   if(LIVE && !State.user && empty){
     // Correct RLS returns an empty set to a signed-out user rather than an
-    // error, which otherwise looks like a broken app rather than a locked one.
-    $('#boot').innerHTML = '<div class="body"><div class="note"><b>Sign in to load your data.</b><br>'+
-      'History and the rate card are only readable once you are signed in.</div></div>';
+    // error, so a locked app looks exactly like a broken one. Put the action
+    // in the middle of the page with a button on it -- the small header button
+    // is easy to miss, and can be clipped on a narrow window.
+    $('#boot').innerHTML =
+      '<div class="body" style="text-align:center;padding:26px 16px">'+
+      '<div style="font-size:17px;font-weight:650;margin-bottom:6px">Sign in to load your data</div>'+
+      '<div class="muted" style="max-width:460px;margin:0 auto 16px;font-size:14px">'+
+      'Products, job history and the rate card are only readable once you are signed in. '+
+      'Until then every list on this page will be empty.</div>'+
+      '<button class="btn" id="bootsignin" style="padding:11px 26px;font-size:15px">Sign in</button>'+
+      '</div>';
+    const bs=$('#bootsignin'); if(bs) bs.onclick=()=>$('#authdlg').showModal();
   } else if(LIVE && State.user && empty){
     $('#boot').innerHTML = '<div class="body"><div class="note"><b>Signed in, but no rows came back.</b><br>'+
       'The tables are probably still empty — run <code>sql/03_seed_reference.sql</code> '+
@@ -989,6 +1002,8 @@ function renderAuth(){
   const signedIn = !!State.user;
   $('#whoami').textContent = signedIn ? (State.user.email||'') : (LIVE?'':'offline');
   $('#authbtn').textContent = signedIn ? 'Sign out' : 'Sign in';
+  // Solid (not ghost) while signed out: it is the only useful control then.
+  $('#authbtn').className = 'btn sm' + (signedIn ? ' ghost' : '');
   $('#authbtn').classList.toggle('hide', !LIVE);
   $('#savequote').disabled = LIVE && !signedIn;
 }
@@ -1114,9 +1129,16 @@ function recalc(){
     bidAmount: $('#q_bid').value===''?null:parseFloat($('#q_bid').value)
   });
 
-  $('#costwarn').innerHTML = (rc && rc.needs_cost)
-    ? '<div class="note"><b>'+esc(rc.product)+'</b> has no 2026 cost yet, so this quote can\'t be priced. '+
-      'Set it on the Rate Card tab.</div>' : '';
+  if(LIVE && !State.user){
+    $('#costwarn').innerHTML = '<div class="note">The product list is empty because you are not '+
+      'signed in. <a href="#" id="costsignin">Sign in</a> to load it.</div>';
+    const cs=$('#costsignin');
+    if(cs) cs.onclick=e=>{ e.preventDefault(); $('#authdlg').showModal(); };
+  } else {
+    $('#costwarn').innerHTML = (rc && rc.needs_cost)
+      ? '<div class="note"><b>'+esc(rc.product)+'</b> has no 2026 cost yet, so this quote can\'t be priced. '+
+        'Set it on the Rate Card tab.</div>' : '';
+  }
 
   $('#k_mat').innerHTML = 'Material <span class="small">'+(p.costPerYard!=null?money2(p.costPerYard)+'/yd × '+yards+' yd':'—')+'</span>';
   $('#k_lab').innerHTML = 'Labor <span class="small">'+hrs(laborHours)+' × $'+p.laborRate+'</span>';
