@@ -414,12 +414,24 @@ const SB = {
     return h;
   },
   async rest(path, opts){
-    const r = await fetch(CONFIG.SUPABASE_URL+'/rest/v1/'+path, Object.assign({headers:SB.h(opts&&opts.headers)}, opts));
-    if(!r.ok) throw new Error((await r.text())||r.statusText);
+    const base = String(CONFIG.SUPABASE_URL||'').replace(/\/+$/,'');   // tolerate trailing slash
+    let r;
+    try{
+      r = await fetch(base+'/rest/v1/'+path, Object.assign({headers:SB.h(opts&&opts.headers)}, opts));
+    }catch(networkErr){
+      const e=new Error('Could not reach '+base+' — check the URL and your connection.');
+      e.status=0; throw e;
+    }
+    if(!r.ok){
+      const e = new Error((await r.text())||r.statusText);
+      e.status = r.status;      // carried so the UI can tell 401 from 404
+      throw e;
+    }
     return r.status===204 ? null : r.json();
   },
   async signIn(email,password){
-    const r = await fetch(CONFIG.SUPABASE_URL+'/auth/v1/token?grant_type=password',
+    const base = String(CONFIG.SUPABASE_URL||'').replace(/\/+$/,'');
+    const r = await fetch(base+'/auth/v1/token?grant_type=password',
       {method:'POST',headers:{apikey:CONFIG.SUPABASE_ANON_KEY,'Content-Type':'application/json'},
        body:JSON.stringify({email,password})});
     const j = await r.json();
@@ -431,7 +443,8 @@ const SB = {
   async restore(){
     let s=null; try{ s=JSON.parse(localStorage.getItem('rx_tok')||'null'); }catch(e){}
     if(!s||!s.r) return false;
-    const r = await fetch(CONFIG.SUPABASE_URL+'/auth/v1/token?grant_type=refresh_token',
+    const base = String(CONFIG.SUPABASE_URL||'').replace(/\/+$/,'');
+    const r = await fetch(base+'/auth/v1/token?grant_type=refresh_token',
       {method:'POST',headers:{apikey:CONFIG.SUPABASE_ANON_KEY,'Content-Type':'application/json'},
        body:JSON.stringify({refresh_token:s.r})});
     if(!r.ok){ try{localStorage.removeItem('rx_tok');}catch(e){} return false; }
@@ -581,23 +594,75 @@ function loadLocalQuotes(){try{return JSON.parse(localStorage.getItem('rx_quotes
 function saveLocalQuotes(q){try{localStorage.setItem('rx_quotes',JSON.stringify(q))}catch(e){}}
 
 /* ============================== boot ==================================== */
+/* Order matters. wire() runs FIRST, before any network call, so the UI stays
+   usable when the data load fails. Otherwise a failed load leaves every
+   button dead -- including Sign in, which is the one control that can fix an
+   authorization failure. That catch-22 is exactly the bug this avoids. */
+const EMPTY_REF = () => ({rate_card:[], markup_curve:[], settings:{},
+                          blow_benchmarks:[], drive_zones:[]});
+
 async function boot(){
   $('#modepill').textContent = LIVE ? 'Supabase' : 'Demo data';
   $('#modepill').className = 'pill '+(LIVE?'live':'demo');
+  State.ref = EMPTY_REF();
+
+  wire();                 // 1. controls live no matter what happens next
+  show('quote');
+  renderAuth();
+
   if(LIVE){ try{ await SB.restore(); }catch(e){} }
+  await loadData();       // 2. data load may fail; the app survives it
+}
+
+async function loadData(){
+  $('#boot').classList.remove('hide');
+  $('#boot').innerHTML = '<div class="empty"><span class="spin"></span> Loading…</div>';
   try{
     State.ref = await DB.init();
   }catch(e){
-    $('#boot').innerHTML = '<div class="body"><div class="note bad"><b>Could not load data.</b><br>'+
-      esc(e.message)+'</div></div>';
-    return;
+    State.ref = State.ref && State.ref.rate_card ? State.ref : EMPTY_REF();
+    $('#boot').innerHTML = '<div class="body">'+loadErrorHtml(e)+'</div>';
+    renderAuth(); fillProducts(); recalc();
+    return false;
   }
-  $('#boot').classList.add('hide');
-  renderAuth();
-  fillProducts();
-  recalc();
-  show('quote');
-  wire();
+  // Fill any setting the database didn't supply from the engine defaults, so
+  // the labels never read "$undefined" while the math quietly used a default.
+  State.ref.settings = Object.assign({}, Engine.DEFAULTS, State.ref.settings||{});
+  const empty = !State.ref.rate_card || !State.ref.rate_card.length;
+  if(LIVE && !State.user && empty){
+    // Correct RLS returns an empty set to a signed-out user rather than an
+    // error, which otherwise looks like a broken app rather than a locked one.
+    $('#boot').innerHTML = '<div class="body"><div class="note"><b>Sign in to load your data.</b><br>'+
+      'History and the rate card are only readable once you are signed in.</div></div>';
+  } else if(LIVE && State.user && empty){
+    $('#boot').innerHTML = '<div class="body"><div class="note"><b>Signed in, but no rows came back.</b><br>'+
+      'The tables are probably still empty — run <code>sql/03_seed_reference.sql</code> '+
+      'and import the CSVs (README step 4).</div></div>';
+  } else {
+    $('#boot').classList.add('hide');
+  }
+  renderAuth(); fillProducts(); recalc();
+  return true;
+}
+
+function loadErrorHtml(e){
+  const s = e && e.status;
+  const detail = '<div class="small muted" style="margin-top:8px">'+esc(String(e.message||'').slice(0,300))+'</div>';
+  if(s===401 || s===403 || /jwt|permission denied|not authorized/i.test(e.message||'')){
+    return '<div class="note"><b>Not authorized yet — sign in.</b><br>'+
+      'The database rejected an unauthenticated read. If signing in does not fix it, '+
+      '<code>sql/02_rls.sql</code> may not have run.'+detail+'</div>';
+  }
+  if(s===404){
+    return '<div class="note bad"><b>Supabase returned 404.</b><br>'+
+      'Usually the project URL is wrong, or the tables do not exist yet — run '+
+      '<code>sql/01_schema.sql</code>.'+detail+'</div>';
+  }
+  if(s===0){
+    return '<div class="note bad"><b>Could not reach Supabase.</b><br>'+
+      'Check <code>SUPABASE_URL</code> in index.html.'+detail+'</div>';
+  }
+  return '<div class="note bad"><b>Could not load data.</b>'+detail+'</div>';
 }
 
 function renderAuth(){
@@ -1084,9 +1149,9 @@ function wire(){
     $('#autherr').innerHTML='<div class="small muted"><span class="spin"></span> Signing in…</div>';
     try{
       await SB.signIn($('#au_email').value, $('#au_pw').value);
+      $('#autherr').innerHTML='';
       $('#authdlg').close();
-      State.ref = await DB.init();
-      renderAuth(); fillProducts(); recalc();
+      await loadData();          // re-read now that we have a token
     }catch(err){ $('#autherr').innerHTML='<div class="note bad">'+esc(err.message)+'</div>'; }
   });
 }
