@@ -100,7 +100,11 @@ tr:last-child td{border-bottom:0}
   border-radius:10px;box-shadow:var(--shadow);max-height:60vh;overflow:auto;z-index:60}
 .results button{display:block;width:100%;text-align:left;background:none;border:0;padding:9px 12px;
   border-bottom:1px solid var(--line-2)}
-.results button:hover{background:var(--line-2)}
+.results button:hover,.results button.sel{background:var(--line-2)}
+.results button.sel{outline:2px solid var(--accent);outline-offset:-2px}
+.results .rhead{padding:8px 12px;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);font-weight:600;border-bottom:1px solid var(--line);position:sticky;top:0;
+  background:var(--panel)}
 .results .a{font-weight:600;font-size:14px}
 .results .b{font-size:12px;color:var(--muted);margin-top:1px}
 
@@ -155,7 +159,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   <div class="searchwrap" id="searchwrap">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
       <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-    <input type="text" id="search" placeholder="Search address, customer, or phone…" autocomplete="off">
+    <input type="text" id="search" placeholder="Search or browse previous jobs…" autocomplete="off">
     <div class="results hide" id="results"></div>
   </div>
   <nav class="tabs" id="tabs">
@@ -414,7 +418,8 @@ function extractCity(a){
 
 /* ============================ data adapters ============================== */
 const LIVE = !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
-const State = { user:null, token:null, isAdmin:false, ref:null, site:null, comps:[] };
+const State = { user:null, token:null, isAdmin:false, ref:null, site:null, comps:[],
+                index:null, indexErr:null };
 
 /* ---- request tracing, so a hang can always explain itself ---- */
 const Diag = {
@@ -608,7 +613,34 @@ const DemoDB = {
     return r;
   },
   async ordersAll(){ return this.B.orders; },
-  async quoteHistoryAll(){ return this.B.quote_history; }
+  async quoteHistoryAll(){ return this.B.quote_history; },
+  async searchIndex(){
+    // Mirrors the site_index SQL view so both modes behave identically.
+    const m = new Map();
+    const add = (site_key, address1, city, zip, customer_name, dt, kind) => {
+      if(!site_key) return;
+      let e = m.get(site_key);
+      if(!e){ e = {site_key, address1:null, city:null, zip:null, customer_name:null,
+                   n_orders:0, n_quotes:0, last_activity:null, _names:new Set()}; m.set(site_key,e); }
+      if(kind==='order') e.n_orders++; else e.n_quotes++;
+      if(customer_name) e._names.add(customer_name);
+      const newer = dt && (!e.last_activity || dt > e.last_activity);
+      if(newer) e.last_activity = dt;
+      // most recent non-null wins for each display field
+      if(address1 && (newer || !e.address1)) e.address1 = address1;
+      if(city && (newer || !e.city)) e.city = city;
+      if(zip && (newer || !e.zip)) e.zip = zip;
+      if(customer_name && (newer || !e.customer_name)) e.customer_name = customer_name;
+    };
+    this.B.orders.forEach(o=>add(o.site_key,o.ship_addr1,o.ship_city,o.ship_zip,
+                                 o.customer_name,o.ord_date,'order'));
+    this.B.quote_history.forEach(q=>add(q.site_key,q.address_raw,q.city,q.zip,
+                                        q.customer_name,q.quote_date,'quote'));
+    const rows = Array.from(m.values());
+    rows.forEach(r=>{ r.all_names = Array.from(r._names).join(' | '); delete r._names; });
+    rows.sort((a,b)=>String(b.last_activity||'').localeCompare(String(a.last_activity||'')));
+    return rows;
+  }
 };
 
 const LiveDB = {
@@ -680,6 +712,12 @@ const LiveDB = {
       {method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(patch)});
     return r[0];
   },
+  async searchIndex(){
+    // One compact row per site (~3,400). Small enough to filter in the browser,
+    // which is what makes the dropdown instant and word-order independent.
+    return SB.rest('site_index?select=site_key,address1,city,zip,customer_name,'+
+      'n_orders,n_quotes,last_activity,all_names&order=last_activity.desc.nullslast&limit=20000');
+  },
   async ordersAll(){ return SB.rest('orders?select=ord_date,primary_product,total_yards,labor_hours,equip_hours,invc_tot,sales_person_id,order_type&limit=6000'); },
   async quoteHistoryAll(){ return SB.rest('quote_history?select=quote_date,sales_person,product,yards,blow_hours,drive_hours,bid_amount&limit=4000'); }
 };
@@ -717,7 +755,37 @@ function targetLabel(){
               : 'data/bundle.json (offline demo data, ~7 MB)';
 }
 
+/* An embedded app webview replaces fetch() with a postMessage bridge, and a
+   page opened from disk has origin "null". Supabase calls from either place
+   fail instantly or never resolve at all. Detect it and say so, rather than
+   spinning for 20 seconds and then blaming the network. */
+function environment(){
+  const notes=[];
+  const fileOrigin = location.origin==='null' || location.protocol==='file:';
+  const embedded = /Electron|Claude\//i.test(navigator.userAgent||'');
+  let patchedFetch=false;
+  try{ patchedFetch = !/\[native code\]/.test(Function.prototype.toString.call(window.fetch)); }catch(e){}
+  if(fileOrigin) notes.push('opened from a file rather than served over http');
+  if(embedded) notes.push('running inside an embedded app preview, not a browser');
+  if(patchedFetch) notes.push('fetch() has been replaced by the host app');
+  return {blocked:(fileOrigin||embedded||patchedFetch), notes};
+}
+
 async function loadData(){
+  const env = environment();
+  if(LIVE && env.blocked){
+    $('#boot').classList.remove('hide');
+    $('#boot').innerHTML='<div class="body"><div class="note bad">'+
+      '<b>This page needs a real browser to reach Supabase.</b><br>'+
+      esc(env.notes.join('; '))+'.<br><br>'+
+      'Open the app in Chrome or Safari over http — your GitHub Pages URL, or run '+
+      '<code>python3 -m http.server 8000</code> in this folder and visit '+
+      '<code>http://localhost:8000</code>.</div>'+diagBlock()+'</div>';
+    const rt=$('#retryload'); if(rt) rt.onclick=()=>loadData();
+    State.ref = EMPTY_REF();
+    renderAuth(); fillProducts(); recalc();
+    return false;
+  }
   $('#boot').classList.remove('hide');
   $('#boot').innerHTML = '<div class="empty"><span class="spin"></span> Loading from '+
     esc(targetLabel())+'… <span id="bootpct" class="mono"></span></div>';
@@ -747,7 +815,27 @@ async function loadData(){
     $('#boot').classList.add('hide');
   }
   renderAuth(); fillProducts(); recalc();
+  loadSearchIndex();
   return true;
+}
+
+/* Loaded in the background -- the app is usable before it arrives, and the
+   dropdown upgrades from "type to search" to "browse" once it lands. */
+function loadSearchIndex(){
+  if(!DB.searchIndex) return;
+  State.index=null; State.indexErr=null;
+  const rec = Diag.start('GET site_index');
+  DB.searchIndex().then(rows=>{
+    State.index = rows||[];
+    Diag.end(rec,'ok',(rows||[]).length+' sites');
+    $('#search').placeholder = 'Search or browse '+(rows||[]).length.toLocaleString()+' job sites…';
+  }).catch(e=>{
+    State.indexErr = e;
+    Diag.end(rec, e.status ? 'HTTP '+e.status : 'failed', e.message);
+    if(e && e.status===404){
+      $('#search').placeholder = 'Search address, customer, or phone… (run sql/05_search_index.sql to browse)';
+    }
+  });
 }
 
 function diagBlock(){
@@ -1047,26 +1135,112 @@ function renderHistory(){
   f.style.marginTop='10px'; box.appendChild(f);
 }
 
-/* ============================== search UI =============================== */
-const doSearch = debounce(async ()=>{
-  const q=$('#search').value.trim();
+/* ============================== search UI ===============================
+   The list is browsable: clicking the empty box shows the most recently
+   worked sites, so a rep can pick one without knowing how it is spelled.
+   Matching is per-word and order-independent -- "couey cindy", "cindy couey"
+   and "spyglass couey" all find the same site -- because requiring an exact
+   contiguous substring meant typing the record the way it happened to be
+   entered years ago. */
+let navIdx = -1;
+
+function indexReady(){ return Array.isArray(State.index) && State.index.length>0; }
+
+function scoreRows(q){
+  const rows = State.index || [];
+  if(!q){
+    // Prepopulated view: most recent activity first.
+    return rows.slice(0, 60);
+  }
+  const toks = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const out = [];
+  for(const r of rows){
+    const addr=(r.address1||''), name=(r.customer_name||'');
+    const hay = (addr+' '+(r.city||'')+' '+(r.zip||'')+' '+name+' '+
+                 (r.all_names||'')+' '+(r.site_key||'')).toLowerCase();
+    if(!toks.every(t=>hay.includes(t))) continue;
+    let score = 0;
+    const a=addr.toLowerCase(), n=name.toLowerCase();
+    if(a.startsWith(toks[0]) || n.startsWith(toks[0])) score += 4;
+    if(toks.every(t=>a.includes(t)) || toks.every(t=>n.includes(t))) score += 2;
+    if((+r.n_orders||0)+(+r.n_quotes||0) > 3) score += 1;
+    out.push({r, score});
+  }
+  out.sort((x,y)=> y.score-x.score ||
+    String(y.r.last_activity||'').localeCompare(String(x.r.last_activity||'')));
+  return out.slice(0, 60).map(x=>x.r);
+}
+
+function renderResults(rows, q){
   const box=$('#results');
-  if(q.length<2){ box.classList.add('hide'); return; }
-  let rows=[];
-  try{ rows = await DB.search(q); }catch(e){ }
-  if(!rows.length){ box.innerHTML='<div class="empty small">No match for “'+esc(q)+'”</div>'; box.classList.remove('hide'); return; }
+  navIdx = -1;
+  if(!rows.length){
+    box.innerHTML='<div class="empty small">No match for “'+esc(q)+'”</div>';
+    box.classList.remove('hide'); return;
+  }
   box.innerHTML='';
+  if(!q){
+    box.appendChild(el('div','rhead','Recently worked sites — start typing to narrow'));
+  }
   rows.forEach(r=>{
     const b=el('button');
-    const names=Array.from(r.names).filter(Boolean).slice(0,2).join(', ');
+    const names = r.all_names && r.all_names!==r.customer_name
+      ? r.customer_name : (r.customer_name||'');
+    const n = (+r.n_orders||0)+(+r.n_quotes||0);
     b.innerHTML='<div class="a">'+esc(r.address1||r.site_key)+'</div>'+
-      '<div class="b">'+esc([names, r.city, r.n+' record'+(r.n>1?'s':''), r.last?('last '+dfmt(r.last)):'']
+      '<div class="b">'+esc([names, r.city, r.zip,
+        n ? (r.n_orders||0)+' delivered · '+(r.n_quotes||0)+' quoted' : '',
+        r.last_activity ? 'last '+dfmt(String(r.last_activity).slice(0,10)) : '']
         .filter(Boolean).join(' · '))+'</div>';
-    b.onclick=()=>{ box.classList.add('hide'); $('#search').value=''; show('quote'); loadSite(r.site_key,r); };
+    b.onclick=()=>choose(r);
     box.appendChild(b);
   });
   box.classList.remove('hide');
-},220);
+}
+
+function choose(r){
+  $('#results').classList.add('hide');
+  $('#search').value='';
+  show('quote');
+  loadSite(r.site_key, {address1:r.address1, city:r.city, zip:r.zip});
+}
+
+async function openResults(){
+  const q=$('#search').value.trim();
+  if(indexReady()){ renderResults(scoreRows(q), q); return; }
+  // Index unavailable (older database without the site_index view): fall back
+  // to the server-side substring search, which still needs typing.
+  if(q.length<2){
+    $('#results').innerHTML='<div class="empty small">'+
+      (State.indexErr ? 'Browsable list unavailable — type at least 2 characters to search.'
+                      : '<span class="spin"></span> Loading the site list…')+'</div>';
+    $('#results').classList.remove('hide');
+    return;
+  }
+  let rows=[];
+  try{ rows=await DB.search(q); }catch(e){}
+  renderResults(rows.map(r=>({site_key:r.site_key, address1:r.address1, city:r.city, zip:r.zip,
+    customer_name:Array.from(r.names||[]).filter(Boolean)[0]||'',
+    n_orders:'', n_quotes:'', last_activity:r.last})), q);
+}
+
+/* Filtering the local index is instant, so do it synchronously on every
+   keystroke -- debouncing there only creates a window where the visible list
+   is stale and a fast click selects the wrong site. Debounce is reserved for
+   the server-side fallback, which is an actual network round-trip. */
+const doSearchDebounced = debounce(openResults, 160);
+function doSearch(){
+  if(indexReady()) openResults();      // no await needed: purely local
+  else doSearchDebounced();
+}
+
+function moveNav(delta){
+  const btns = Array.from($('#results').querySelectorAll('button'));
+  if(!btns.length) return;
+  navIdx = Math.max(0, Math.min(btns.length-1, navIdx+delta));
+  btns.forEach((b,i)=>b.classList.toggle('sel', i===navIdx));
+  btns[navIdx].scrollIntoView({block:'nearest'});
+}
 
 /* ============================ saved quotes ============================== */
 async function renderQuotesList(){
@@ -1254,6 +1428,17 @@ function msg(t,bad){ $('#savemsg').innerHTML='<div class="note '+(bad?'bad':'ok'
 /* ================================ wiring ================================ */
 function wire(){
   $('#search').addEventListener('input', doSearch);
+  $('#search').addEventListener('focus', openResults);
+  $('#search').addEventListener('keydown', e=>{
+    const open = !$('#results').classList.contains('hide');
+    if(e.key==='ArrowDown'){ e.preventDefault(); if(!open) openResults(); else moveNav(1); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); moveNav(-1); }
+    else if(e.key==='Enter'){
+      const sel=$('#results').querySelector('button.sel') || $('#results').querySelector('button');
+      if(open && sel){ e.preventDefault(); sel.click(); }
+    }
+    else if(e.key==='Escape'){ $('#results').classList.add('hide'); $('#search').blur(); }
+  });
   document.addEventListener('click', e=>{ if(!$('#searchwrap').contains(e.target)) $('#results').classList.add('hide'); });
   $$('#tabs button').forEach(b=>b.onclick=()=>show(b.dataset.view));
   ['q_product','q_yards','q_prep','q_helpers','q_pw'].forEach(id=>$('#'+id).addEventListener('input',()=>{
