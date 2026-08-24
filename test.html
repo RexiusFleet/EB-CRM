@@ -50,7 +50,9 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 <div class="wrap">
   <h1>Supabase connection diagnostic</h1>
   <p class="lede">Runs the exact requests the quote app makes, one at a time, each with its own
-     timeout — so a hang shows up as a named failure instead of a spinner.</p>
+     timeout — so a problem shows up as a named failure instead of a spinner. Add your login
+     and it will also sign in and count the rows in every table, which is the only way to tell
+     an empty table apart from one that security is hiding.</p>
 
   <div class="card">
     <label for="url">Project URL</label>
@@ -58,6 +60,13 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
     <div style="margin-top:12px">
       <label for="key">anon public key <span style="font-weight:400">(Project Settings → API)</span></label>
       <input id="key" placeholder="eyJhbGciOiJIUzI1NiIs…">
+    </div>
+    <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div><label for="email">Your login email <span style="font-weight:400">(optional, but this is
+        what proves whether the data is really there)</span></label>
+        <input id="email" type="email" placeholder="you@rexius.com"></div>
+      <div><label for="pw">Password</label>
+        <input id="pw" type="password" placeholder="••••••••"></div>
     </div>
     <div class="row">
       <button id="run">Run diagnostic</button>
@@ -95,24 +104,42 @@ function update(node, detail, state){
   node.querySelector('.d').innerHTML = detail;
 }
 
-/* fetch with a hard deadline, reporting HOW it failed */
+/* fetch with a hard deadline.
+   Deliberately NOT using AbortController: in embedded webviews `fetch` is often
+   a shim that forwards the request over postMessage, and an AbortSignal cannot
+   be structured-cloned, so passing one fails instantly with a misleading
+   "network error". A plain timer race works everywhere. */
 async function probe(url, opts, ms){
-  const ctl = new AbortController();
   const t0 = performance.now();
-  const timer = setTimeout(()=>ctl.abort(), ms||12000);
-  try{
-    const r = await fetch(url, Object.assign({signal:ctl.signal}, opts||{}));
-    clearTimeout(timer);
-    const ms2 = Math.round(performance.now()-t0);
-    let body='';
-    try{ body = (await r.text()).slice(0,400); }catch(e){}
-    return {ok:r.ok, status:r.status, ms:ms2, body};
-  }catch(e){
-    clearTimeout(timer);
-    const ms2 = Math.round(performance.now()-t0);
-    if(e.name==='AbortError') return {timeout:true, ms:ms2};
-    return {network:true, ms:ms2, message:e.message};
-  }
+  const el = () => Math.round(performance.now()-t0);
+  let timer;
+  const deadline = new Promise(res => { timer = setTimeout(()=>res({timeout:true, ms:el()}), ms||12000); });
+  const attempt = (async () => {
+    try{
+      const r = await fetch(url, opts||{});
+      let body=''; try{ body=(await r.text()).slice(0,400); }catch(e){}
+      return {ok:r.ok, status:r.status, ms:el(), body};
+    }catch(e){
+      return {network:true, ms:el(), message:e && e.message ? e.message : String(e)};
+    }
+  })();
+  const out = await Promise.race([attempt, deadline]);
+  clearTimeout(timer);
+  return out;
+}
+
+/* Is this a real browser page, or an embedded preview / file:// document? */
+function environment(){
+  const notes = [];
+  const fileOrigin = location.origin === 'null' || location.protocol === 'file:';
+  const ua = navigator.userAgent || '';
+  const embedded = /Electron|Claude\//i.test(ua);
+  let patchedFetch = false;
+  try{ patchedFetch = !/\[native code\]/.test(Function.prototype.toString.call(window.fetch)); }catch(e){}
+  if(fileOrigin) notes.push('opened from a file, not served over http');
+  if(embedded)   notes.push('running inside an embedded app webview, not a browser');
+  if(patchedFetch) notes.push('fetch() has been replaced by the host app');
+  return {fileOrigin, embedded, patchedFetch, blocked: fileOrigin||embedded||patchedFetch, notes};
 }
 
 function describe(r){
@@ -132,13 +159,39 @@ $('#run').onclick = async () => {
   const H = key ? {apikey:key, Authorization:'Bearer '+key} : {};
   const results = {};
 
+  const env = environment();
+  step('Environment', env.blocked
+      ? '<b style="color:var(--warn)">'+esc(env.notes.join('; '))+'</b>'
+      : 'served over '+esc(location.protocol)+' in a normal browser',
+    env.blocked ? 'warn' : 'pass');
+  if(env.blocked){
+    const v0=$('#verdict');
+    v0.className='verdict bad';
+    v0.innerHTML='<b>This page is not running in a normal browser.</b>'+
+      esc(env.notes.join('; '))+'.<br><br>'+
+      'Calls to Supabase cannot work from here: an embedded preview forwards <code>fetch</code> through '+
+      'the host app, and a page opened from disk has no real origin for CORS. Requests either fail '+
+      'instantly or never come back — which is exactly the endless spinner in the app.<br><br>'+
+      '<b style="display:inline">Open the app in Chrome or Safari instead</b>, served over http — '+
+      'your GitHub Pages URL, or <code>python3 -m http.server 8000</code> in the project folder and '+
+      'then <code>http://localhost:8000</code>.';
+    $('#raw').style.display='block';
+    $('#raw').textContent='page origin: '+location.origin+'\nprotocol   : '+location.protocol+
+      '\nuser agent : '+navigator.userAgent+'\nnotes      : '+env.notes.join('; ');
+    $('#run').disabled=false;
+    return;
+  }
+
   // 1. Is the host reachable at all? auth health needs no key and no custom headers,
   //    so it is a "simple" request -- no CORS preflight involved.
   let n = step('Reach the project host', 'contacting '+esc(base)+' …', 'run');
   results.health = await probe(base+'/auth/v1/health', {}, 12000);
   log.push(['auth/v1/health', results.health]);
-  update(n, describe(results.health),
-    results.health.timeout||results.health.network ? 'fail' : results.health.ok ? 'pass' : 'warn');
+  update(n, (results.health.timeout||results.health.network)
+      ? describe(results.health)
+      : describe(results.health)+' <b>— host reachable</b>'+
+        (results.health.status===401?' (401 here is expected: no key sent)':''),
+    results.health.timeout||results.health.network ? 'fail' : 'pass');
 
   // 2. CORS preflight. The app sends apikey + Authorization, which makes every
   //    request non-simple, so the browser must OPTIONS first. If a proxy eats
@@ -156,7 +209,10 @@ $('#run').onclick = async () => {
     n = step('REST endpoint with your anon key', 'GET /rest/v1/ …', 'run');
     results.root = await probe(base+'/rest/v1/', {headers:H}, 12000);
     log.push(['GET rest/v1/', results.root]);
-    update(n, describe(results.root),
+    const rootExpected = results.root.status===401 &&
+      /service_role/i.test(results.root.body||'');
+    update(n, describe(results.root)+(rootExpected
+        ? ' <b>— expected: this endpoint only accepts the service_role key</b>' : ''),
       results.root.timeout||results.root.network ? 'fail' : (results.root.status<500?'pass':'warn'));
   }
 
@@ -184,6 +240,65 @@ $('#run').onclick = async () => {
     }
   } else {
     step('Table checks skipped', 'Paste the anon key above to test the tables.', 'warn');
+  }
+
+  /* ---------------- signed-in row counts ---------------- */
+  // Signed out, RLS makes every table return [] -- identical to a genuinely
+  // empty table. Only an authenticated count can tell the two apart, and that
+  // is the whole question when the product dropdown is empty.
+  const email = $('#email').value.trim(), pw = $('#pw').value;
+  let token = null;
+  if(email && pw){
+    let n2 = step('Sign in', 'authenticating '+esc(email)+' …', 'run');
+    let authRes;
+    try{
+      const r = await fetch(base+'/auth/v1/token?grant_type=password',
+        {method:'POST', headers:{apikey:key||'', 'Content-Type':'application/json'},
+         body:JSON.stringify({email, password:pw})});
+      authRes = await r.json();
+      if(r.ok && authRes.access_token){
+        token = authRes.access_token;
+        update(n2, 'signed in as <b>'+esc(email)+'</b>', 'pass');
+      } else {
+        const msg = authRes.error_description||authRes.msg||authRes.message||('HTTP '+r.status);
+        update(n2, '<b>'+esc(msg)+'</b>'+
+          (/invalid login/i.test(msg)
+            ? ' &mdash; no user with that email/password. Create one in Supabase under '+
+              '<b>Authentication &rarr; Users &rarr; Add user</b>, with <b>Auto Confirm User</b> ticked.'
+            : /not confirmed/i.test(msg)
+            ? ' &mdash; the user exists but was created without <b>Auto Confirm User</b>.'
+            : ''), 'fail');
+      }
+      log.push(['POST auth/v1/token', {status:r.status, ok:r.ok,
+        msg: authRes.error_description||authRes.msg||''}]);
+    }catch(e){
+      update(n2, 'request failed: <code>'+esc(e.message)+'</code>', 'fail');
+    }
+  }
+
+  const counts = {};
+  if(token){
+    const H2 = {apikey:key, Authorization:'Bearer '+token, Prefer:'count=exact'};
+    const WANT = {rate_card:30, markup_curve:5, settings:11, blow_benchmarks:86,
+                  drive_zones:21, customers:1823, sites:2607, orders:4553,
+                  order_lines:15109, quote_history:2251, site_index:3421};
+    for(const t of Object.keys(WANT)){
+      const n3 = step('Rows in '+t, 'counting …', 'run');
+      try{
+        const r = await fetch(base+'/rest/v1/'+t+'?select=*&limit=1', {headers:H2});
+        if(!r.ok){ update(n3, 'HTTP '+r.status+' — '+esc((await r.text()).slice(0,120)), 'fail');
+                   counts[t]=null; log.push(['count '+t, {status:r.status}]); continue; }
+        const cr = r.headers.get('content-range')||'';
+        const m = cr.match(/\/(\d+|\*)$/);
+        const n = m && m[1]!=='*' ? +m[1] : null;
+        counts[t]=n;
+        log.push(['count '+t, {n}]);
+        const want = WANT[t];
+        update(n3, '<b>'+(n==null?'?':n.toLocaleString())+'</b> rows (expect '+want.toLocaleString()+')'+
+          (n===0 ? ' <b>&mdash; EMPTY</b>' : ''),
+          n===0 ? 'fail' : (n!=null && n < want*0.9 ? 'warn' : 'pass'));
+      }catch(e){ update(n3, 'failed: '+esc(e.message), 'fail'); }
+    }
   }
 
   /* ---------------- verdict ---------------- */
@@ -224,11 +339,32 @@ $('#run').onclick = async () => {
     v.innerHTML='<b>Some requests answered and others hung.</b>'+
       'That points at a flaky connection or rate limiting rather than configuration. The failing ones are '+
       'marked FAIL above.';
+  } else if(token && counts.rate_card === 0){
+    v.className='verdict bad';
+    v.innerHTML='<b>The rate card is empty. That is why the product dropdown does nothing.</b>'+
+      'You are signed in and the connection is fine, so this is not security hiding the rows &mdash; '+
+      'the table genuinely has none.<br><br>'+
+      'Run <code>sql/00_setup_all.sql</code> in the Supabase SQL editor. It ends by printing a row '+
+      'count for every table, so you will see whether it worked rather than trusting the success '+
+      'banner. Re-running it is safe.';
+  } else if(token && counts.rate_card > 0){
+    v.className='verdict ok';
+    v.innerHTML='<b>Everything checks out.</b>'+
+      'Signed in, connection healthy, and the rate card has '+counts.rate_card+' products. '+
+      'If the dropdown is still empty in the app, you are on a cached copy of the page &mdash; '+
+      'hard-reload with Cmd/Ctrl + Shift + R and check the build stamp in the top right.';
+  } else if(!token && (email||pw)){
+    v.className='verdict bad';
+    v.innerHTML='<b>Sign-in failed, so nothing can load.</b>'+
+      'Row level security hides every row from a signed-out visitor &mdash; the app will show an '+
+      'empty product dropdown and empty history until a real user signs in. See the Sign in row above.';
   } else if(!hostDead && !preDead && tableKeys.length){
     v.className='verdict ok';
     v.innerHTML='<b>The connection is healthy from this browser.</b>'+
-      'Every request answered. If the app still spins here, it is serving a cached copy of the old '+
-      '<code>index.html</code> — hard-refresh it (Ctrl/Cmd + Shift + R), or open it in a private window.';
+      'Every table answered, and each returned <code>[]</code> because row level security hides all '+
+      'rows from a signed-out visitor — which is exactly right. Nothing here is broken.<br><br>'+
+      'Next: open the app and <b style="display:inline">sign in</b>. If it then says the tables are '+
+      'empty, the schema is in place but the CSV import has not run yet (README step 4).';
   } else {
     v.className='verdict warn';
     v.innerHTML='<b>Partial result.</b> Paste the anon key and run again for the full picture.';
