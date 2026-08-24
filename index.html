@@ -187,6 +187,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div style="flex:2"><label class="f">Customer name</label>
                 <input type="text" id="q_customer" placeholder="Name on the job"></div>
               <div><label class="f">Phone</label><input type="text" id="q_phone"></div>
+              <div style="flex:2"><label class="f">Email</label><input type="text" id="q_email"></div>
             </div>
             <div class="row">
               <div style="flex:2"><label class="f">Address</label>
@@ -389,7 +390,16 @@ function streetKey(addr){
   s=s.replace(/[.,#]/g,' ').replace(/\b(\d+)(?:st|nd|rd|th)\b/g,'$1');
   return s.split(/\s+/).filter(Boolean).map(t=>SUFFIX[t]||t).join(' ').trim();
 }
-function extractZip(a){const m=String(a||'').match(/\b(\d{5})(?:-\d{4})?\b/);return m?m[1]:'';}
+/* The leading house number must never be read as a ZIP: "81372 Lost Creek Rd"
+   has no ZIP at all. Strip the house number, then take the LAST 5-digit group.
+   Mirrors extract_zip() in addr.py. */
+function extractZip(a){
+  let s=String(a||'').trim(); if(!s) return '';
+  s=s.replace(/^\s*\d+[A-Za-z]?\s+/,' ');            // drop a leading house number
+  if(!/[A-Za-z]/.test(s)) return '';                  // a bare number is not an address
+  const m=s.match(/\b(\d{5})(?:-\d{4})?[\s,.]*$/);   // a ZIP sits at the END
+  return m?m[1]:'';
+}
 function extractCity(a){
   if(!a) return '';
   let s=String(a).replace(/\s+/g,' ').trim().replace(ZIP_END_RE,'').trim().replace(/,$/,'')
@@ -498,8 +508,13 @@ const DemoDB = {
     return Array.from(out.values()).sort((a,b)=>(b.last||'').localeCompare(a.last||'')).slice(0,25);
   },
   async siteHistory(key){
-    return {orders:(this._ordBySite.get(key)||[]).slice(), quotes:(this._qhBySite.get(key)||[]).slice(),
-            lines:this.B.order_lines};
+    const orders=(this._ordBySite.get(key)||[]).slice();
+    const custId = orders.length ? orders[0].cust_id : null;
+    if(!this._custById) this._custById = new Map(this.B.customers.map(c=>[c.cust_id,c]));
+    return {orders, quotes:(this._qhBySite.get(key)||[]).slice(),
+            lines:this.B.order_lines,
+            site:this._sitesByKey.get(key)||null,
+            customer: custId ? (this._custById.get(custId)||null) : null};
   },
   async comparables(product,yards){
     const lo=yards*0.6, hi=yards*1.6;
@@ -555,17 +570,25 @@ const LiveDB = {
   },
   async siteHistory(key){
     const k=encodeURIComponent(key);
-    const [orders,quotes]=await Promise.all([
+    const [orders,quotes,siteRows]=await Promise.all([
       SB.rest(`orders?select=*&site_key=eq.${k}&order=ord_date.desc`),
-      SB.rest(`quote_history?select=*&site_key=eq.${k}&order=quote_date.desc`)
+      SB.rest(`quote_history?select=*&site_key=eq.${k}&order=quote_date.desc`),
+      SB.rest(`sites?select=*&site_key=eq.${k}&limit=1`)
     ]);
+    let customer=null;
+    if(orders.length && orders[0].cust_id){
+      try{
+        const c=await SB.rest('customers?select=*&cust_id=eq.'+encodeURIComponent(orders[0].cust_id)+'&limit=1');
+        customer = c && c[0] || null;
+      }catch(e){}
+    }
     let lines={};
     if(orders.length){
       const ids=orders.slice(0,25).map(o=>`"${o.ord_nbr}"`).join(',');
       const rows=await SB.rest(`order_lines?select=ord_nbr,line_kind,descr,qty,unit,ext_price&ord_nbr=in.(${ids})`);
       rows.forEach(r=>{(lines[r.ord_nbr]=lines[r.ord_nbr]||[]).push({k:r.line_kind,d:r.descr,q:r.qty,u:r.unit,e:r.ext_price});});
     }
-    return {orders,quotes,lines};
+    return {orders,quotes,lines,site:(siteRows&&siteRows[0])||null,customer};
   },
   async comparables(product,yards){
     const p=encodeURIComponent(product);
@@ -847,14 +870,22 @@ async function renderComparables(){
 /* ============================ site + history ============================= */
 async function loadSite(key, seed){
   const h = await DB.siteHistory(key);
-  State.site = {key, orders:h.orders||[], quotes:h.quotes||[], lines:h.lines||{}};
+  State.site = {key, orders:h.orders||[], quotes:h.quotes||[], lines:h.lines||{},
+                site:h.site||null, customer:h.customer||null};
+  // Prefer the most recent record of each kind, and fall back across sources --
+  // a site with only quotes has no ship_zip, but the sites table still has one.
   const first = (h.quotes&&h.quotes[0]) || null;
   const fo = (h.orders&&h.orders[0]) || null;
-  $('#q_address').value = (seed&&seed.address1) || (fo&&fo.ship_addr1) || (first&&first.address_raw) || '';
-  $('#q_city').value    = (seed&&seed.city) || (fo&&fo.ship_city) || (first&&first.city) || '';
-  $('#q_zip').value     = (seed&&seed.zip) || (fo&&fo.ship_zip) || (first&&first.zip) || '';
-  $('#q_customer').value= (fo&&fo.customer_name) || (first&&first.customer_name) || '';
-  $('#q_phone').value   = (first&&first.phone) || '';
+  const st = h.site || null;
+  const cu = h.customer || null;
+  const pick = (...v) => { for(const x of v){ if(x!=null && String(x).trim()!=='') return String(x).trim(); } return ''; };
+
+  $('#q_address').value = pick(seed&&seed.address1, fo&&fo.ship_addr1, st&&st.address1, first&&first.address_raw);
+  $('#q_city').value    = pick(seed&&seed.city, fo&&fo.ship_city, st&&st.city, first&&first.city);
+  $('#q_zip').value     = pick(seed&&seed.zip, fo&&fo.ship_zip, st&&st.zip, first&&first.zip);
+  $('#q_customer').value= pick(fo&&fo.customer_name, first&&first.customer_name, cu&&cu.customer_name, st&&st.attention);
+  $('#q_phone').value   = pick(first&&first.phone, cu&&cu.phone, st&&st.phone);
+  $('#q_email').value   = pick(first&&first.email, cu&&cu.email);
   autoFill={drive:true,blow:true};
   renderHistory();
   recalc();
@@ -1080,6 +1111,7 @@ async function saveQuote(){
     status: $('#q_status').value,
     customer_name: $('#q_customer').value.trim()||null,
     phone: $('#q_phone').value.trim()||null,
+    email: $('#q_email').value.trim()||null,
     address_raw: addr||null,
     city: $('#q_city').value.trim()||extractCity(addr)||null,
     zip: $('#q_zip').value.trim()||extractZip(addr)||null,
@@ -1136,7 +1168,7 @@ function wire(){
   });
   $('#savequote').onclick=saveQuote;
   $('#newquote').onclick=()=>{
-    ['q_customer','q_phone','q_address','q_city','q_zip','q_notes','q_bid'].forEach(i=>$('#'+i).value='');
+    ['q_customer','q_phone','q_email','q_address','q_city','q_zip','q_notes','q_bid'].forEach(i=>$('#'+i).value='');
     State.site=null; autoFill={drive:true,blow:true}; renderHistory(); recalc();
   };
   $('#authbtn').onclick=async()=>{
