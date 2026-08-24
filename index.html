@@ -94,6 +94,8 @@ tr:last-child td{border-bottom:0}
 
 /* ---------- search ---------- */
 .searchwrap{position:relative;flex:1;min-width:240px;max-width:520px}
+.addrwrap{position:relative}
+.addrwrap .results{max-height:340px}
 .searchwrap input{padding-left:32px}
 .searchwrap svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.5}
 .results{position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--panel);border:1px solid var(--line);
@@ -195,7 +197,11 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             </div>
             <div class="row">
               <div style="flex:2"><label class="f">Address</label>
-                <input type="text" id="q_address" placeholder="1234 Example St, Eugene"></div>
+                <div class="addrwrap" id="addrwrap">
+                  <input type="text" id="q_address" autocomplete="off"
+                         placeholder="Click to browse, or type a new address">
+                  <div class="results hide" id="addrresults"></div>
+                </div></div>
               <div><label class="f">City</label><input type="text" id="q_city"></div>
               <div style="max-width:110px"><label class="f">ZIP</label><input type="text" id="q_zip"></div>
             </div>
@@ -344,9 +350,11 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
    The anon key is safe to publish: every RLS policy requires a logged-in
    user, so the key alone reads nothing.
    =========================================================================== */
+const BUILD = '2026-08-24e';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',   // e.g. 'https://abcdefgh.supabase.co'
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
+
 };
 
 /* =============================== helpers ================================= */
@@ -738,8 +746,10 @@ const EMPTY_REF = () => ({rate_card:[], markup_curve:[], settings:{},
                           blow_benchmarks:[], drive_zones:[]});
 
 async function boot(){
-  $('#modepill').textContent = LIVE ? 'Supabase' : 'Demo data';
+  $('#modepill').textContent = (LIVE ? 'Supabase' : 'Demo data')+' · '+BUILD;
   $('#modepill').className = 'pill '+(LIVE?'live':'demo');
+  $('#modepill').title = 'Build '+BUILD+' — if this is not the version you just deployed, '+
+    'your browser is serving a cached copy.';
   State.ref = EMPTY_REF();
 
   wire();                 // 1. controls live no matter what happens next
@@ -788,16 +798,28 @@ async function loadData(){
   }
   $('#boot').classList.remove('hide');
   $('#boot').innerHTML = '<div class="empty"><span class="spin"></span> Loading from '+
-    esc(targetLabel())+'… <span id="bootpct" class="mono"></span></div>';
+    esc(targetLabel())+'… <span id="bootpct" class="mono"></span>'+
+    '<div class="small muted" id="bootwait" style="margin-top:8px"></div></div>';
+  // Tick the elapsed time and name what is still outstanding. A silent spinner
+  // gives the user nothing to act on; this makes a stall self-describing.
+  const t0 = Date.now();
+  const ticker = setInterval(()=>{
+    const w=$('#bootwait'); if(!w) return;
+    const secs=Math.round((Date.now()-t0)/1000);
+    const pend=Diag.pending().map(r=>r.label).join(', ');
+    w.textContent = secs+'s elapsed'+(pend?' · waiting on '+pend:'');
+  }, 1000);
   try{
-    State.ref = await withTimeout(DB.init(), 20000, LIVE ? 'Supabase' : 'data/bundle.json');
+    State.ref = await withTimeout(DB.init(), 12000, LIVE ? 'Supabase' : 'data/bundle.json');
   }catch(e){
+    clearInterval(ticker);
     State.ref = State.ref && State.ref.rate_card ? State.ref : EMPTY_REF();
     $('#boot').innerHTML = '<div class="body">'+loadErrorHtml(e)+diagBlock()+'</div>';
     const rt=$('#retryload'); if(rt) rt.onclick=()=>loadData();
     renderAuth(); fillProducts(); recalc();
     return false;
   }
+  clearInterval(ticker);
   // Fill any setting the database didn't supply from the engine defaults, so
   // the labels never read "$undefined" while the math quietly used a default.
   State.ref.settings = Object.assign({}, Engine.DEFAULTS, State.ref.settings||{});
@@ -855,7 +877,7 @@ function loadErrorHtml(e){
   if(s==='timeout'){
     return '<div class="note bad"><b>The data request never came back.</b><br>'+
       (LIVE
-        ? 'Supabase did not respond within 20 seconds. Check that the project is running and not paused '+
+        ? 'Supabase accepted the request but never answered. Check that the project is running and not paused '+
           '(free projects pause after inactivity), and that the URL below is right.'
         : 'The demo data file did not finish downloading. If you are hosting on GitHub Pages, note that '+
           'files over 100 MB are rejected and large files can be slow — or fill in CONFIG to use Supabase instead.')+
@@ -1142,16 +1164,12 @@ function renderHistory(){
    and "spyglass couey" all find the same site -- because requiring an exact
    contiguous substring meant typing the record the way it happened to be
    entered years ago. */
-let navIdx = -1;
-
 function indexReady(){ return Array.isArray(State.index) && State.index.length>0; }
 
-function scoreRows(q){
+function scoreRows(q, limit){
   const rows = State.index || [];
-  if(!q){
-    // Prepopulated view: most recent activity first.
-    return rows.slice(0, 60);
-  }
+  limit = limit || 60;
+  if(!q) return rows.slice(0, limit);          // prepopulated: most recent first
   const toks = q.toLowerCase().split(/\s+/).filter(Boolean);
   const out = [];
   for(const r of rows){
@@ -1168,78 +1186,110 @@ function scoreRows(q){
   }
   out.sort((x,y)=> y.score-x.score ||
     String(y.r.last_activity||'').localeCompare(String(x.r.last_activity||'')));
-  return out.slice(0, 60).map(x=>x.r);
+  return out.slice(0, limit).map(x=>x.r);
 }
 
-function renderResults(rows, q){
-  const box=$('#results');
-  navIdx = -1;
-  if(!rows.length){
-    box.innerHTML='<div class="empty small">No match for “'+esc(q)+'”</div>';
-    box.classList.remove('hide'); return;
+function rowLabel(r){
+  const n = (+r.n_orders||0)+(+r.n_quotes||0);
+  return '<div class="a">'+esc(r.address1||r.site_key)+'</div>'+
+    '<div class="b">'+esc([r.customer_name||'', r.city, r.zip,
+      n ? (r.n_orders||0)+' delivered · '+(r.n_quotes||0)+' quoted' : '',
+      r.last_activity ? 'last '+dfmt(String(r.last_activity).slice(0,10)) : '']
+      .filter(Boolean).join(' · '))+'</div>';
+}
+
+/* ---------------------------------------------------------------------------
+   One reusable picker, attached to both the header search box and the Job Site
+   address field. Each instance keeps its own highlight index so arrow keys in
+   one do not move the other.
+   ------------------------------------------------------------------------ */
+function attachPicker(opts){
+  const input = $(opts.input), box = $(opts.results);
+  let nav = -1;
+
+  function render(rows, q){
+    nav = -1;
+    if(!rows.length){
+      box.innerHTML='<div class="empty small">No match for “'+esc(q)+'”'+
+        (opts.allowFreeText ? ' — keep typing to quote a new address.' : '')+'</div>';
+      box.classList.remove('hide'); return;
+    }
+    box.innerHTML='';
+    if(!q) box.appendChild(el('div','rhead', opts.heading||'Recently worked sites — start typing to narrow'));
+    rows.forEach(r=>{
+      const b=el('button');
+      b.innerHTML=rowLabel(r);
+      b.onclick=()=>{ box.classList.add('hide'); opts.onPick(r); };
+      box.appendChild(b);
+    });
+    box.classList.remove('hide');
   }
-  box.innerHTML='';
-  if(!q){
-    box.appendChild(el('div','rhead','Recently worked sites — start typing to narrow'));
+
+  async function open(){
+    const q=(input.value||'').trim();
+    if(indexReady()){ render(scoreRows(q, opts.limit), q); return; }
+    if(q.length<2){
+      box.innerHTML='<div class="empty small">'+
+        (State.indexErr ? 'Browsable list unavailable — type at least 2 characters to search.'
+                        : '<span class="spin"></span> Loading the site list…')+'</div>';
+      box.classList.remove('hide'); return;
+    }
+    let rows=[];
+    try{ rows=await DB.search(q); }catch(e){}
+    render(rows.map(r=>({site_key:r.site_key, address1:r.address1, city:r.city, zip:r.zip,
+      customer_name:Array.from(r.names||[]).filter(Boolean)[0]||'',
+      n_orders:'', n_quotes:'', last_activity:r.last})), q);
   }
-  rows.forEach(r=>{
-    const b=el('button');
-    const names = r.all_names && r.all_names!==r.customer_name
-      ? r.customer_name : (r.customer_name||'');
-    const n = (+r.n_orders||0)+(+r.n_quotes||0);
-    b.innerHTML='<div class="a">'+esc(r.address1||r.site_key)+'</div>'+
-      '<div class="b">'+esc([names, r.city, r.zip,
-        n ? (r.n_orders||0)+' delivered · '+(r.n_quotes||0)+' quoted' : '',
-        r.last_activity ? 'last '+dfmt(String(r.last_activity).slice(0,10)) : '']
-        .filter(Boolean).join(' · '))+'</div>';
-    b.onclick=()=>choose(r);
-    box.appendChild(b);
+
+  function move(d){
+    const btns=Array.from(box.querySelectorAll('button'));
+    if(!btns.length) return;
+    nav = Math.max(0, Math.min(btns.length-1, nav+d));
+    btns.forEach((b,i)=>b.classList.toggle('sel', i===nav));
+    btns[nav].scrollIntoView({block:'nearest'});
+  }
+
+  /* Local filtering is instant, so run it synchronously on each keystroke --
+     debouncing only creates a window where the list is stale and a fast click
+     picks the wrong site. Debounce is for the server fallback only. */
+  const openDebounced = debounce(open, 160);
+  input.addEventListener('input', ()=>{ indexReady() ? open() : openDebounced(); });
+  input.addEventListener('focus', open);
+  input.addEventListener('keydown', e=>{
+    const isOpen = !box.classList.contains('hide');
+    if(e.key==='ArrowDown'){ e.preventDefault(); isOpen ? move(1) : open(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); move(-1); }
+    else if(e.key==='Enter'){
+      const sel=box.querySelector('button.sel');
+      // Only Enter-select an explicitly highlighted row. On a free-text field,
+      // blindly taking the first hit would hijack a genuinely new address.
+      if(isOpen && sel){ e.preventDefault(); sel.click(); }
+      else if(isOpen && !opts.allowFreeText){
+        const first=box.querySelector('button');
+        if(first){ e.preventDefault(); first.click(); }
+      } else box.classList.add('hide');
+    }
+    else if(e.key==='Escape'){ box.classList.add('hide'); input.blur(); }
   });
-  box.classList.remove('hide');
+  document.addEventListener('click', e=>{
+    if(!e.target.closest(opts.wrap)) box.classList.add('hide');
+  });
+  return {open, close:()=>box.classList.add('hide')};
 }
 
-function choose(r){
-  $('#results').classList.add('hide');
-  $('#search').value='';
-  show('quote');
-  loadSite(r.site_key, {address1:r.address1, city:r.city, zip:r.zip});
-}
-
-async function openResults(){
-  const q=$('#search').value.trim();
-  if(indexReady()){ renderResults(scoreRows(q), q); return; }
-  // Index unavailable (older database without the site_index view): fall back
-  // to the server-side substring search, which still needs typing.
-  if(q.length<2){
-    $('#results').innerHTML='<div class="empty small">'+
-      (State.indexErr ? 'Browsable list unavailable — type at least 2 characters to search.'
-                      : '<span class="spin"></span> Loading the site list…')+'</div>';
-    $('#results').classList.remove('hide');
-    return;
-  }
-  let rows=[];
-  try{ rows=await DB.search(q); }catch(e){}
-  renderResults(rows.map(r=>({site_key:r.site_key, address1:r.address1, city:r.city, zip:r.zip,
-    customer_name:Array.from(r.names||[]).filter(Boolean)[0]||'',
-    n_orders:'', n_quotes:'', last_activity:r.last})), q);
-}
-
-/* Filtering the local index is instant, so do it synchronously on every
-   keystroke -- debouncing there only creates a window where the visible list
-   is stale and a fast click selects the wrong site. Debounce is reserved for
-   the server-side fallback, which is an actual network round-trip. */
-const doSearchDebounced = debounce(openResults, 160);
-function doSearch(){
-  if(indexReady()) openResults();      // no await needed: purely local
-  else doSearchDebounced();
-}
-
-function moveNav(delta){
-  const btns = Array.from($('#results').querySelectorAll('button'));
-  if(!btns.length) return;
-  navIdx = Math.max(0, Math.min(btns.length-1, navIdx+delta));
-  btns.forEach((b,i)=>b.classList.toggle('sel', i===navIdx));
-  btns[navIdx].scrollIntoView({block:'nearest'});
+let headerPicker=null, sitePicker=null;
+function initPickers(){
+  headerPicker = attachPicker({
+    input:'#search', results:'#results', wrap:'#searchwrap',
+    onPick:r=>{ $('#search').value=''; show('quote');
+                loadSite(r.site_key,{address1:r.address1,city:r.city,zip:r.zip}); }
+  });
+  sitePicker = attachPicker({
+    input:'#q_address', results:'#addrresults', wrap:'#addrwrap',
+    allowFreeText:true, limit:40,
+    heading:'Previous job sites — or type a new address',
+    onPick:r=>loadSite(r.site_key,{address1:r.address1,city:r.city,zip:r.zip})
+  });
 }
 
 /* ============================ saved quotes ============================== */
@@ -1427,19 +1477,7 @@ function msg(t,bad){ $('#savemsg').innerHTML='<div class="note '+(bad?'bad':'ok'
 
 /* ================================ wiring ================================ */
 function wire(){
-  $('#search').addEventListener('input', doSearch);
-  $('#search').addEventListener('focus', openResults);
-  $('#search').addEventListener('keydown', e=>{
-    const open = !$('#results').classList.contains('hide');
-    if(e.key==='ArrowDown'){ e.preventDefault(); if(!open) openResults(); else moveNav(1); }
-    else if(e.key==='ArrowUp'){ e.preventDefault(); moveNav(-1); }
-    else if(e.key==='Enter'){
-      const sel=$('#results').querySelector('button.sel') || $('#results').querySelector('button');
-      if(open && sel){ e.preventDefault(); sel.click(); }
-    }
-    else if(e.key==='Escape'){ $('#results').classList.add('hide'); $('#search').blur(); }
-  });
-  document.addEventListener('click', e=>{ if(!$('#searchwrap').contains(e.target)) $('#results').classList.add('hide'); });
+  initPickers();
   $$('#tabs button').forEach(b=>b.onclick=()=>show(b.dataset.view));
   ['q_product','q_yards','q_prep','q_helpers','q_pw'].forEach(id=>$('#'+id).addEventListener('input',()=>{
     if(id==='q_product'||id==='q_yards'){ autoFill={drive:autoFill.drive,blow:true}; }
