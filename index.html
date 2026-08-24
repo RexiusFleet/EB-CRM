@@ -357,7 +357,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
    The anon key is safe to publish: every RLS policy requires a logged-in
    user, so the key alone reads nothing.
    =========================================================================== */
-const BUILD = '2026-08-24g';   // shown in the header; check it after deploying
+const BUILD = '2026-08-24h';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -449,11 +449,30 @@ const Diag = {
     const rec = {label, t0: Date.now(), status:'pending'};
     Diag.log.push(rec);
     if(Diag.log.length>40) Diag.log.shift();
+    Diag.notify();
     return rec;
   },
   end(rec, status, note){
     if(!rec) return;
     rec.status=status; rec.ms=Date.now()-rec.t0; if(note) rec.note=String(note).slice(0,140);
+    Diag.notify();
+  },
+  // Live per-request checklist inside the loading panel. A single spinner
+  // cannot say WHICH call is stuck; this can, and a screenshot of it is a
+  // complete diagnosis.
+  notify(){
+    const el = document.getElementById('bootreqs');
+    if(!el) return;
+    el.innerHTML = Diag.log.slice(-8).map(r=>{
+      const mark = r.status==='pending' ? '<span class="spin" style="width:9px;height:9px"></span>'
+                 : r.status==='ok' ? '<span style="color:var(--good)">&#10003;</span>'
+                 : '<span style="color:var(--danger)">&#10007;</span>';
+      return '<div style="display:flex;gap:8px;align-items:baseline">'+mark+
+        '<span class="mono" style="flex:1;text-align:left">'+esc(r.label)+'</span>'+
+        '<span class="mono">'+(r.ms==null?'':r.ms+'ms')+'</span></div>'+
+        (r.note && r.status!=='ok' ? '<div class="small" style="color:var(--danger);text-align:left;'+
+          'margin:0 0 4px 17px">'+esc(r.note)+'</div>' : '');
+    }).join('');
   },
   pending(){ return Diag.log.filter(r=>r.status==='pending'); },
   html(){
@@ -843,7 +862,24 @@ async function loadData(){
   $('#boot').classList.remove('hide');
   $('#boot').innerHTML = '<div class="empty"><span class="spin"></span> Loading from '+
     esc(targetLabel())+'… <span id="bootpct" class="mono"></span>'+
-    '<div class="small muted" id="bootwait" style="margin-top:8px"></div></div>';
+    '<div class="small muted" id="bootwait" style="margin-top:8px"></div>'+
+    '<div class="small muted" id="bootreqs" style="margin:10px auto 0;max-width:460px"></div>'+
+    '<div style="margin-top:12px"><button class="btn ghost sm" id="bootskip">Continue anyway</button></div>'+
+    '</div>';
+  $('#bootskip').onclick=()=>{ $('#boot').classList.add('hide'); $('#boot').innerHTML=''; };
+  Diag.notify();
+  // Watchdog independent of the promise chain: if anything ever breaks the
+  // await (a thrown handler, a swallowed rejection), the panel must still stop
+  // claiming to be loading.
+  const watchdog = setTimeout(()=>{
+    const b=$('#boot');
+    if(b && !b.classList.contains('hide') && /Loading from/.test(b.textContent||'')){
+      b.innerHTML='<div class="body"><div class="note bad"><b>Load did not finish.</b><br>'+
+        'The request never completed and never failed. The list below shows exactly which call '+
+        'is outstanding.</div>'+diagBlock()+'</div>';
+      const rt=$('#retryload'); if(rt) rt.onclick=()=>loadData();
+    }
+  }, 15000);
   // Tick the elapsed time and name what is still outstanding. A silent spinner
   // gives the user nothing to act on; this makes a stall self-describing.
   const t0 = Date.now();
@@ -856,14 +892,14 @@ async function loadData(){
   try{
     State.ref = await withTimeout(DB.init(), 12000, LIVE ? 'Supabase' : 'data/bundle.json');
   }catch(e){
-    clearInterval(ticker);
+    clearInterval(ticker); clearTimeout(watchdog);
     State.ref = State.ref && State.ref.rate_card ? State.ref : EMPTY_REF();
     $('#boot').innerHTML = '<div class="body">'+loadErrorHtml(e)+diagBlock()+'</div>';
     const rt=$('#retryload'); if(rt) rt.onclick=()=>loadData();
     renderAuth(); fillProducts(); recalc();
     return false;
   }
-  clearInterval(ticker);
+  clearInterval(ticker); clearTimeout(watchdog);
   // Fill any setting the database didn't supply from the engine defaults, so
   // the labels never read "$undefined" while the math quietly used a default.
   State.ref.settings = Object.assign({}, Engine.DEFAULTS, State.ref.settings||{});
