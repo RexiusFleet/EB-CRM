@@ -713,7 +713,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-24o';   // shown in the header; check it after deploying
+const BUILD = '2026-08-24p';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1624,6 +1624,25 @@ async function renderComparables(){
 }
 
 /* ============================ site + history ============================= */
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[A-Za-z]{2,}$/;
+function pickEmail(){
+  for(const v of arguments){
+    if(!v) continue;
+    const s=String(v).trim().toLowerCase();
+    if(EMAIL_RE.test(s) && s.indexOf('nope@')<0) return s;
+  }
+  return '';
+}
+function pickPhone(){
+  for(const v of arguments){
+    if(!v) continue;
+    let d=String(v).replace(/\D/g,'');
+    if(d.length===11 && d[0]==='1') d=d.slice(1);
+    if(d.length===10 && new Set(d).size>1) return '('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6);
+  }
+  return '';
+}
+
 async function loadSite(key, seed){
   const h = await DB.siteHistory(key);
   State.site = {key, orders:h.orders||[], quotes:h.quotes||[], lines:h.lines||{},
@@ -1641,7 +1660,11 @@ async function loadSite(key, seed){
   $('#q_zip').value     = pick(seed&&seed.zip, fo&&fo.ship_zip, st&&st.zip, first&&first.zip);
   $('#q_customer').value= pick(fo&&fo.customer_name, first&&first.customer_name, cu&&cu.customer_name, st&&st.attention);
   $('#q_phone').value   = pick(first&&first.phone, cu&&cu.phone, st&&st.phone);
-  $('#q_email').value   = pick(first&&first.email, cu&&cu.email);
+  // Validate on the way out as well as in the ETL. The quote log's Email
+  // column was used as scratch space -- 236 of 289 values were notes or
+  // company names -- and a rep must never see "POWR" where an email goes.
+  $('#q_email').value   = pickEmail(first&&first.email, cu&&cu.email);
+  $('#q_phone').value   = pickPhone($('#q_phone').value);
   autoFill={drive:true,blow:true};
   renderHistory();
   recalc();
