@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Supabase connection diagnostic</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6b3c'/%3E%3Ctext x='16' y='23' font-family='system-ui,sans-serif' font-size='18' font-weight='700' fill='%23fff' text-anchor='middle'%3E%3F%3C/text%3E%3C/svg%3E">
+<style>
+:root{--bg:#f6f7f5;--panel:#fff;--ink:#1b2019;--muted:#5f6b5c;--line:#e0e4dd;--accent:#2f6b3c;
+  --warn:#a8620f;--warn-soft:#fdf1e2;--danger:#a32f2f;--danger-soft:#fbeaea;--good:#2f6b3c;--good-soft:#e8f1e9;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12150f;--panel:#1a1e17;--ink:#e8ece5;
+  --muted:#9aa694;--line:#2a3025;--accent:#6fbf7f;--warn:#e0a256;--warn-soft:#2a2013;--danger:#e08585;
+  --danger-soft:#2a1717;--good:#6fbf7f;--good-soft:#1e2a1f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);padding:28px 18px 80px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-size:21px;margin:0 0 6px;letter-spacing:-.02em}
+p.lede{color:var(--muted);margin:0 0 22px;font-size:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin:0 0 5px;letter-spacing:.02em}
+input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--bg);
+  color:inherit;font:13px var(--mono)}
+button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:10px 18px;font:600 15px var(--sans);cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+.row{display:flex;gap:12px;margin-top:14px;align-items:center;flex-wrap:wrap}
+.t{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+.step{display:flex;gap:11px;padding:9px 0;border-bottom:1px solid var(--line);align-items:flex-start}
+.step:last-child{border-bottom:0}
+.badge{flex:0 0 auto;font:600 11px var(--sans);padding:3px 9px;border-radius:999px;margin-top:1px;white-space:nowrap}
+.pass{background:var(--good-soft);color:var(--good)}
+.fail{background:var(--danger-soft);color:var(--danger)}
+.warn{background:var(--warn-soft);color:var(--warn)}
+.run{background:var(--line);color:var(--muted)}
+.step .b{flex:1;min-width:0}
+.step .n{font-weight:600;font-size:14px}
+.step .d{font-size:12.5px;color:var(--muted);margin-top:2px;word-break:break-word}
+.step .d code{font-family:var(--mono);font-size:11.5px}
+.verdict{margin-top:18px;padding:14px 16px;border-radius:10px;font-size:14px;line-height:1.6}
+.verdict.bad{background:var(--danger-soft);color:var(--danger)}
+.verdict.ok{background:var(--good-soft);color:var(--good)}
+.verdict.warn{background:var(--warn-soft);color:var(--warn)}
+.verdict b{display:block;margin-bottom:5px;font-size:15px}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:11px;overflow:auto;
+  font:11.5px/1.5 var(--mono);max-height:260px;margin:10px 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Supabase connection diagnostic</h1>
+  <p class="lede">Runs the exact requests the quote app makes, one at a time, each with its own
+     timeout — so a hang shows up as a named failure instead of a spinner.</p>
+
+  <div class="card">
+    <label for="url">Project URL</label>
+    <input id="url" value="https://jmvciokrclgtsnlrtvwg.supabase.co">
+    <div style="margin-top:12px">
+      <label for="key">anon public key <span style="font-weight:400">(Project Settings → API)</span></label>
+      <input id="key" placeholder="eyJhbGciOiJIUzI1NiIs…">
+    </div>
+    <div class="row">
+      <button id="run">Run diagnostic</button>
+      <span style="font-size:12.5px;color:var(--muted)">Nothing is sent anywhere except your own Supabase project.</span>
+    </div>
+  </div>
+
+  <div class="card" id="out" style="display:none">
+    <div id="steps"></div>
+    <div id="verdict"></div>
+    <pre id="raw" style="display:none"></pre>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+const TABLES = ['rate_card','markup_curve','settings','blow_benchmarks','drive_zones',
+                'sites','orders','quote_history','order_lines','customers','profiles','quotes'];
+const log = [];
+
+function step(name, detail, state){
+  const d = document.createElement('div');
+  d.className = 'step';
+  d.innerHTML = '<span class="badge '+state+'">'+
+    (state==='pass'?'PASS':state==='fail'?'FAIL':state==='warn'?'WARN':'…')+'</span>'+
+    '<div class="b"><div class="n">'+esc(name)+'</div><div class="d">'+detail+'</div></div>';
+  $('#steps').appendChild(d);
+  return d;
+}
+function update(node, detail, state){
+  node.querySelector('.badge').className='badge '+state;
+  node.querySelector('.badge').textContent = state==='pass'?'PASS':state==='fail'?'FAIL':state==='warn'?'WARN':'…';
+  node.querySelector('.d').innerHTML = detail;
+}
+
+/* fetch with a hard deadline, reporting HOW it failed */
+async function probe(url, opts, ms){
+  const ctl = new AbortController();
+  const t0 = performance.now();
+  const timer = setTimeout(()=>ctl.abort(), ms||12000);
+  try{
+    const r = await fetch(url, Object.assign({signal:ctl.signal}, opts||{}));
+    clearTimeout(timer);
+    const ms2 = Math.round(performance.now()-t0);
+    let body='';
+    try{ body = (await r.text()).slice(0,400); }catch(e){}
+    return {ok:r.ok, status:r.status, ms:ms2, body};
+  }catch(e){
+    clearTimeout(timer);
+    const ms2 = Math.round(performance.now()-t0);
+    if(e.name==='AbortError') return {timeout:true, ms:ms2};
+    return {network:true, ms:ms2, message:e.message};
+  }
+}
+
+function describe(r){
+  if(r.timeout) return '<b style="color:var(--danger)">no response in '+(r.ms/1000).toFixed(0)+'s</b>';
+  if(r.network) return '<b style="color:var(--danger)">blocked before any reply</b> — <code>'+esc(r.message)+'</code> ('+r.ms+'ms)';
+  return 'HTTP <b>'+r.status+'</b> in '+r.ms+'ms'+(r.body?' — <code>'+esc(r.body.slice(0,140))+'</code>':'');
+}
+
+$('#run').onclick = async () => {
+  const base = $('#url').value.trim().replace(/\/+$/,'');
+  const key  = $('#key').value.trim();
+  if(!base){ alert('Enter the project URL'); return; }
+  $('#run').disabled = true;
+  $('#out').style.display='block';
+  $('#steps').innerHTML=''; $('#verdict').innerHTML=''; log.length=0;
+
+  const H = key ? {apikey:key, Authorization:'Bearer '+key} : {};
+  const results = {};
+
+  // 1. Is the host reachable at all? auth health needs no key and no custom headers,
+  //    so it is a "simple" request -- no CORS preflight involved.
+  let n = step('Reach the project host', 'contacting '+esc(base)+' …', 'run');
+  results.health = await probe(base+'/auth/v1/health', {}, 12000);
+  log.push(['auth/v1/health', results.health]);
+  update(n, describe(results.health),
+    results.health.timeout||results.health.network ? 'fail' : results.health.ok ? 'pass' : 'warn');
+
+  // 2. CORS preflight. The app sends apikey + Authorization, which makes every
+  //    request non-simple, so the browser must OPTIONS first. If a proxy eats
+  //    OPTIONS, every real request hangs -- this is the usual cause.
+  n = step('CORS preflight (OPTIONS)', 'checking whether preflight is answered …', 'run');
+  results.pre = await probe(base+'/rest/v1/rate_card?select=product&limit=1',
+    {method:'OPTIONS', headers:{'Access-Control-Request-Method':'GET',
+      'Access-Control-Request-Headers':'apikey,authorization,content-type'}}, 12000);
+  log.push(['OPTIONS rest/v1/rate_card', results.pre]);
+  update(n, describe(results.pre),
+    results.pre.timeout||results.pre.network ? 'fail' : 'pass');
+
+  // 3. REST root with the key
+  if(key){
+    n = step('REST endpoint with your anon key', 'GET /rest/v1/ …', 'run');
+    results.root = await probe(base+'/rest/v1/', {headers:H}, 12000);
+    log.push(['GET rest/v1/', results.root]);
+    update(n, describe(results.root),
+      results.root.timeout||results.root.network ? 'fail' : (results.root.status<500?'pass':'warn'));
+  }
+
+  // 4. Each table the app reads on startup, individually.
+  //    Skipped when the REST root already hangs -- 12 more 8s timeouts would
+  //    tell us nothing new and take two minutes.
+  const rootDead = results.root && (results.root.timeout || results.root.network);
+  if(key && rootDead){
+    step('Table checks skipped', 'The REST endpoint itself never answered, so per-table checks '+
+      'would just repeat the same failure.', 'warn');
+  } else if(key){
+    for(const t of TABLES){
+      n = step('Table: '+t, 'GET /rest/v1/'+t+' …', 'run');
+      const r = await probe(base+'/rest/v1/'+t+'?select=*&limit=1', {headers:H}, 8000);
+      results['t_'+t] = r; log.push(['GET '+t, r]);
+      let state = 'pass';
+      if(r.timeout||r.network) state='fail';
+      else if(r.status===404) state='fail';
+      else if(r.status===401||r.status===403) state='warn';
+      let extra='';
+      if(r.status===404) extra=' <b>— table does not exist</b>';
+      if(r.status===401||r.status===403) extra=' <b>— RLS blocking anon (expected before sign-in)</b>';
+      if(r.ok && r.body==='[]') extra=' <b>— reachable, 0 rows visible to anon (expected)</b>';
+      update(n, describe(r)+extra, state);
+    }
+  } else {
+    step('Table checks skipped', 'Paste the anon key above to test the tables.', 'warn');
+  }
+
+  /* ---------------- verdict ---------------- */
+  const v = $('#verdict');
+  const hostDead = results.health && (results.health.timeout || results.health.network);
+  const preDead  = results.pre && (results.pre.timeout || results.pre.network);
+  const tableKeys = Object.keys(results).filter(k=>k.startsWith('t_'));
+  const anyTableHang = tableKeys.some(k=>results[k].timeout||results[k].network);
+  const restDead = results.root && (results.root.timeout || results.root.network);
+  const all404 = tableKeys.length && tableKeys.every(k=>results[k].status===404);
+
+  if(hostDead && preDead){
+    v.className='verdict bad';
+    v.innerHTML='<b>Nothing from this host reaches your browser.</b>'+
+      'Both a plain request and a preflight failed. That is a network-level block, not an app bug — '+
+      'a corporate firewall, VPN, DNS filter, or browser extension is dropping traffic to supabase.co. '+
+      'Try the same page on a phone using cellular data: if it works there, it is your office network.';
+  } else if(preDead && !hostDead){
+    v.className='verdict bad';
+    v.innerHTML='<b>The host answers, but CORS preflight does not.</b>'+
+      'The app sends <code>apikey</code> and <code>Authorization</code> headers, so the browser must send an '+
+      'OPTIONS request first. Something between you and Supabase is swallowing OPTIONS — usually a proxy '+
+      'or security appliance. Every real request then hangs forever, which is exactly the spinner you saw.';
+  } else if(restDead && !preDead){
+    v.className='verdict bad';
+    v.innerHTML='<b>Preflight is answered but the real request never is.</b>'+
+      'The browser gets permission to send the request, then the request itself hangs. That is almost '+
+      'always something inspecting traffic in the middle — a proxy, TLS-inspecting firewall, or VPN — '+
+      'that lets the cheap OPTIONS through and stalls on the actual GET. Test the same page on a phone '+
+      'over cellular to confirm it is the network and not the project.';
+  } else if(all404){
+    v.className='verdict bad';
+    v.innerHTML='<b>The project is reachable but the tables do not exist.</b>'+
+      'Run <code>sql/01_schema.sql</code>, then <code>02_rls.sql</code> and <code>03_seed_reference.sql</code> '+
+      'in the Supabase SQL editor.';
+  } else if(anyTableHang){
+    v.className='verdict warn';
+    v.innerHTML='<b>Some requests answered and others hung.</b>'+
+      'That points at a flaky connection or rate limiting rather than configuration. The failing ones are '+
+      'marked FAIL above.';
+  } else if(!hostDead && !preDead && tableKeys.length){
+    v.className='verdict ok';
+    v.innerHTML='<b>The connection is healthy from this browser.</b>'+
+      'Every request answered. If the app still spins here, it is serving a cached copy of the old '+
+      '<code>index.html</code> — hard-refresh it (Ctrl/Cmd + Shift + R), or open it in a private window.';
+  } else {
+    v.className='verdict warn';
+    v.innerHTML='<b>Partial result.</b> Paste the anon key and run again for the full picture.';
+  }
+
+  $('#raw').style.display='block';
+  $('#raw').textContent = 'Copy this and send it back:\n\n' +
+    'page origin: ' + location.origin + '\n' +
+    'user agent : ' + navigator.userAgent + '\n\n' +
+    log.map(([k,r])=>k.padEnd(30)+' '+JSON.stringify(r)).join('\n');
+  $('#run').disabled = false;
+};
+</script>
+</body>
+</html>
