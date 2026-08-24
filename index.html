@@ -137,6 +137,13 @@ tr:last-child td{border-bottom:0}
 .kv.total .v{font-size:19px}
 .basis{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.4}
 .basis b{color:var(--accent);font-weight:600}
+.yardref{margin-top:9px;padding-top:9px;border-top:1px dashed var(--line);
+  font-size:11.5px;color:var(--muted);line-height:1.6}
+.yardref a{display:inline-flex;align-items:center;gap:4px;margin-right:10px;
+  padding:3px 9px;border:1px solid var(--line);border-radius:999px;
+  background:var(--panel);text-decoration:none;color:var(--accent);font-weight:600;white-space:nowrap}
+.yardref a:hover{background:var(--accent-soft)}
+.yardref .hint{display:block;margin-top:6px}
 .hrbox{border:1px solid var(--line);border-radius:10px;padding:11px 12px;background:var(--panel-2)}
 .hrbox .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px}
 .hrbox .top .lbl{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.02em}
@@ -257,6 +264,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                   <span><input type="number" id="q_drive" step="0.25" min="0" style="width:88px;text-align:right"
                         class="mono"> <span class="small muted">hr</span></span></div>
                 <div class="basis" id="drivebasis"></div>
+                <div class="yardref" id="yardref"></div>
               </div>
               <div class="hrbox">
                 <div class="top"><span class="lbl">Blow time (on site)</span>
@@ -699,7 +707,13 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
    The anon key is safe to publish: every RLS policy requires a logged-in
    user, so the key alone reads nothing.
    =========================================================================== */
-const BUILD = '2026-08-24n';   // shown in the header; check it after deploying
+// The two yards a blower crew leaves from. Edit here if a yard moves.
+const YARDS = [
+  {name:'Coburg yard',   addr:'92574 N Coburg Rd, Coburg, OR 97408'},
+  {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
+];
+
+const BUILD = '2026-08-24o';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1473,6 +1487,37 @@ function suggest(){
   } else rg.classList.add('hide');
 }
 
+/* A one-click check of real driving time from each yard.
+   Deliberately a link, not an API call: a Maps key embedded in a public page
+   would be usable by anyone who views source, and this needs no key, costs
+   nothing, and is always current with traffic. */
+function renderYardRef(){
+  const box=$('#yardref');
+  const addr=($('#q_address').value||'').trim();
+  const city=($('#q_city').value||'').trim();
+  const zip=($('#q_zip').value||'').trim();
+  if(!addr){ box.innerHTML='<span class="muted">Enter an address to check drive time from the yards.</span>'; return; }
+  const dest=[addr, city, zip && zip.length===5 ? 'OR '+zip : (city?'OR':'')]
+    .filter(Boolean).join(', ');
+  const links = YARDS.map(y=>
+    '<a target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1'+
+    '&travelmode=driving&origin='+encodeURIComponent(y.addr)+
+    '&destination='+encodeURIComponent(dest)+'">'+esc(y.name)+' &#8599;</a>').join('');
+
+  // What this city has actually been billed, for comparison.
+  const zones = State.ref.drive_zones||[];
+  const z = city ? zones.find(r=>r.zone_type==='city' &&
+              String(r.zone_key).toLowerCase()===city.toLowerCase()) : null;
+  const hist = z
+    ? '<b>'+(+z.drive_hours_median).toFixed(2)+' hr</b> round trip is the median billed for '+
+      esc(z.zone_key)+' ('+z.n+' job'+(z.n>1?'s':'')+')'
+    : 'No billed history for this city yet';
+
+  box.innerHTML = links +
+    '<span class="hint">'+hist+'. Maps shows <b>one-way</b> driving only — your figure is '+
+    'round trip and has historically run well above 2&times; the pure drive, so treat Maps as a floor.</span>';
+}
+
 function basisLabel(b){
   const map={site_product:['site history','g'],site_scaled:['site history','g'],site:['site history','g'],
              product_band:['product + volume',''],product:['product average',''],
@@ -1539,6 +1584,7 @@ function recalc(){
         : '<div class="note ok">Margin '+pctf(gm)+' on '+money(p.cost)+' of cost.</div>');
 
   State.lastPrice = p;
+  renderYardRef();
   renderComparables();
 }
 
