@@ -191,7 +191,11 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           <div class="body grid" style="gap:12px">
             <div class="row">
               <div style="flex:2"><label class="f">Customer name</label>
-                <input type="text" id="q_customer" placeholder="Name on the job"></div>
+                <div class="addrwrap" id="custwrap">
+                  <input type="text" id="q_customer" autocomplete="off"
+                         placeholder="Click to browse, or type a new customer">
+                  <div class="results hide" id="custresults"></div>
+                </div></div>
               <div><label class="f">Phone</label><input type="text" id="q_phone"></div>
               <div style="flex:2"><label class="f">Email</label><input type="text" id="q_email"></div>
             </div>
@@ -352,10 +356,16 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
    =========================================================================== */
 const BUILD = '2026-08-24e';   // shown in the header; check it after deploying
 const CONFIG = {
-  SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',   // e.g. 'https://abcdefgh.supabase.co'
+  SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
-
 };
+// This is the ANON key (role: "anon", project jmvciokrclgtsnlrtvwg, expires
+// 2036-08-22). It is designed to be published: every RLS policy requires an
+// authenticated user, so the key on its own reads nothing. Verified by decoding
+// the JWT -- if you ever paste a key here whose role is "service_role", stop:
+// that one bypasses all security and must never reach the browser.
+//
+// To run against the offline demo data instead, blank both values above.
 
 /* =============================== helpers ================================= */
 const $  = s => document.querySelector(s);
@@ -834,7 +844,11 @@ async function loadData(){
       'The tables are probably still empty — run <code>sql/03_seed_reference.sql</code> '+
       'and import the CSVs (README step 4).</div></div>';
   } else {
+    // Clear as well as hide: leaving the old "Loading…" markup inside a hidden
+    // node makes a healthy app look stuck to anything that inspects the DOM,
+    // and risks flashing stale text if the panel is ever shown again.
     $('#boot').classList.add('hide');
+    $('#boot').innerHTML = '';
   }
   renderAuth(); fillProducts(); recalc();
   loadSearchIndex();
@@ -920,6 +934,17 @@ function show(v){
 /* ============================ quote builder ============================== */
 function fillProducts(){
   const sel=$('#q_product'); sel.innerHTML='';
+  // An empty <select> with no explanation reads as a broken control. Say which
+  // of the two causes it is, because the fix differs.
+  if(!State.ref.rate_card || !State.ref.rate_card.length){
+    const why = (LIVE && !State.user)
+      ? 'Sign in to load products'
+      : 'No products found — run sql/03_seed_reference.sql';
+    sel.innerHTML = '<option value="">'+esc(why)+'</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
   const cats={bark:'Bark & mulch',soil_compost:'Soil & compost',rock:'Rock',other:'Other'};
   const groups={};
   State.ref.rate_card.filter(r=>r.active!==false).forEach(r=>{(groups[r.category||'other']=groups[r.category||'other']||[]).push(r)});
@@ -1166,9 +1191,10 @@ function renderHistory(){
    entered years ago. */
 function indexReady(){ return Array.isArray(State.index) && State.index.length>0; }
 
-function scoreRows(q, limit){
-  const rows = State.index || [];
+function scoreRows(q, limit, filter){
+  let rows = State.index || [];
   limit = limit || 60;
+  if(filter) rows = rows.filter(filter);
   if(!q) return rows.slice(0, limit);          // prepopulated: most recent first
   const toks = q.toLowerCase().split(/\s+/).filter(Boolean);
   const out = [];
@@ -1189,13 +1215,20 @@ function scoreRows(q, limit){
   return out.slice(0, limit).map(x=>x.r);
 }
 
-function rowLabel(r){
+function rowLabel(r, leadWith){
   const n = (+r.n_orders||0)+(+r.n_quotes||0);
-  return '<div class="a">'+esc(r.address1||r.site_key)+'</div>'+
-    '<div class="b">'+esc([r.customer_name||'', r.city, r.zip,
-      n ? (r.n_orders||0)+' delivered · '+(r.n_quotes||0)+' quoted' : '',
-      r.last_activity ? 'last '+dfmt(String(r.last_activity).slice(0,10)) : '']
-      .filter(Boolean).join(' · '))+'</div>';
+  const activity = [ n ? (r.n_orders||0)+' delivered · '+(r.n_quotes||0)+' quoted' : '',
+                     r.last_activity ? 'last '+dfmt(String(r.last_activity).slice(0,10)) : '' ];
+  // The customer picker leads with the name; the address pickers lead with the
+  // address. Same row, different emphasis, so each list scans naturally.
+  const head = leadWith==='customer'
+    ? (r.customer_name || r.address1 || r.site_key)
+    : (r.address1 || r.site_key);
+  const rest = leadWith==='customer'
+    ? [r.address1||'', r.city, r.zip].concat(activity)
+    : [r.customer_name||'', r.city, r.zip].concat(activity);
+  return '<div class="a">'+esc(head)+'</div>'+
+    '<div class="b">'+esc(rest.filter(Boolean).join(' · '))+'</div>';
 }
 
 /* ---------------------------------------------------------------------------
@@ -1218,7 +1251,7 @@ function attachPicker(opts){
     if(!q) box.appendChild(el('div','rhead', opts.heading||'Recently worked sites — start typing to narrow'));
     rows.forEach(r=>{
       const b=el('button');
-      b.innerHTML=rowLabel(r);
+      b.innerHTML=rowLabel(r, opts.leadWith);
       b.onclick=()=>{ box.classList.add('hide'); opts.onPick(r); };
       box.appendChild(b);
     });
@@ -1227,7 +1260,10 @@ function attachPicker(opts){
 
   async function open(){
     const q=(input.value||'').trim();
-    if(indexReady()){ render(scoreRows(q, opts.limit), q); return; }
+    if(indexReady()){
+      let rows = scoreRows(q, opts.limit, opts.filter);
+      render(rows, q); return;
+    }
     if(q.length<2){
       box.innerHTML='<div class="empty small">'+
         (State.indexErr ? 'Browsable list unavailable — type at least 2 characters to search.'
@@ -1277,7 +1313,7 @@ function attachPicker(opts){
   return {open, close:()=>box.classList.add('hide')};
 }
 
-let headerPicker=null, sitePicker=null;
+let headerPicker=null, sitePicker=null, custPicker=null;
 function initPickers(){
   headerPicker = attachPicker({
     input:'#search', results:'#results', wrap:'#searchwrap',
@@ -1288,6 +1324,14 @@ function initPickers(){
     input:'#q_address', results:'#addrresults', wrap:'#addrwrap',
     allowFreeText:true, limit:40,
     heading:'Previous job sites — or type a new address',
+    onPick:r=>loadSite(r.site_key,{address1:r.address1,city:r.city,zip:r.zip})
+  });
+  custPicker = attachPicker({
+    input:'#q_customer', results:'#custresults', wrap:'#custwrap',
+    allowFreeText:true, limit:40, leadWith:'customer',
+    // Only sites that actually carry a name are useful in a customer list.
+    filter:r=>!!(r.customer_name || r.all_names),
+    heading:'Previous customers — or type a new one',
     onPick:r=>loadSite(r.site_key,{address1:r.address1,city:r.city,zip:r.zip})
   });
 }
