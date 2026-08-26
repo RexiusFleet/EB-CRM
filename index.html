@@ -71,6 +71,12 @@ main{max-width:1400px;margin:0 auto;padding:20px 18px 80px}
 label.f{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;letter-spacing:.02em}
 input[type=text],input[type=number],input[type=email],input[type=password],select,textarea{
   width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2)}
+/* A <select> defaults to line-height:normal while an <input> inherits 1.5, so
+   side by side the dropdown sits ~4px shorter. Pin both to the same height so
+   Product and Yards line up in every browser. */
+input[type=text],input[type=number],input[type=email],input[type=password],select{
+  min-height:42px;line-height:1.5}
+select{padding-right:30px}
 input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
 .row{display:flex;gap:12px;flex-wrap:wrap}
 .row>*{flex:1;min-width:0}
@@ -713,7 +719,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-24p';   // shown in the header; check it after deploying
+const BUILD = '2026-08-24q';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
