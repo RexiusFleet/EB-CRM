@@ -52,6 +52,9 @@
     <input id="url" value="https://jmvciokrclgtsnlrtvwg.supabase.co">
     <label>Anon key</label>
     <input id="key" placeholder="eyJhbGciOiJIUzI1NiIs…">
+    <label>Function name <span style="text-transform:none;letter-spacing:0">— use
+      <code>hello</code> to test a minimal function instead</span></label>
+    <input id="fn" value="calendar">
     <div class="row">
       <div><label>Email</label><input id="email" type="email" placeholder="you@rexius.com"></div>
       <div><label>Password</label><input id="pw" type="password" placeholder="••••••••"></div>
@@ -91,11 +94,11 @@ function withTimeout(p, ms, label){
   });
 }
 
-async function attempt(name, url, headers, note){
+async function attempt(name, url, fn, headers, note){
   const t0 = Date.now();
   let r, text = '';
   try{
-    r = await withTimeout(fetch(url+'/functions/v1/calendar', {
+    r = await withTimeout(fetch(url+'/functions/v1/'+fn, {
       method:'POST', headers, body: JSON.stringify({action:'ping', skipGoogle:true})
     }), 15000, 'the function');
   }catch(e){
@@ -126,6 +129,7 @@ async function attempt(name, url, headers, note){
 $('#run').onclick = async () => {
   const url = $('#url').value.trim().replace(/\/+$/,'');
   const key = $('#key').value.trim();
+  const FN = ($('#fn').value.trim() || 'calendar');
   const email = $('#email').value.trim(), pw = $('#pw').value;
   if(!url || !key){ alert('URL and anon key are required.'); return; }
   $('#run').disabled = true;
@@ -159,7 +163,7 @@ $('#run').onclick = async () => {
      it splits "nothing is deployed" from "the preflight is being blocked",
      which look identical in every other test. ---- */
   try{
-    await withTimeout(fetch(url+'/functions/v1/calendar',
+    await withTimeout(fetch(url+'/functions/v1/'+FN,
       {method:'POST', mode:'no-cors', body:'{}'}), 15000, 'the function');
     results.reachable = true;
     step('ok','g','Is anything there?',
@@ -171,17 +175,17 @@ $('#run').onclick = async () => {
   }
 
   /* ---- 1. anon key only. Proves the function exists and is reachable. ---- */
-  results.anon = await attempt('Call with the anon key', url,
+  results.anon = await attempt('Call with the anon key', url, FN,
     H({Authorization:'Bearer '+key}));
 
   /* ---- 2. session token in Authorization: the app's normal path ---- */
-  if(token) results.session = await attempt('Call with your session token', url,
+  if(token) results.session = await attempt('Call with your session token', url, FN,
     H({Authorization:'Bearer '+token}));
 
   /* ---- 3. the fallback: anon in Authorization, session in x-user-token.
              Also the only test that needs the function's CORS list to name
              x-user-token, so a failure here alone means an old deploy. ---- */
-  if(token) results.fallback = await attempt('Call with the fallback header', url,
+  if(token) results.fallback = await attempt('Call with the fallback header', url, FN,
     H({Authorization:'Bearer '+key, 'x-user-token':token}),
     'This one needs the function to list x-user-token in its CORS headers — only the '+
     'current calendar-function.ts does.');
@@ -218,11 +222,20 @@ $('#run').onclick = async () => {
       '<code>supabase functions deploy calendar --no-verify-jwt</code>.');
   } else if(a === 'cors' || a === 'hang'){
     v.push('<b>Nothing is answering.</b> Even an unreadable no-cors call got no reply, so '+
-      'this is not a CORS problem — there is nothing on the other end. Either the function '+
-      'is not deployed, or it is deployed under a different name (it must be exactly '+
-      '<code>calendar</code>), or it is crashing on boot. Check Edge Functions → calendar '+
-      '→ Logs: repeated <code>booted</code>/<code>shutdown</code> with no request lines '+
-      'between them means a crash loop.');
+      'this is not CORS and not authentication — there is nothing on the other end '+
+      'producing a response. Either the function is not deployed, it is deployed under a '+
+      'different name (it must match exactly), or it is failing to start.'+
+      '<br><br><b>Next step — bisect it.</b> Deploy <code>calendar-hello.ts</code> as a '+
+      'function named <code>hello</code>: it has no imports, no secrets and no calls out, '+
+      'so it can only fail for reasons that have nothing to do with the calendar code. '+
+      'Then put <code>hello</code> in the Function name box above and run this again.'+
+      '<br><br>If <b>hello answers</b>, the platform and the deploy path are fine and the '+
+      'calendar function is failing on its own — most likely a truncated paste into the '+
+      'dashboard editor. Redeploy it and check the last line in the editor matches the '+
+      'last line of the file.'+
+      '<br><br>If <b>hello does not answer either</b>, nothing I wrote is involved. Check '+
+      'Edge Functions → Logs for an ERROR entry, and whether the function is listed at all '+
+      'with a recent deploy timestamp.');
   } else if(a === 'gw401'){
     v.push('<b>Supabase’s gateway is rejecting every call before the function runs</b> — '+
       'even with the anon key, which it should always accept. Turn off <b>Verify JWT</b> '+
