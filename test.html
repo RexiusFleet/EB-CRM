@@ -151,6 +151,25 @@ $('#run').onclick = async () => {
   const H = extra => Object.assign({apikey:key,'Content-Type':'application/json'}, extra||{});
   const results = {};
 
+  /* ---- 0b. Is anything answering at all?
+     A no-cors request is a "simple request": the browser sends it without a
+     preflight and hands back an opaque response it will not let us read. We
+     cannot see the status -- but the promise only resolves if something on the
+     other end actually answered. That is the one question CORS cannot hide, and
+     it splits "nothing is deployed" from "the preflight is being blocked",
+     which look identical in every other test. ---- */
+  try{
+    await withTimeout(fetch(url+'/functions/v1/calendar',
+      {method:'POST', mode:'no-cors', body:'{}'}), 15000, 'the function');
+    results.reachable = true;
+    step('ok','g','Is anything there?',
+      'yes — the function answered (the reply is unreadable by design, but it came back)');
+  }catch(e){
+    results.reachable = false;
+    step('no','d','Is anything there?',
+      e.timeout ? 'nothing answered within 15s' : 'nothing answered ('+e.message+')');
+  }
+
   /* ---- 1. anon key only. Proves the function exists and is reachable. ---- */
   results.anon = await attempt('Call with the anon key', url,
     H({Authorization:'Bearer '+key}));
@@ -183,12 +202,27 @@ $('#run').onclick = async () => {
   const s = results.session && results.session.kind;
   const f = results.fallback && results.fallback.kind;
 
-  if(a === 'cors' || a === 'hang'){
-    v.push('<b>The function is not answering at all.</b> Even a plain anon-key call got '+
-      'nothing back. Either it is not deployed, or it is deployed under a different name '+
-      '— it must be exactly <code>calendar</code>. Compare the control test above: a '+
-      'missing function normally answers quickly with an error, so no answer at all also '+
-      'points at a function that is crashing on boot. Check Edge Functions → calendar → Logs.');
+  if((a === 'cors' || a === 'hang') && results.reachable){
+    v.push('<b>The function is deployed and answering — but the browser is not allowed '+
+      'to talk to it.</b> The unreadable no-cors call got through, so something is '+
+      'listening; every readable call failed. That combination means the <b>CORS '+
+      'preflight</b> is being refused.'+
+      '<br><br>The browser sends an <code>OPTIONS</code> request before a POST, and that '+
+      'preflight carries no Authorization header. If <b>Verify JWT</b> is switched on for '+
+      'the function, Supabase’s gateway rejects that preflight, and the real request is '+
+      'never sent — which is why even the anon key fails.'+
+      '<br><br><b>Fix:</b> Edge Functions → <code>calendar</code> → turn <b>off</b> '+
+      '“Verify JWT”. The function authenticates every caller itself, so this removes a '+
+      'duplicate check rather than your security. If the dashboard does not offer the '+
+      'toggle, redeploy from a terminal with '+
+      '<code>supabase functions deploy calendar --no-verify-jwt</code>.');
+  } else if(a === 'cors' || a === 'hang'){
+    v.push('<b>Nothing is answering.</b> Even an unreadable no-cors call got no reply, so '+
+      'this is not a CORS problem — there is nothing on the other end. Either the function '+
+      'is not deployed, or it is deployed under a different name (it must be exactly '+
+      '<code>calendar</code>), or it is crashing on boot. Check Edge Functions → calendar '+
+      '→ Logs: repeated <code>booted</code>/<code>shutdown</code> with no request lines '+
+      'between them means a crash loop.');
   } else if(a === 'gw401'){
     v.push('<b>Supabase’s gateway is rejecting every call before the function runs</b> — '+
       'even with the anon key, which it should always accept. Turn off <b>Verify JWT</b> '+
