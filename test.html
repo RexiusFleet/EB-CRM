@@ -215,11 +215,22 @@ $('#run').onclick = async () => {
       'preflight carries no Authorization header. If <b>Verify JWT</b> is switched on for '+
       'the function, Supabase’s gateway rejects that preflight, and the real request is '+
       'never sent — which is why even the anon key fails.'+
-      '<br><br><b>Fix:</b> Edge Functions → <code>calendar</code> → turn <b>off</b> '+
-      '“Verify JWT”. The function authenticates every caller itself, so this removes a '+
-      'duplicate check rather than your security. If the dashboard does not offer the '+
-      'toggle, redeploy from a terminal with '+
-      '<code>supabase functions deploy calendar --no-verify-jwt</code>.');
+      '<br><br><b>Two things cause this, and they look identical from here:</b>'+
+      '<br>1. <b>Verify JWT is on</b> for the function, so Supabase’s gateway rejects the '+
+      'preflight before the function sees it.'+
+      '<br>2. <b>The deployed code does not send CORS headers</b> — which is what you get '+
+      'if the dashboard’s default template is still in the editor, or a paste of '+
+      'calendar-function.ts was truncated.'+
+      '<br><br><b>To tell them apart:</b> deploy <code>calendar-hello.ts</code> as a '+
+      'function named <code>hello</code> and run this probe again with <code>hello</code> '+
+      'in the Function name box. That file does send CORS headers, so:'+
+      '<br>• <b>hello also blocked</b> → cause 1. Turn off Verify JWT: Edge Functions → '+
+      'the function → its settings. The function authenticates every caller itself, so '+
+      'this removes a duplicate check rather than your security. No dashboard toggle? '+
+      'Redeploy with <code>supabase functions deploy calendar --no-verify-jwt</code>.'+
+      '<br>• <b>hello answers</b> → cause 2. The gateway is fine and the calendar '+
+      'function’s own code is the problem. Reopen it in the editor and check the last two '+
+      'lines are <code>}</code> then <code>});</code> — if not, the paste was cut short.');
   } else if(a === 'cors' || a === 'hang'){
     v.push('<b>Nothing is answering.</b> Even an unreadable no-cors call got no reply, so '+
       'this is not CORS and not authentication — there is nothing on the other end '+
