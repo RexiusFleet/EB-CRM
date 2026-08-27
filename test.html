@@ -3,378 +3,229 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Supabase connection diagnostic</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6b3c'/%3E%3Ctext x='16' y='23' font-family='system-ui,sans-serif' font-size='18' font-weight='700' fill='%23fff' text-anchor='middle'%3E%3F%3C/text%3E%3C/svg%3E">
+<title>Calendar function probe</title>
 <style>
-:root{--bg:#f6f7f5;--panel:#fff;--ink:#1b2019;--muted:#5f6b5c;--line:#e0e4dd;--accent:#2f6b3c;
-  --warn:#a8620f;--warn-soft:#fdf1e2;--danger:#a32f2f;--danger-soft:#fbeaea;--good:#2f6b3c;--good-soft:#e8f1e9;
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12150f;--panel:#1a1e17;--ink:#e8ece5;
-  --muted:#9aa694;--line:#2a3025;--accent:#6fbf7f;--warn:#e0a256;--warn-soft:#2a2013;--danger:#e08585;
-  --danger-soft:#2a1717;--good:#6fbf7f;--good-soft:#1e2a1f}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);padding:28px 18px 80px}
-.wrap{max-width:860px;margin:0 auto}
-h1{font-size:21px;margin:0 0 6px;letter-spacing:-.02em}
-p.lede{color:var(--muted);margin:0 0 22px;font-size:14px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
-label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin:0 0 5px;letter-spacing:.02em}
-input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--bg);
-  color:inherit;font:13px var(--mono)}
-button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:10px 18px;font:600 15px var(--sans);cursor:pointer}
-button:disabled{opacity:.5;cursor:not-allowed}
-.row{display:flex;gap:12px;margin-top:14px;align-items:center;flex-wrap:wrap}
-.t{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
-.step{display:flex;gap:11px;padding:9px 0;border-bottom:1px solid var(--line);align-items:flex-start}
-.step:last-child{border-bottom:0}
-.badge{flex:0 0 auto;font:600 11px var(--sans);padding:3px 9px;border-radius:999px;margin-top:1px;white-space:nowrap}
-.pass{background:var(--good-soft);color:var(--good)}
-.fail{background:var(--danger-soft);color:var(--danger)}
-.warn{background:var(--warn-soft);color:var(--warn)}
-.run{background:var(--line);color:var(--muted)}
-.step .b{flex:1;min-width:0}
-.step .n{font-weight:600;font-size:14px}
-.step .d{font-size:12.5px;color:var(--muted);margin-top:2px;word-break:break-word}
-.step .d code{font-family:var(--mono);font-size:11.5px}
-.verdict{margin-top:18px;padding:14px 16px;border-radius:10px;font-size:14px;line-height:1.6}
-.verdict.bad{background:var(--danger-soft);color:var(--danger)}
-.verdict.ok{background:var(--good-soft);color:var(--good)}
-.verdict.warn{background:var(--warn-soft);color:var(--warn)}
-.verdict b{display:block;margin-bottom:5px;font-size:15px}
-pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:11px;overflow:auto;
-  font:11.5px/1.5 var(--mono);max-height:260px;margin:10px 0 0}
+  :root{--ink:#1d1f1e;--muted:#6b716e;--line:#dfe3e0;--bg:#f7f8f7;--card:#fff;
+        --good:#2f6b3c;--bad:#a8321f;--warn:#8a6300}
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px 20px 60px;font:15px/1.5 -apple-system,BlinkMacSystemFont,
+       "Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg)}
+  .wrap{max-width:860px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 6px}
+  p.lede{color:var(--muted);margin:0 0 22px;max-width:62ch}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:18px;margin-bottom:16px}
+  label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.04em;
+        color:var(--muted);margin:0 0 4px}
+  input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:7px;
+        font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;margin-bottom:12px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:200px}
+  button{background:var(--ink);color:#fff;border:0;border-radius:7px;padding:10px 18px;
+         font-size:14px;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  .t{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;
+     font-weight:600;background:#eceeed;color:var(--muted);margin-right:8px}
+  .t.g{background:#e4f0e6;color:var(--good)} .t.d{background:#f7e5e1;color:var(--bad)}
+  .t.w{background:#f8efd9;color:var(--warn)}
+  .step{padding:9px 0;border-bottom:1px solid var(--line)}
+  .step:last-child{border-bottom:0}
+  .step b{font-weight:600}
+  .small{font-size:12.5px;color:var(--muted)}
+  pre{background:#f2f4f3;border:1px solid var(--line);border-radius:7px;padding:10px;
+      font-size:12px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;margin:8px 0 0}
+  .verdict{margin-top:14px;padding:12px 14px;border-radius:8px;background:#f2f4f3;
+           border:1px solid var(--line)}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Supabase connection diagnostic</h1>
-  <p class="lede">Runs the exact requests the quote app makes, one at a time, each with its own
-     timeout — so a problem shows up as a named failure instead of a spinner. Add your login
-     and it will also sign in and count the rows in every table, which is the only way to tell
-     an empty table apart from one that security is hiding.</p>
+  <h1>Calendar function probe</h1>
+  <p class="lede">Calls the Edge Function four different ways and reports exactly what
+  comes back for each. The point is to separate causes that all look identical from
+  inside the app: the function not being there, Supabase's gateway refusing the call
+  before it runs, the function refusing your session, and the browser blocking the
+  request over CORS. Nothing here writes anything — it only calls <code>ping</code>.</p>
 
   <div class="card">
-    <label for="url">Project URL</label>
+    <label>Supabase URL</label>
     <input id="url" value="https://jmvciokrclgtsnlrtvwg.supabase.co">
-    <div style="margin-top:12px">
-      <label for="key">anon public key <span style="font-weight:400">(Project Settings → API)</span></label>
-      <input id="key" placeholder="eyJhbGciOiJIUzI1NiIs…">
-    </div>
-    <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
-      <div><label for="email">Your login email <span style="font-weight:400">(optional, but this is
-        what proves whether the data is really there)</span></label>
-        <input id="email" type="email" placeholder="you@rexius.com"></div>
-      <div><label for="pw">Password</label>
-        <input id="pw" type="password" placeholder="••••••••"></div>
-    </div>
+    <label>Anon key</label>
+    <input id="key" placeholder="eyJhbGciOiJIUzI1NiIs…">
     <div class="row">
-      <button id="run">Run diagnostic</button>
-      <span style="font-size:12.5px;color:var(--muted)">Nothing is sent anywhere except your own Supabase project.</span>
+      <div><label>Email</label><input id="email" type="email" placeholder="you@rexius.com"></div>
+      <div><label>Password</label><input id="pw" type="password" placeholder="••••••••"></div>
     </div>
+    <button id="run">Run probe</button>
+    <div class="small" style="margin-top:8px">Nothing is stored or sent anywhere except
+      your own Supabase project.</div>
   </div>
 
   <div class="card" id="out" style="display:none">
     <div id="steps"></div>
     <div id="verdict"></div>
-    <pre id="raw" style="display:none"></pre>
   </div>
 </div>
 
 <script>
 const $ = s => document.querySelector(s);
-const esc = s => String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const steps = $('#steps');
 
-const TABLES = ['rate_card','markup_curve','settings','blow_benchmarks','drive_zones',
-                'sites','orders','quote_history','order_lines','customers','profiles','quotes'];
-const log = [];
-
-function step(name, detail, state){
+function step(tag, cls, title, detail, body){
   const d = document.createElement('div');
   d.className = 'step';
-  d.innerHTML = '<span class="badge '+state+'">'+
-    (state==='pass'?'PASS':state==='fail'?'FAIL':state==='warn'?'WARN':'…')+'</span>'+
-    '<div class="b"><div class="n">'+esc(name)+'</div><div class="d">'+detail+'</div></div>';
-  $('#steps').appendChild(d);
+  d.innerHTML = '<span class="t '+cls+'">'+esc(tag)+'</span><b>'+esc(title)+'</b>'+
+    (detail?' <span class="small">'+esc(detail)+'</span>':'')+
+    (body?'<pre>'+esc(body)+'</pre>':'');
+  steps.appendChild(d);
   return d;
 }
-function update(node, detail, state){
-  node.querySelector('.badge').className='badge '+state;
-  node.querySelector('.badge').textContent = state==='pass'?'PASS':state==='fail'?'FAIL':state==='warn'?'WARN':'…';
-  node.querySelector('.d').innerHTML = detail;
+
+/* Every call gets a deadline. A probe that hangs tells you nothing. */
+function withTimeout(p, ms, label){
+  return new Promise((res, rej)=>{
+    const t = setTimeout(()=>{ const e=new Error('no answer within '+(ms/1000)+'s from '+label);
+      e.timeout=true; rej(e); }, ms);
+    p.then(v=>{clearTimeout(t);res(v);}, e=>{clearTimeout(t);rej(e);});
+  });
 }
 
-/* fetch with a hard deadline.
-   Deliberately NOT using AbortController: in embedded webviews `fetch` is often
-   a shim that forwards the request over postMessage, and an AbortSignal cannot
-   be structured-cloned, so passing one fails instantly with a misleading
-   "network error". A plain timer race works everywhere. */
-async function probe(url, opts, ms){
-  const t0 = performance.now();
-  const el = () => Math.round(performance.now()-t0);
-  let timer;
-  const deadline = new Promise(res => { timer = setTimeout(()=>res({timeout:true, ms:el()}), ms||12000); });
-  const attempt = (async () => {
-    try{
-      const r = await fetch(url, opts||{});
-      let body=''; try{ body=(await r.text()).slice(0,400); }catch(e){}
-      return {ok:r.ok, status:r.status, ms:el(), body};
-    }catch(e){
-      return {network:true, ms:el(), message:e && e.message ? e.message : String(e)};
+async function attempt(name, url, headers, note){
+  const t0 = Date.now();
+  let r, text = '';
+  try{
+    r = await withTimeout(fetch(url+'/functions/v1/calendar', {
+      method:'POST', headers, body: JSON.stringify({action:'ping', skipGoogle:true})
+    }), 15000, 'the function');
+  }catch(e){
+    if(e.timeout){
+      step('hung','d', name, Math.round((Date.now()-t0)/1000)+'s — no response at all');
+      return {kind:'hang'};
     }
-  })();
-  const out = await Promise.race([attempt, deadline]);
-  clearTimeout(timer);
-  return out;
-}
-
-/* Is this a real browser page, or an embedded preview / file:// document? */
-function environment(){
-  const notes = [];
-  const fileOrigin = location.origin === 'null' || location.protocol === 'file:';
-  const ua = navigator.userAgent || '';
-  const embedded = /Electron|Claude\//i.test(ua);
-  let patchedFetch = false;
-  try{ patchedFetch = !/\[native code\]/.test(Function.prototype.toString.call(window.fetch)); }catch(e){}
-  if(fileOrigin) notes.push('opened from a file, not served over http');
-  if(embedded)   notes.push('running inside an embedded app webview, not a browser');
-  if(patchedFetch) notes.push('fetch() has been replaced by the host app');
-  return {fileOrigin, embedded, patchedFetch, blocked: fileOrigin||embedded||patchedFetch, notes};
-}
-
-function describe(r){
-  if(r.timeout) return '<b style="color:var(--danger)">no response in '+(r.ms/1000).toFixed(0)+'s</b>';
-  if(r.network) return '<b style="color:var(--danger)">blocked before any reply</b> — <code>'+esc(r.message)+'</code> ('+r.ms+'ms)';
-  return 'HTTP <b>'+r.status+'</b> in '+r.ms+'ms'+(r.body?' — <code>'+esc(r.body.slice(0,140))+'</code>':'');
+    // A blocked CORS preflight arrives here as a bare TypeError.
+    step('blocked','d', name, 'the browser refused to complete it (' + e.message + ')',
+      note||'');
+    return {kind:'cors'};
+  }
+  try{ text = await r.text(); }catch(e){}
+  let body = null; try{ body = JSON.parse(text); }catch(e){}
+  const ms = Date.now()-t0;
+  if(r.ok){
+    step('ok','g', name, r.status+' in '+ms+'ms', text.slice(0,400));
+    return {kind:'ok', body};
+  }
+  // The function's own errors carry {error:…}; the gateway's do not.
+  const fromFunction = !!(body && body.error);
+  step(r.status===401?'401':'fail','d', name,
+    r.status+' in '+ms+'ms — '+(fromFunction?'from the function':'from Supabase’s gateway, '+
+      'before the function ran'), text.slice(0,400));
+  return {kind: r.status===401 ? (fromFunction?'fn401':'gw401') : 'http', status:r.status, body};
 }
 
 $('#run').onclick = async () => {
-  const base = $('#url').value.trim().replace(/\/+$/,'');
-  const key  = $('#key').value.trim();
-  if(!base){ alert('Enter the project URL'); return; }
-  $('#run').disabled = true;
-  $('#out').style.display='block';
-  $('#steps').innerHTML=''; $('#verdict').innerHTML=''; log.length=0;
-
-  const H = key ? {apikey:key, Authorization:'Bearer '+key} : {};
-  const results = {};
-
-  const env = environment();
-  step('Environment', env.blocked
-      ? '<b style="color:var(--warn)">'+esc(env.notes.join('; '))+'</b>'
-      : 'served over '+esc(location.protocol)+' in a normal browser',
-    env.blocked ? 'warn' : 'pass');
-  if(env.blocked){
-    const v0=$('#verdict');
-    v0.className='verdict bad';
-    v0.innerHTML='<b>This page is not running in a normal browser.</b>'+
-      esc(env.notes.join('; '))+'.<br><br>'+
-      'Calls to Supabase cannot work from here: an embedded preview forwards <code>fetch</code> through '+
-      'the host app, and a page opened from disk has no real origin for CORS. Requests either fail '+
-      'instantly or never come back — which is exactly the endless spinner in the app.<br><br>'+
-      '<b style="display:inline">Open the app in Chrome or Safari instead</b>, served over http — '+
-      'your GitHub Pages URL, or <code>python3 -m http.server 8000</code> in the project folder and '+
-      'then <code>http://localhost:8000</code>.';
-    $('#raw').style.display='block';
-    $('#raw').textContent='page origin: '+location.origin+'\nprotocol   : '+location.protocol+
-      '\nuser agent : '+navigator.userAgent+'\nnotes      : '+env.notes.join('; ');
-    $('#run').disabled=false;
-    return;
-  }
-
-  // 1. Is the host reachable at all? auth health needs no key and no custom headers,
-  //    so it is a "simple" request -- no CORS preflight involved.
-  let n = step('Reach the project host', 'contacting '+esc(base)+' …', 'run');
-  results.health = await probe(base+'/auth/v1/health', {}, 12000);
-  log.push(['auth/v1/health', results.health]);
-  update(n, (results.health.timeout||results.health.network)
-      ? describe(results.health)
-      : describe(results.health)+' <b>— host reachable</b>'+
-        (results.health.status===401?' (401 here is expected: no key sent)':''),
-    results.health.timeout||results.health.network ? 'fail' : 'pass');
-
-  // 2. CORS preflight. The app sends apikey + Authorization, which makes every
-  //    request non-simple, so the browser must OPTIONS first. If a proxy eats
-  //    OPTIONS, every real request hangs -- this is the usual cause.
-  n = step('CORS preflight (OPTIONS)', 'checking whether preflight is answered …', 'run');
-  results.pre = await probe(base+'/rest/v1/rate_card?select=product&limit=1',
-    {method:'OPTIONS', headers:{'Access-Control-Request-Method':'GET',
-      'Access-Control-Request-Headers':'apikey,authorization,content-type'}}, 12000);
-  log.push(['OPTIONS rest/v1/rate_card', results.pre]);
-  update(n, describe(results.pre),
-    results.pre.timeout||results.pre.network ? 'fail' : 'pass');
-
-  // 3. REST root with the key
-  if(key){
-    n = step('REST endpoint with your anon key', 'GET /rest/v1/ …', 'run');
-    results.root = await probe(base+'/rest/v1/', {headers:H}, 12000);
-    log.push(['GET rest/v1/', results.root]);
-    const rootExpected = results.root.status===401 &&
-      /service_role/i.test(results.root.body||'');
-    update(n, describe(results.root)+(rootExpected
-        ? ' <b>— expected: this endpoint only accepts the service_role key</b>' : ''),
-      results.root.timeout||results.root.network ? 'fail' : (results.root.status<500?'pass':'warn'));
-  }
-
-  // 4. Each table the app reads on startup, individually.
-  //    Skipped when the REST root already hangs -- 12 more 8s timeouts would
-  //    tell us nothing new and take two minutes.
-  const rootDead = results.root && (results.root.timeout || results.root.network);
-  if(key && rootDead){
-    step('Table checks skipped', 'The REST endpoint itself never answered, so per-table checks '+
-      'would just repeat the same failure.', 'warn');
-  } else if(key){
-    for(const t of TABLES){
-      n = step('Table: '+t, 'GET /rest/v1/'+t+' …', 'run');
-      const r = await probe(base+'/rest/v1/'+t+'?select=*&limit=1', {headers:H}, 8000);
-      results['t_'+t] = r; log.push(['GET '+t, r]);
-      let state = 'pass';
-      if(r.timeout||r.network) state='fail';
-      else if(r.status===404) state='fail';
-      else if(r.status===401||r.status===403) state='warn';
-      let extra='';
-      if(r.status===404) extra=' <b>— table does not exist</b>';
-      if(r.status===401||r.status===403) extra=' <b>— RLS blocking anon (expected before sign-in)</b>';
-      if(r.ok && r.body==='[]') extra=' <b>— reachable, 0 rows visible to anon (expected)</b>';
-      update(n, describe(r)+extra, state);
-    }
-  } else {
-    step('Table checks skipped', 'Paste the anon key above to test the tables.', 'warn');
-  }
-
-  /* ---------------- signed-in row counts ---------------- */
-  // Signed out, RLS makes every table return [] -- identical to a genuinely
-  // empty table. Only an authenticated count can tell the two apart, and that
-  // is the whole question when the product dropdown is empty.
+  const url = $('#url').value.trim().replace(/\/+$/,'');
+  const key = $('#key').value.trim();
   const email = $('#email').value.trim(), pw = $('#pw').value;
+  if(!url || !key){ alert('URL and anon key are required.'); return; }
+  $('#run').disabled = true;
+  $('#out').style.display = '';
+  steps.innerHTML = ''; $('#verdict').innerHTML = '';
+
+  /* ---- 0. sign in, so we have a real session token to test with ---- */
   let token = null;
   if(email && pw){
-    let n2 = step('Sign in', 'authenticating '+esc(email)+' …', 'run');
-    let authRes;
     try{
-      const r = await fetch(base+'/auth/v1/token?grant_type=password',
-        {method:'POST', headers:{apikey:key||'', 'Content-Type':'application/json'},
-         body:JSON.stringify({email, password:pw})});
-      authRes = await r.json();
-      if(r.ok && authRes.access_token){
-        token = authRes.access_token;
-        update(n2, 'signed in as <b>'+esc(email)+'</b>', 'pass');
-      } else {
-        const msg = authRes.error_description||authRes.msg||authRes.message||('HTTP '+r.status);
-        update(n2, '<b>'+esc(msg)+'</b>'+
-          (/invalid login/i.test(msg)
-            ? ' &mdash; no user with that email/password. Create one in Supabase under '+
-              '<b>Authentication &rarr; Users &rarr; Add user</b>, with <b>Auto Confirm User</b> ticked.'
-            : /not confirmed/i.test(msg)
-            ? ' &mdash; the user exists but was created without <b>Auto Confirm User</b>.'
-            : ''), 'fail');
-      }
-      log.push(['POST auth/v1/token', {status:r.status, ok:r.ok,
-        msg: authRes.error_description||authRes.msg||''}]);
-    }catch(e){
-      update(n2, 'request failed: <code>'+esc(e.message)+'</code>', 'fail');
+      const r = await withTimeout(fetch(url+'/auth/v1/token?grant_type=password',{
+        method:'POST', headers:{apikey:key,'Content-Type':'application/json'},
+        body:JSON.stringify({email,password:pw})}), 15000, 'Supabase Auth');
+      const j = await r.json();
+      if(r.ok){ token = j.access_token;
+        step('ok','g','Sign in','got a session token ('+String(token).length+' chars)'); }
+      else step('fail','d','Sign in', j.error_description||j.msg||('HTTP '+r.status));
+    }catch(e){ step('fail','d','Sign in', e.message); }
+  }else{
+    step('skip','w','Sign in','no email/password given — the session tests will be skipped');
+  }
+
+  const H = extra => Object.assign({apikey:key,'Content-Type':'application/json'}, extra||{});
+  const results = {};
+
+  /* ---- 1. anon key only. Proves the function exists and is reachable. ---- */
+  results.anon = await attempt('Call with the anon key', url,
+    H({Authorization:'Bearer '+key}));
+
+  /* ---- 2. session token in Authorization: the app's normal path ---- */
+  if(token) results.session = await attempt('Call with your session token', url,
+    H({Authorization:'Bearer '+token}));
+
+  /* ---- 3. the fallback: anon in Authorization, session in x-user-token.
+             Also the only test that needs the function's CORS list to name
+             x-user-token, so a failure here alone means an old deploy. ---- */
+  if(token) results.fallback = await attempt('Call with the fallback header', url,
+    H({Authorization:'Bearer '+key, 'x-user-token':token}),
+    'This one needs the function to list x-user-token in its CORS headers — only the '+
+    'current calendar-function.ts does.');
+
+  /* ---- 4. a name that should NOT exist, to show what "missing" looks like ---- */
+  let missing = null;
+  try{
+    const r = await withTimeout(fetch(url+'/functions/v1/definitely-not-a-function',{
+      method:'POST', headers:H({Authorization:'Bearer '+key}), body:'{}'}), 15000, 'Supabase');
+    missing = r.status;
+    step('info','w','Control: a function that does not exist',
+      'HTTP '+r.status+' — this is what a wrong name looks like');
+  }catch(e){ step('info','w','Control: a function that does not exist', e.message); }
+
+  /* ---------------------------- verdict ---------------------------- */
+  const v = [];
+  const a = results.anon && results.anon.kind;
+  const s = results.session && results.session.kind;
+  const f = results.fallback && results.fallback.kind;
+
+  if(a === 'cors' || a === 'hang'){
+    v.push('<b>The function is not answering at all.</b> Even a plain anon-key call got '+
+      'nothing back. Either it is not deployed, or it is deployed under a different name '+
+      '— it must be exactly <code>calendar</code>. Compare the control test above: a '+
+      'missing function normally answers quickly with an error, so no answer at all also '+
+      'points at a function that is crashing on boot. Check Edge Functions → calendar → Logs.');
+  } else if(a === 'gw401'){
+    v.push('<b>Supabase’s gateway is rejecting every call before the function runs</b> — '+
+      'even with the anon key, which it should always accept. Turn off <b>Verify JWT</b> '+
+      'on the function (Edge Functions → calendar). The function authenticates callers '+
+      'itself, so this removes a duplicate check rather than your security.');
+  } else if(a === 'ok' || a === 'fn401'){
+    v.push('<b>The function is deployed and reachable.</b> '+
+      (a === 'fn401' ? 'It correctly refused the anon key on its own, which is the right '+
+        'answer — the anon key is not a user session.' : ''));
+    if(s === 'ok'){
+      v.push('<b>Your session works on the normal path.</b> Nothing needs changing — if '+
+        'the app still fails, the page is running an older build, or is pointed at a '+
+        'different project.');
+    } else if(s === 'gw401'){
+      v.push('<b>The gateway refuses your session token but accepts the anon key.</b> '+
+        'This is the newer-JWT-signing-key case. The app’s fallback handles it — and the '+
+        'fallback test below says whether your deployed function is current enough.');
+      if(f === 'ok') v.push('<span class="t g">good</span> The fallback works, so the app '+
+        'will get through. Make sure the page is on the latest build.');
+      else if(f === 'cors') v.push('<span class="t d">this is the problem</span> The '+
+        'fallback is blocked by CORS, which means the deployed function is an older copy '+
+        'that does not allow the <code>x-user-token</code> header. <b>Redeploy the '+
+        'function from the current calendar-function.ts.</b>');
+      else if(f === 'fn401') v.push('The fallback reached the function but it refused the '+
+        'session — sign out and back in, then retry.');
+    } else if(s === 'fn401'){
+      v.push('<b>The function ran and refused your session token.</b> That is an auth '+
+        'problem, not a deploy problem: sign out and back in. If it persists, the session '+
+        'is from a different Supabase project than the function.');
+    } else if(s === 'cors' || s === 'hang'){
+      v.push('<b>The anon key gets through but your session token does not.</b> That '+
+        'pattern usually means the gateway is timing out on token verification. Turning '+
+        'off <b>Verify JWT</b> on the function is the fix.');
     }
   }
-
-  const counts = {};
-  if(token){
-    const H2 = {apikey:key, Authorization:'Bearer '+token, Prefer:'count=exact'};
-    const WANT = {rate_card:30, markup_curve:5, settings:11, blow_benchmarks:86,
-                  drive_zones:21, customers:1823, sites:2607, orders:4553,
-                  order_lines:15109, quote_history:2251, site_index:3421};
-    for(const t of Object.keys(WANT)){
-      const n3 = step('Rows in '+t, 'counting …', 'run');
-      try{
-        const r = await fetch(base+'/rest/v1/'+t+'?select=*&limit=1', {headers:H2});
-        if(!r.ok){ update(n3, 'HTTP '+r.status+' — '+esc((await r.text()).slice(0,120)), 'fail');
-                   counts[t]=null; log.push(['count '+t, {status:r.status}]); continue; }
-        const cr = r.headers.get('content-range')||'';
-        const m = cr.match(/\/(\d+|\*)$/);
-        const n = m && m[1]!=='*' ? +m[1] : null;
-        counts[t]=n;
-        log.push(['count '+t, {n}]);
-        const want = WANT[t];
-        update(n3, '<b>'+(n==null?'?':n.toLocaleString())+'</b> rows (expect '+want.toLocaleString()+')'+
-          (n===0 ? ' <b>&mdash; EMPTY</b>' : ''),
-          n===0 ? 'fail' : (n!=null && n < want*0.9 ? 'warn' : 'pass'));
-      }catch(e){ update(n3, 'failed: '+esc(e.message), 'fail'); }
-    }
-  }
-
-  /* ---------------- verdict ---------------- */
-  const v = $('#verdict');
-  const hostDead = results.health && (results.health.timeout || results.health.network);
-  const preDead  = results.pre && (results.pre.timeout || results.pre.network);
-  const tableKeys = Object.keys(results).filter(k=>k.startsWith('t_'));
-  const anyTableHang = tableKeys.some(k=>results[k].timeout||results[k].network);
-  const restDead = results.root && (results.root.timeout || results.root.network);
-  const all404 = tableKeys.length && tableKeys.every(k=>results[k].status===404);
-
-  if(hostDead && preDead){
-    v.className='verdict bad';
-    v.innerHTML='<b>Nothing from this host reaches your browser.</b>'+
-      'Both a plain request and a preflight failed. That is a network-level block, not an app bug — '+
-      'a corporate firewall, VPN, DNS filter, or browser extension is dropping traffic to supabase.co. '+
-      'Try the same page on a phone using cellular data: if it works there, it is your office network.';
-  } else if(preDead && !hostDead){
-    v.className='verdict bad';
-    v.innerHTML='<b>The host answers, but CORS preflight does not.</b>'+
-      'The app sends <code>apikey</code> and <code>Authorization</code> headers, so the browser must send an '+
-      'OPTIONS request first. Something between you and Supabase is swallowing OPTIONS — usually a proxy '+
-      'or security appliance. Every real request then hangs forever, which is exactly the spinner you saw.';
-  } else if(restDead && !preDead){
-    v.className='verdict bad';
-    v.innerHTML='<b>Preflight is answered but the real request never is.</b>'+
-      'The browser gets permission to send the request, then the request itself hangs. That is almost '+
-      'always something inspecting traffic in the middle — a proxy, TLS-inspecting firewall, or VPN — '+
-      'that lets the cheap OPTIONS through and stalls on the actual GET. Test the same page on a phone '+
-      'over cellular to confirm it is the network and not the project.';
-  } else if(all404){
-    v.className='verdict bad';
-    v.innerHTML='<b>The project is reachable but the tables do not exist.</b>'+
-      'Run <code>sql/01_schema.sql</code>, then <code>02_rls.sql</code> and <code>03_seed_reference.sql</code> '+
-      'in the Supabase SQL editor.';
-  } else if(anyTableHang){
-    v.className='verdict warn';
-    v.innerHTML='<b>Some requests answered and others hung.</b>'+
-      'That points at a flaky connection or rate limiting rather than configuration. The failing ones are '+
-      'marked FAIL above.';
-  } else if(token && counts.rate_card === 0){
-    v.className='verdict bad';
-    v.innerHTML='<b>The rate card is empty. That is why the product dropdown does nothing.</b>'+
-      'You are signed in and the connection is fine, so this is not security hiding the rows &mdash; '+
-      'the table genuinely has none.<br><br>'+
-      'Run <code>sql/00_setup_all.sql</code> in the Supabase SQL editor. It ends by printing a row '+
-      'count for every table, so you will see whether it worked rather than trusting the success '+
-      'banner. Re-running it is safe.';
-  } else if(token && counts.rate_card > 0){
-    v.className='verdict ok';
-    v.innerHTML='<b>Everything checks out.</b>'+
-      'Signed in, connection healthy, and the rate card has '+counts.rate_card+' products. '+
-      'If the dropdown is still empty in the app, you are on a cached copy of the page &mdash; '+
-      'hard-reload with Cmd/Ctrl + Shift + R and check the build stamp in the top right.';
-  } else if(!token && (email||pw)){
-    v.className='verdict bad';
-    v.innerHTML='<b>Sign-in failed, so nothing can load.</b>'+
-      'Row level security hides every row from a signed-out visitor &mdash; the app will show an '+
-      'empty product dropdown and empty history until a real user signs in. See the Sign in row above.';
-  } else if(!hostDead && !preDead && tableKeys.length){
-    v.className='verdict ok';
-    v.innerHTML='<b>The connection is healthy from this browser.</b>'+
-      'Every table answered, and each returned <code>[]</code> because row level security hides all '+
-      'rows from a signed-out visitor — which is exactly right. Nothing here is broken.<br><br>'+
-      'Next: open the app and <b style="display:inline">sign in</b>. If it then says the tables are '+
-      'empty, the schema is in place but the CSV import has not run yet (README step 4).';
-  } else {
-    v.className='verdict warn';
-    v.innerHTML='<b>Partial result.</b> Paste the anon key and run again for the full picture.';
-  }
-
-  $('#raw').style.display='block';
-  $('#raw').textContent = 'Copy this and send it back:\n\n' +
-    'page origin: ' + location.origin + '\n' +
-    'user agent : ' + navigator.userAgent + '\n\n' +
-    log.map(([k,r])=>k.padEnd(30)+' '+JSON.stringify(r)).join('\n');
+  if(!v.length) v.push('No clear pattern. Send the lines above and I can read them.');
+  $('#verdict').innerHTML = '<div class="verdict">'+v.join('<br><br>')+'</div>';
   $('#run').disabled = false;
 };
 </script>
