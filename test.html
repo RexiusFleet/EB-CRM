@@ -190,6 +190,19 @@ $('#run').onclick = async () => {
     'This one needs the function to list x-user-token in its CORS headers — only the '+
     'current calendar-function.ts does.');
 
+  /* ---- 3b. If the primary function is blocked, automatically try `hello`.
+     hello's CORS headers are known-good, so if it is blocked too the fault is
+     upstream of any function's code -- the gateway refusing the preflight. If
+     hello answers, the gateway is fine and the primary function's own code is
+     at fault. Done here rather than asked of the user, because it is one more
+     step to remember at the end of a long debugging session. ---- */
+  if((results.anon && results.anon.kind === 'cors') && FN !== 'hello'){
+    const h = await attempt('Cross-check: the minimal `hello` function', url, 'hello',
+      H({Authorization:'Bearer '+key}),
+      'Deploy calendar-hello.ts as `hello` first — if it is not deployed this will simply fail.');
+    results.hello = h.kind;
+  }
+
   /* ---- 4. a name that should NOT exist, to show what "missing" looks like ---- */
   let missing = null;
   try{
@@ -221,16 +234,26 @@ $('#run').onclick = async () => {
       '<br>2. <b>The deployed code does not send CORS headers</b> — which is what you get '+
       'if the dashboard’s default template is still in the editor, or a paste of '+
       'calendar-function.ts was truncated.'+
-      '<br><br><b>To tell them apart:</b> deploy <code>calendar-hello.ts</code> as a '+
-      'function named <code>hello</code> and run this probe again with <code>hello</code> '+
-      'in the Function name box. That file does send CORS headers, so:'+
-      '<br>• <b>hello also blocked</b> → cause 1. Turn off Verify JWT: Edge Functions → '+
-      'the function → its settings. The function authenticates every caller itself, so '+
-      'this removes a duplicate check rather than your security. No dashboard toggle? '+
-      'Redeploy with <code>supabase functions deploy calendar --no-verify-jwt</code>.'+
-      '<br>• <b>hello answers</b> → cause 2. The gateway is fine and the calendar '+
-      'function’s own code is the problem. Reopen it in the editor and check the last two '+
-      'lines are <code>}</code> then <code>});</code> — if not, the paste was cut short.');
+      (results.hello === undefined
+        ? '<br><br><b>To tell them apart:</b> deploy <code>calendar-hello.ts</code> as a '+
+          'function named <code>hello</code> and run this probe again. It will be tested '+
+          'automatically — you do not need to change the Function name box.'
+        : results.hello === 'cors' || results.hello === 'hang'
+        ? '<br><br><b>The cross-check says: cause 1.</b> The minimal <code>hello</code> '+
+          'function is blocked in exactly the same way, and its CORS headers are '+
+          'known-good — so no function’s code can be at fault. The gateway is refusing '+
+          'the preflight.'+
+          '<br><br><b>Fix:</b> Edge Functions → each function → turn <b>off</b> '+
+          '“Verify JWT” (it defaults to ON for dashboard deploys). The calendar function '+
+          'authenticates every caller itself, so this removes a duplicate check rather '+
+          'than your security. If the dashboard offers no toggle, redeploy from a '+
+          'terminal with <code>supabase functions deploy calendar --no-verify-jwt</code>, '+
+          'or use the supabase/config.toml included in the package.'
+        : '<br><br><b>The cross-check says: cause 2.</b> The minimal <code>hello</code> '+
+          'function answered fine, so the gateway is not the problem — the calendar '+
+          'function’s own code is. Almost certainly a truncated paste: reopen it in the '+
+          'editor and check the last two lines are <code>}</code> then <code>});</code>. '+
+          'If they are not, paste calendar-function.ts again in full.'));
   } else if(a === 'cors' || a === 'hang'){
     v.push('<b>Nothing is answering.</b> Even an unreadable no-cors call got no reply, so '+
       'this is not CORS and not authentication — there is nothing on the other end '+
