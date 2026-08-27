@@ -743,7 +743,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-27-auth';   // shown in the header; check it after deploying
+const BUILD = '2026-08-27-diag';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2137,6 +2137,18 @@ async function runCalCheck(){
         'If it is already off, check <b>Edge Functions → calendar → Logs</b>: if the '+
         'request appears there, the token really is being refused and I need to look '+
         'at it.'));
+      btn.disabled=false; return;
+    }
+    /* A 401 that carries the function's own message means the function RAN and
+       refused the session -- a completely different problem from the gateway
+       blocking it, and the fix is on the sign-in side, not the deploy side. */
+    if(e.status===401){
+      rows.push(line(true,'Edge Function','deployed — your request reached the code'));
+      rows.push(line(false,'Session', e.message));
+      paint(note('The function ran and would not accept your session. Sign out and '+
+        'back in, then try again. If that does not fix it, the token is from a '+
+        'different Supabase project than the function — check the URL and anon key '+
+        'baked into this page match the project the function is deployed in.'));
       btn.disabled=false; return;
     }
     rows.push(line(false,'Edge Function', timedOut ? 'no answer in 15s' : e.message));
