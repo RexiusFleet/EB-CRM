@@ -1,0 +1,15 @@
+# Only needed if you deploy from the CLI rather than the dashboard.
+#
+# verify_jwt = false switches OFF Supabase's *gateway* check on the way in. That
+# check also rejects the browser's CORS preflight (an OPTIONS request carries no
+# Authorization header), which blocks every call to the function regardless of
+# which token you use.
+#
+# It does not make the function public: the first thing calendar/index.ts does on
+# every request is requireUser(), which verifies the caller's token against
+# /auth/v1/user and refuses anyone without a valid session before touching Google.
+[functions.calendar]
+verify_jwt = false
+
+[functions.hello]
+verify_jwt = false
