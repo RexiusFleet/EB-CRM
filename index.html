@@ -749,7 +749,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-28-oauth';   // shown in the header; check it after deploying
+const BUILD = '2026-08-28-oauth2';   // shown in the header; check it after deploying
 const CONFIG = {
   /* Public identifier, not a credential -- OAuth client IDs are designed to be
      readable in page source. Access is controlled by the Authorized JavaScript
@@ -908,7 +908,12 @@ const SB = {
     const rec = Diag.start((opts&&opts.method||'GET')+' /rest/v1/'+String(path).split('?')[0]);
     let r;
     try{
-      r = await fetch(base+'/rest/v1/'+path, Object.assign({headers:SB.h(opts&&opts.headers)}, opts));
+      /* Headers LAST. With opts second, any caller passing its own headers (a
+         Prefer on a save, say) replaced the merged set wholesale and silently
+         dropped apikey and Authorization -- PostgREST then answers "No API key
+         found in request". Every write went out unauthenticated. */
+      r = await fetch(base+'/rest/v1/'+path,
+        Object.assign({}, opts, {headers: SB.h(opts&&opts.headers)}));
     }catch(networkErr){
       Diag.end(rec,'network error', networkErr.message);
       const e=new Error('Could not reach '+base+' — check the URL, and that this page is allowed to call it.');
