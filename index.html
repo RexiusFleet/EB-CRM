@@ -326,16 +326,18 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                 <span class="k" style="font-weight:600;color:var(--ink)">Schedule</span>
                 <span class="small muted" id="schedstate"></span>
               </div>
-              <div id="growrow" class="small" style="display:flex;gap:8px;align-items:center;
-                   padding:6px 0 10px;flex-wrap:wrap">
-                <span id="gstate"></span>
-                <button class="btn ghost sm" id="btngconnect">Connect Google</button>
-                <button class="btn ghost sm hide" id="btngdisconnect">Disconnect</button>
-              </div>
               <div class="row">
                 <div><label class="f">Date</label><input type="date" id="q_scheddate"></div>
                 <div><label class="f">Crew</label><select id="q_crew"></select></div>
               </div>
+              <div class="row" style="margin-top:8px">
+                <div><label class="f">Start time</label><input type="time" id="q_schedtime" step="900"></div>
+                <div><label class="f">Duration (hr)
+                  <span class="small muted" id="scheddurhint"></span></label>
+                  <input type="number" id="q_scheddur" step="0.25" min="0.5" max="14"
+                         placeholder="from equip hrs"></div>
+              </div>
+              <div class="small muted" id="slothint" style="margin-top:4px"></div>
               <div id="crewload" class="small muted" style="margin-top:9px"></div>
               <div id="schedwon" class="small muted" style="margin-top:8px"></div>
               <div class="row" style="margin-top:10px">
@@ -749,13 +751,8 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-28-oauth2';   // shown in the header; check it after deploying
+const BUILD = '2026-08-31-slots';   // shown in the header; check it after deploying
 const CONFIG = {
-  /* Public identifier, not a credential -- OAuth client IDs are designed to be
-     readable in page source. Access is controlled by the Authorized JavaScript
-     origins on the client and by each rep's own Google permissions. The value in
-     app_config.google_client_id wins over this one. */
-  GOOGLE_CLIENT_ID:  '',
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
 };
@@ -1250,232 +1247,71 @@ const LiveDB = {
 
 let DB = LIVE ? LiveDB : DemoDB;
 
-/* ======================= Google Calendar, from the browser ================
-   No service account, no key, no server. The rep authorises Google once with
-   their own account and the app writes as them. Consequences worth being
-   explicit about:
-     - The rep needs write access to the crew calendar. Crews themselves stay
-       read-only, as intended; it is the reps who gain it.
-     - Events are created by a real person, so the calendar's own history shows
-       who booked what. Better than a robot identity for an audit trail.
-     - Nothing can write unless a rep is at the browser. For a quoting tool that
-       is the workflow anyway.
-   The access token is short-lived and kept in memory only -- never in
-   localStorage, where it would outlive the tab and sit in a place other scripts
-   can read. */
-const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
-const GCAL_API   = 'https://www.googleapis.com/calendar/v3';
+/* ==================== Google Calendar, via Apps Script ====================
+   Nobody authorises anything. A small Apps Script web app owns every Calendar
+   write and runs inside Google as the calendar's owner, so reps just sign into
+   this app and schedule -- no Google prompt, no consent screen, no hourly
+   reconnect.
 
-const G = {
-  token: null,
-  expiresAt: 0,
-  email: null,
-  clientId: null,
-  calendarId: null,
-  holdColor: '8',
-  _client: null,
-  _libLoading: null,
+   The script is deployed "Anyone", because a browser has no Google identity to
+   offer it. Its URL is therefore a capability, and the script does not trust it
+   alone: every request carries the caller's Supabase session token, which the
+   script verifies, and it then re-reads the quote through that same token so
+   row-level security applies. Hold-vs-approved is decided there, from the stored
+   status -- not from anything this page asserts.
 
-  configured(){ return !!(this.clientId && this.calendarId); },
-  connected(){ return !!this.token && Date.now() < this.expiresAt - 30000; },
+   The request is deliberately shaped to avoid a CORS preflight: Apps Script does
+   not answer OPTIONS, so this is a "simple request" -- POST, text/plain, no
+   custom headers -- which is why the token travels in the body. */
+const GS = {
+  url: null,
 
-  /* Load Google's Identity Services library on demand. Loaded lazily so a rep
-     who never schedules anything never pulls it, and so a blocked script fails
-     at a point we can report rather than at page load. */
-  loadLib(){
-    if(window.google && window.google.accounts && window.google.accounts.oauth2)
-      return Promise.resolve();
-    if(this._libLoading) return this._libLoading;
-    this._libLoading = new Promise((resolve, reject)=>{
-      const s = document.createElement('script');
-      s.src = 'https://accounts.google.com/gsi/client';
-      s.async = true; s.defer = true;
-      s.onload = ()=> (window.google && window.google.accounts && window.google.accounts.oauth2)
-        ? resolve()
-        : reject(new Error('Google\u2019s sign-in library loaded but did not initialise.'));
-      s.onerror = ()=> reject(new Error('Could not load Google\u2019s sign-in library. '+
-        'A network block or an extension is stopping accounts.google.com.'));
-      document.head.appendChild(s);
-    });
-    return this._libLoading;
-  },
+  configured(){ return !!this.url; },
 
-  /* Ask Google for an access token. MUST be called from a click: Google
-     requires a user gesture, and a popup opened without one is blocked. */
-  async connect(opts){
-    if(!this.clientId)
-      throw new Error('No Google client ID configured. Add it to app_config '+
-        '(key google_client_id) — see README step 8.');
-    await this.loadLib();
-    const self = this;
-    if(!this._client){
-      this._client = google.accounts.oauth2.initTokenClient({
-        client_id: this.clientId,
-        scope: GCAL_SCOPE,
-        callback: ()=>{},          // replaced per request below
-      });
-    }
-    return new Promise((resolve, reject)=>{
-      this._client.callback = (resp)=>{
-        if(resp && resp.error){
-          reject(new Error(resp.error === 'access_denied'
-            ? 'Google access was declined. Nothing can be scheduled until you allow it.'
-            : ('Google returned: '+(resp.error_description || resp.error))));
-          return;
-        }
-        if(!resp || !resp.access_token){ reject(new Error('Google did not return a token.')); return; }
-        // hasGrantedAllScopes tells us the user un-ticked the permission on the
-        // consent screen -- a token can come back that cannot do the job.
-        if(google.accounts.oauth2.hasGrantedAllScopes &&
-           !google.accounts.oauth2.hasGrantedAllScopes(resp, GCAL_SCOPE)){
-          reject(new Error('Calendar permission was not granted. Reconnect and leave '+
-            'the calendar checkbox ticked.'));
-          return;
-        }
-        self.token = resp.access_token;
-        self.expiresAt = Date.now() + ((Number(resp.expires_in)||3600) * 1000);
-        resolve(self.token);
-      };
-      this._client.error_callback = (err)=> reject(new Error(
-        err && err.type === 'popup_closed'
-          ? 'The Google window was closed before access was granted.'
-          : ('Google could not be reached: '+((err&&err.type)||'unknown'))));
-      try{
-        this._client.requestAccessToken(opts && opts.silent ? {prompt:''} : {});
-      }catch(e){ reject(e); }
-    });
-  },
-
-  disconnect(){
-    const tok = this.token;
-    this.token = null; this.expiresAt = 0;
-    if(tok && window.google && google.accounts && google.accounts.oauth2)
-      try{ google.accounts.oauth2.revoke(tok, ()=>{}); }catch(e){}
-  },
-
-  /* One place that talks to Google, so the token check, the deadline and the
-     error translation can't drift between call sites. */
-  async api(path, init){
-    if(!this.connected())
-      { const e = new Error('Not connected to Google.'); e.needsConnect = true; throw e; }
-    const rec = Diag.start('GOOGLE '+((init&&init.method)||'GET')+' '+path.split('?')[0]);
+  async call(action, args, timeoutMs){
+    if(!this.url)
+      throw new Error('Scheduling is not set up yet — no Apps Script URL in app_config '+
+        '(key apps_script_url). See README step 8.');
+    if(!State.token)
+      throw new Error('Sign in again — your session has expired.');
+    const rec = Diag.start('APPSCRIPT '+action);
     let r;
     try{
-      r = await withTimeout(fetch(GCAL_API+path, Object.assign({}, init, {
-        headers: Object.assign({Authorization:'Bearer '+this.token,
-          'Content-Type':'application/json'}, (init&&init.headers)||{})
-      })), 20000, 'Google Calendar');
+      r = await withTimeout(fetch(this.url, {
+        method: 'POST',
+        // text/plain keeps this a "simple request", so the browser sends it
+        // without a preflight. Apps Script cannot answer a preflight.
+        headers: {'Content-Type': 'text/plain;charset=utf-8'},
+        body: JSON.stringify(Object.assign({action, token: State.token}, args||{})),
+        redirect: 'follow',      // Apps Script redirects to googleusercontent.com
+      }), timeoutMs || 30000, 'the calendar service');
     }catch(e){
       Diag.end(rec, e.status==='timeout'?'timeout':'network error', e.message);
-      throw e;
+      if(e.status==='timeout') throw e;
+      const err = new Error('Could not reach the calendar service. Check the URL in '+
+        'app_config (apps_script_url) — it must be the /exec address of a deployment '+
+        'whose access is set to "Anyone".');
+      err.unreachable = true; throw err;
     }
-    const text = await r.text();
-    let body = null; try{ body = text ? JSON.parse(text) : null; }catch(e){}
-    if(!r.ok){
-      Diag.end(rec, 'HTTP '+r.status, (body&&body.error&&body.error.message)||'');
-      const msg = (body && body.error && body.error.message) || r.statusText;
-      const e = new Error(this.explain(r.status, msg));
-      e.status = r.status;
-      if(r.status===401){ this.token=null; this.expiresAt=0; e.needsConnect = true; }
-      throw e;
+    let body = null;
+    try{ body = JSON.parse(await r.text()); }catch(e){}
+    if(!body){
+      Diag.end(rec,'bad response');
+      throw new Error('The calendar service answered with something that was not JSON. '+
+        'That usually means the deployment’s access is not set to "Anyone" and Google '+
+        'returned a sign-in page instead.');
     }
-    Diag.end(rec, 'ok');
+    if(body.error){ Diag.end(rec,'error', body.error); throw new Error(body.error); }
+    Diag.end(rec,'ok');
     return body;
   },
 
-  /* Google's calendar errors are famously terse. Each of these has a different
-     fix and a rep should not have to guess which. */
-  explain(status, msg){
-    if(status===401) return 'Your Google access expired. Reconnect and try again.';
-    if(status===403 && /insufficient|scope/i.test(msg))
-      return 'This app was not granted calendar permission. Disconnect and reconnect, '+
-             'leaving the calendar checkbox ticked.';
-    if(status===403) return 'Google refused the change (403): '+msg+'. Usually your '+
-             'account has read-only access to this calendar — it needs "Make changes to events".';
-    if(status===404) return 'Calendar not found (404). Either the Calendar ID in app_config '+
-             'is wrong, or this calendar is not shared with your Google account.';
-    if(status===429) return 'Google is rate-limiting the request. Wait a moment and retry.';
-    return 'Google Calendar '+status+': '+msg;
+  ping(){ return this.call('ping', {}, 25000); },
+  eventsOn(date){ return this.call('list', {date}).then(r=>r.events||[]); },
+  sync(quoteId, crewId, date, time, hours){
+    return this.call('sync', {quoteId, crewId, date, time: time||null, hours: hours||null});
   },
-
-  /* ---- the operations the app actually needs ---- */
-
-  async eventsOn(date){
-    const res = await this.api('/calendars/'+encodeURIComponent(this.calendarId)+'/events'+
-      '?timeMin='+date+'T00:00:00Z&timeMax='+date+'T23:59:59Z'+
-      '&singleEvents=true&maxResults=250');
-    return (res && res.items) || [];
-  },
-
-  eventBody(q, crew, hold){
-    const yards = q.yards ? q.yards+' yd' : '';
-    const title = [hold?'HOLD':null, crew.name, q.product, yards, q.customer_name]
-      .filter(Boolean).join(' \u00b7 ');
-    const lines = [
-      hold ? '\u26a0 NOT APPROVED — this is a hold, not a confirmed job.' : '',
-      hold ? ('Quote status: '+(q.status||'draft')+'. It will become a normal booking '+
-              'here when the quote is marked won.') : '',
-      '',
-      q.address_raw ? 'Address: '+q.address_raw+(q.city?', '+q.city:'') : '',
-      q.customer_name ? 'Customer: '+q.customer_name : '',
-      q.phone ? 'Phone: '+q.phone : '',
-      '',
-      q.product ? 'Product: '+q.product+(yards?' — '+yards:'') : '',
-      q.blow_hours!=null ? 'Blow: '+q.blow_hours+' hr' : '',
-      q.drive_hours!=null ? 'Drive (round trip): '+q.drive_hours+' hr' : '',
-      q.equip_hours!=null ? 'Equipment: '+q.equip_hours+' hr' : '',
-      q.labor_hours!=null ? 'Labor: '+q.labor_hours+' hr' : '',
-      q.bid_amount!=null ? 'Bid: $'+Number(q.bid_amount).toLocaleString() : '',
-      '',
-      q.notes ? 'Notes: '+q.notes : '',
-      'Quote '+q.id,
-    ];
-    // All-day: only ~13% of historical jobs carried a clock time, so a timed
-    // block would invent precision the business does not work to.
-    const end = new Date(q.scheduled_date+'T00:00:00Z');
-    end.setUTCDate(end.getUTCDate()+1);
-    return {
-      summary: title,
-      description: lines.join('\n').replace(/\n{3,}/g,'\n\n').trim(),
-      location: [q.address_raw, q.city, q.zip].filter(Boolean).join(', '),
-      start: {date: q.scheduled_date},
-      end:   {date: end.toISOString().slice(0,10)},
-      colorId: String(hold ? (this.holdColor||'8') : (crew.calendar_color_id||'')) || undefined,
-      transparency: hold ? 'transparent' : 'opaque',
-      extendedProperties: {private: {
-        quoteId: String(q.id), crewId: String(crew.id),
-        hold: hold?'true':'false', status: String(q.status||'draft'),
-        app: 'blower-crm'
-      }},
-      source: {title:'Blower Quote CRM', url: location.origin + location.pathname},
-    };
-  },
-
-  async upsertEvent(q, crew, hold, existingId){
-    const cal = encodeURIComponent(this.calendarId);
-    const body = JSON.stringify(this.eventBody(q, crew, hold));
-    if(existingId){
-      try{
-        return await this.api('/calendars/'+cal+'/events/'+encodeURIComponent(existingId),
-          {method:'PATCH', body});
-      }catch(e){
-        // Someone deleted it in Google. Recreate rather than dead-ending.
-        if(e.status!==404 && e.status!==410) throw e;
-      }
-    }
-    return this.api('/calendars/'+cal+'/events', {method:'POST', body});
-  },
-
-  async deleteEvent(id){
-    if(!id) return;
-    try{
-      await this.api('/calendars/'+encodeURIComponent(this.calendarId)+
-        '/events/'+encodeURIComponent(id), {method:'DELETE'});
-    }catch(e){
-      // Already gone is not a failure worth blocking on.
-      if(e.status!==404 && e.status!==410) throw e;
-    }
-  },
+  remove(quoteId){ return this.call('remove', {quoteId}); },
 };
 
 
@@ -1847,6 +1683,7 @@ function basisLabel(b){
 }
 
 function recalc(){
+  setTimeout(()=>{ syncSlotDurField(); renderSlotHint(); }, 0);
   suggest();
   const ctx = estimateCtx();
   const rc = currentRate();
@@ -2314,83 +2151,86 @@ async function runCalCheck(){
   const box=$('#calcheckout'), btn=$('#calcheck');
   btn.disabled=true;
   const rows=[];
+  const t0=Date.now();
+  const secs=()=>((Date.now()-t0)/1000).toFixed(1)+'s';
   const line=(ok,label,detail)=>'<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0">'+
     '<span class="tag '+(ok===true?'g':ok===false?'d':'w')+'">'+
     (ok===true?'ok':ok===false?'failed':'—')+'</span><span><b>'+esc(label)+'</b>'+
     (detail?' <span class="small muted">'+esc(detail)+'</span>':'')+'</span></div>';
   const note=txt=>'<div class="small muted" style="margin-top:4px;margin-left:4px">'+txt+'</div>';
   const paint=tail=>{ box.innerHTML = rows.join('') + (tail||''); };
-  paint('<div style="padding:4px 0"><span class="spin" style="width:10px;height:10px"></span> checking…</div>');
+  const working=what=>paint('<div style="padding:4px 0"><span class="spin" '+
+    'style="width:10px;height:10px"></span> '+esc(what)+' <span class="small muted">'+secs()+'</span></div>');
 
-  /* Config first. Every one of these is a different fix, and none of them
-     involve Google -- so they are answered before anything can be slow. */
-  rows.push(line(!!State.user, 'Signed in',
-    State.user ? (State.user.email||'') : 'sign in first'));
+  rows.push(line(!!State.user,'Signed in', State.user ? (State.user.email||'') : 'sign in first'));
 
+  /* Config first: every one of these is a different fix, and none of them
+     involve Google, so they are answered before anything can be slow. */
   let cfg = {};
   try{ cfg = await DB.appConfig(); }
   catch(e){
     rows.push(line(false,'Reading app_config', e.message));
-    paint(note('The app_config table is missing or unreadable. Run '+
-      '<code>sql/10_master_calendar.sql</code> and <code>sql/11_browser_oauth.sql</code>.'));
+    paint(note('Run <code>sql/10_master_calendar.sql</code> and '+
+      '<code>sql/12_apps_script.sql</code>.'));
     btn.disabled=false; return;
   }
-  G.clientId   = (cfg.google_client_id || CONFIG.GOOGLE_CLIENT_ID || '').trim() || null;
-  G.calendarId = (cfg.master_calendar_id || '').trim() || null;
-  G.holdColor  = (cfg.hold_color_id || '8').trim();
-
-  rows.push(line(!!G.clientId, 'Google client ID',
-    G.clientId ? String(G.clientId).slice(0,28)+'…' : 'not set in app_config'));
-  if(!G.clientId){
-    paint(note('Create an OAuth client (Web application) in Google Cloud, then: '+
-      '<code>update app_config set value = \'…apps.googleusercontent.com\' '+
-      'where key = \'google_client_id\';</code> — README step 8.'));
+  GS.url = (cfg.apps_script_url || '').trim() || null;
+  rows.push(line(!!GS.url,'Calendar service URL',
+    GS.url ? String(GS.url).slice(0,44)+'…' : 'not set in app_config'));
+  if(!GS.url){
+    paint(note('Deploy <code>calendar-appscript.gs</code> from script.google.com, then: '+
+      '<code>update app_config set value = \'…/exec\' where key = \'apps_script_url\';</code> '+
+      '— README step 8.'));
     btn.disabled=false; return;
   }
-  rows.push(line(!!G.calendarId, 'Calendar ID',
-    G.calendarId ? String(G.calendarId).slice(0,30)+'…' : 'not set in app_config'));
-  if(!G.calendarId){
-    paint(note('Run <code>sql/10_master_calendar.sql</code>, which sets it.'));
+  if(!/\/exec\s*$/.test(GS.url)){
+    rows.push(line(false,'URL shape','does not end in /exec'));
+    paint(note('An Apps Script web app URL ends in <code>/exec</code>. A <code>/dev</code> '+
+      'URL only works while you are signed in as the script’s owner, so reps would get a '+
+      'sign-in page instead of an answer.'));
     btn.disabled=false; return;
   }
   rows.push(line(true,'Crews', (CREWS||[]).length+' active'));
 
-  /* Google. Connecting needs a click, and this button is one. */
-  if(!G.connected()){
-    paint('<div style="padding:4px 0"><span class="spin" style="width:10px;height:10px"></span> '+
-      'waiting for Google…</div>');
-    try{ await G.connect(); }
-    catch(e){
-      rows.push(line(false,'Google access', e.message));
-      paint(note('If the window never appeared, your browser blocked the popup — allow '+
-        'popups for this page and press Check again. If Google said the app is blocked, '+
-        'the OAuth client’s <b>Authorized JavaScript origins</b> must include '+
-        '<code>'+esc(location.origin)+'</code>.'));
-      btn.disabled=false; renderGoogleState(); return;
-    }
+  /* The service itself. This is the part that can be slow -- a cold Apps Script
+     takes a couple of seconds -- so it is timed and reported separately. */
+  working('calling the calendar service');
+  let ping;
+  try{ ping = await GS.ping(); }
+  catch(e){
+    rows.push(line(false,'Calendar service', e.status==='timeout' ? 'no answer in 25s' : e.message));
+    paint(note(e.status==='timeout'
+      ? 'The script did not answer. Open the URL in a browser tab: it should return a '+
+        'small JSON message. If it asks you to sign in, the deployment’s <b>Who has '+
+        'access</b> is not set to <b>Anyone</b>.'
+      : 'Check the deployment: <b>Deploy → Manage deployments</b>. <b>Execute as</b> must '+
+        'be <b>Me</b>, and <b>Who has access</b> must be <b>Anyone</b>. Remember that '+
+        'editing the script does not change what /exec runs — you must deploy a new '+
+        'version.'));
+    btn.disabled=false; return;
   }
-  rows.push(line(true,'Google access','token granted, expires '+
-    new Date(G.expiresAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})));
-  renderGoogleState();
+  rows.push(line(true,'Calendar service','answered in '+secs()));
+  rows.push(line(true,'Running as', ping.runningAs||'(unknown)'));
+  rows.push(line(true,'Calendar', (ping.calendar||'')+(ping.timeZone?' · '+ping.timeZone:'')));
 
-  /* Prove we can actually read the calendar -- a token is not the same as
-     access to this particular calendar. */
-  paint('<div style="padding:4px 0"><span class="spin" style="width:10px;height:10px"></span> '+
-    'reading the calendar…</div>');
+  /* Prove it can actually read events, not just describe the calendar. */
+  working('reading today');
   const today = new Date().toISOString().slice(0,10);
   try{
-    const items = await G.eventsOn(today);
-    rows.push(line(true,'Calendar readable', items.length+' event'+
+    const items = await GS.eventsOn(today);
+    rows.push(line(true,'Events readable', items.length+' event'+
       (items.length===1?'':'s')+' on '+dfmt(today)));
   }catch(e){
-    rows.push(line(false,'Calendar readable', e.message));
-    paint(note('Share the calendar with <b>'+esc((State.user&&State.user.email)||'your account')+
-      '</b> and give it <b>Make changes to events</b> — a rep needs write access to book.'));
+    rows.push(line(false,'Events readable', e.message));
+    paint(note('The script reached the calendar but could not list events. If it mentions '+
+      'permission, the account in <b>Running as</b> above needs <b>Make changes to '+
+      'events</b> on that calendar.'));
     btn.disabled=false; return;
   }
 
-  paint('<div class="small muted" style="margin-top:8px">Everything is connected — a real '+
-    'booking will work. Crew colours: '+
+  paint('<div class="small muted" style="margin-top:8px">Finished in '+secs()+'. Everything '+
+    'is connected — a real booking will work. Reps never see a Google prompt: the script '+
+    'does the writing as '+esc(ping.runningAs||'its owner')+'.<br>Crew colours: '+
     esc((CREWS||[]).map(c=>c.name+' '+(c.calendar_color_id||'—')).join(' · '))+'</div>');
   btn.disabled=false;
 }
@@ -2414,6 +2254,9 @@ async function openQuote(r){
   State.savedQuoteId = r.id;
   State.scheduled = !!(r.scheduled_date && r.crew_id);
   $('#q_scheddate').value = r.scheduled_date || '';
+  $('#q_schedtime').value = r.scheduled_time ? String(r.scheduled_time).slice(0,5) : '';
+  slotDurTouched = !!r.scheduled_hours;
+  $('#q_scheddur').value = r.scheduled_hours || '';
   $('#q_crew').value = r.crew_id ? String(r.crew_id) : '';
   $('#schedmsg').innerHTML = '';
   $('#savequote').textContent = 'Update quote';
@@ -2592,11 +2435,8 @@ async function loadCrews(){
   try{ CREWS = await DB.crews(); }catch(e){ CREWS=[]; }
   try{
     const cfg = await DB.appConfig();
-    G.clientId   = (cfg.google_client_id || CONFIG.GOOGLE_CLIENT_ID || '').trim() || null;
-    G.calendarId = (cfg.master_calendar_id || '').trim() || null;
-    G.holdColor  = (cfg.hold_color_id || '8').trim();
+    GS.url = (cfg.apps_script_url || '').trim() || null;
   }catch(e){ /* reported by the connection check, not here */ }
-  renderGoogleState();
   const sel=$('#q_crew');
   sel.innerHTML = '<option value="">— choose —</option>' +
     CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+
@@ -2624,8 +2464,8 @@ async function refreshCrewLoad(){
     box.innerHTML='<span class="tag w">unavailable</span> '+esc(e.message); return;
   }
   let events = null, calErr = null;
-  if(G.connected() && G.calendarId){
-    try{ events = await G.eventsOn(date); }
+  if(GS.configured()){
+    try{ events = await GS.eventsOn(date); }
     catch(e){ calErr = e.message; }
   }
   if(my!==loadReq) return;
@@ -2642,9 +2482,16 @@ async function refreshCrewLoad(){
     const tag = over ? 'd' : (totJobs ? 'w' : 'g');
     // Events this app created for THIS crew, counted by the crew stamp rather
     // than by calendar -- everyone shares one calendar.
-    const onCal = events ? events.filter(e =>
-      String((e.extendedProperties&&e.extendedProperties.private&&
-              e.extendedProperties.private.crewId)||'') === String(c.id)).length : null;
+    const mineOnCal = events ? events.filter(e=>String(e.crewId||'')===String(c.id)) : null;
+    const onCal = mineOnCal ? mineOnCal.length : null;
+    // The crew's day as slots -- "8:00 AM–12:00 PM" reads better than a count
+    // when the rep is choosing a start time.
+    const slots = (mineOnCal||[]).map(e=>{
+      const s=e.start&&e.start.dateTime, en=e.end&&e.end.dateTime;
+      if(!s) return null;
+      const f=x=>new Date(x).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
+      return f(s)+'\u2013'+(en?f(en):'');
+    }).filter(Boolean);
     const extra = (onCal != null && onCal > totJobs)
       ? ' \u00b7 '+(onCal-totJobs)+' more on the calendar' : '';
     return '<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0'+
@@ -2654,15 +2501,16 @@ async function refreshCrewLoad(){
         (held.length?' \u00b7 <span class="tag w">'+held.length+' hold'+
           (held.length===1?'':'s')+'</span>':'')+
         ' \u00b7 '+(Math.round(totHrs*100)/100)+' equip hr'+esc(extra)+
-        (over?' \u2014 <b>at capacity</b>':'')+'</span></div>';
+        (over?' \u2014 <b>at capacity</b>':'')+
+        (slots.length?' <span class="small muted">\u00b7 '+esc(slots.join(', '))+'</span>':'')+
+        '</span></div>';
   }).join('') || '<span class="muted">No crews configured.</span>';
 
   /* Anything on the shared calendar without a crew stamp was put there by hand.
      It belongs to nobody in particular but still consumes the day, so it is
      reported once rather than charged to a crew. */
   if(events){
-    const other = events.filter(e=>!(e.extendedProperties&&e.extendedProperties.private&&
-                                     e.extendedProperties.private.crewId));
+    const other = events.filter(e=>!e.crewId);
     if(other.length) html += '<div class="small muted" style="margin-top:6px">'+
       '<span class="tag">also on the calendar</span> '+other.length+' event'+
       (other.length===1?'':'s')+' not booked through this app'+
@@ -2670,9 +2518,8 @@ async function refreshCrewLoad(){
         (other.length>1?', \u2026':''):'')+'</div>';
   }
   if(calErr) html += '<div class="small" style="color:var(--danger);margin-top:6px">'+esc(calErr)+'</div>';
-  else if(!G.connected()) html += '<div class="small muted" style="margin-top:6px">'+
-    'Showing this app\u2019s bookings only \u2014 connect Google above to include '+
-    'anything added to the calendar directly.</div>';
+  else if(!GS.configured()) html += '<div class="small muted" style="margin-top:6px">'+
+    'Showing this app\u2019s bookings only \u2014 scheduling is not connected yet.</div>';
   box.innerHTML = html;
 }
 
@@ -2691,37 +2538,51 @@ function renderSchedState(q){
   State.calendarLive = live;
   const crew = has ? CREWS.find(c=>String(c.id)===String(q.crew_id)) : null;
   const label = !has ? '' : live ? (held ? 'hold on calendar' : 'booked') : 'not on calendar';
+  let when = has ? dfmt(q.scheduled_date) : '';
+  if(has && q.scheduled_time){
+    const [h,m]=String(q.scheduled_time).split(':').map(Number);
+    when += ' '+new Date(2000,0,1,h,m).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
+    if(Number(q.scheduled_hours)>0) when += ' · '+Number(q.scheduled_hours)+' hr';
+  }
   $('#schedstate').innerHTML = has
     ? '<span class="tag '+(live ? (held?'w':'g') : 'd')+'">'+label+'</span> '+
-      esc(dfmt(q.scheduled_date))+(crew?' · '+esc(crew.name):'')
+      esc(when)+(crew?' · '+esc(crew.name):'')
     : (State.savedQuoteId ? '<span class="tag">not booked</span>' : '');
   $('#btnunschedule').classList.toggle('hide', !has);
   setSchedButtonLabel(has);
   renderWonHint(live);
 }
 
-function renderGoogleState(){
-  const box=$('#gstate'); if(!box) return;
-  const conn = G.connected();
-  $('#btngconnect').textContent = conn ? 'Reconnect' : 'Connect Google';
-  $('#btngconnect').classList.toggle('hide', conn && !G.expiringSoon);
-  $('#btngdisconnect').classList.toggle('hide', !conn);
-  if(!G.clientId){
-    box.innerHTML = '<span class="tag d">not set up</span> No Google client ID configured '+
-      '— see README step 8.';
-    $('#btngconnect').classList.add('hide');
-    return;
-  }
-  if(!G.calendarId){
-    box.innerHTML = '<span class="tag d">no calendar</span> master_calendar_id is not set '+
-      'in app_config.';
-    return;
-  }
-  box.innerHTML = conn
-    ? '<span class="tag g">Google connected</span> <span class="muted">access expires '+
-      new Date(G.expiresAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+'</span>'
-    : '<span class="tag w">not connected</span> <span class="muted">connect once per session '+
-      'to read and write the crew calendar</span>';
+/* The slot. Start time is the rep's choice; the duration defaults from the
+   quote's own equipment hours (drive + blow -- the hours the crew is actually
+   out) and stays in step with the estimate until the rep types their own
+   number, after which their number wins. Same convention as the drive/blow
+   autofill above. */
+let slotDurTouched = false;
+
+function slotDuration(){
+  const typed = parseFloat($('#q_scheddur').value);
+  if(slotDurTouched && typed > 0) return Math.min(14, Math.max(0.5, typed));
+  const eq = parseFloat($('#o_eqhr').textContent);
+  return eq > 0 ? Math.min(14, Math.max(0.5, Math.round(eq*4)/4)) : null;
+}
+
+function syncSlotDurField(){
+  if(slotDurTouched) return;
+  const d = slotDuration();
+  $('#q_scheddur').value = d==null ? '' : d;
+  $('#scheddurhint').textContent = d==null ? '' : '· from the estimate';
+}
+
+function renderSlotHint(){
+  const box=$('#slothint'); if(!box) return;
+  const tv=$('#q_schedtime').value, d=slotDuration();
+  if(!tv){ box.textContent='No start time = an all-day event.'; return; }
+  if(d==null){ box.textContent=''; return; }
+  const [h,m]=tv.split(':').map(Number);
+  const end=new Date(2000,0,1,h,m+Math.round(d*60));
+  const f=x=>x.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  box.textContent = f(new Date(2000,0,1,h,m))+' \u2192 '+f(end)+' ('+d+' hr)';
 }
 
 function setSchedButtonLabel(booked){
@@ -2747,56 +2608,18 @@ function renderWonHint(live){
   }
 }
 
-/* One place decides what the calendar should hold for a quote, so the rules
-   can't drift between the Schedule button and the Save button.
+/* The calendar rules live in the Apps Script now, not here.
 
      won            -> a confirmed booking (crew colour, shown Busy)
      draft / sent   -> a HOLD (grey, titled HOLD, shown Free, "NOT APPROVED")
      lost           -> nothing; the event is removed
 
-   The same event is edited in place across those transitions, so approving a
-   quote turns its hold solid rather than creating a second entry, and the event
-   keeps its id and any comments on it. */
-async function syncBooking(quoteId, crewId, date, status){
-  const crew = CREWS.find(c=>String(c.id)===String(crewId));
-  if(!crew) throw new Error('Unknown crew '+crewId);
-  if(!G.calendarId)
-    throw new Error('No calendar configured yet — set master_calendar_id in app_config '+
-      '(README step 8).');
-
-  // What Supabase currently thinks, so we know which event to edit.
-  const rows = await DB.bookingsOn(date);
-  const existing = (rows||[]).find(r=>String(r.id)===String(quoteId));
-  const eventId = existing && existing.calendar_event_id;
-
-  if(String(status)==='lost'){
-    if(eventId) await G.deleteEvent(eventId);
-    const q = await DB.setBooking(quoteId, {scheduled_date:date, crew_id:String(crewId),
-      calendar_event_id:null, calendar_id:null, scheduled_at:new Date().toISOString()});
-    return {removed:true, quote:q};
-  }
-
-  const hold = String(status)!=='won';
-  // Everything the event body needs, from the form we already have in hand.
-  const q = {
-    id: quoteId, scheduled_date: date, status,
-    product: $('#q_product').value, yards: parseFloat($('#q_yards').value)||0,
-    customer_name: $('#q_customer').value.trim(), phone: $('#q_phone').value.trim(),
-    address_raw: $('#q_address').value.trim(), city: $('#q_city').value.trim(),
-    zip: $('#q_zip').value.trim(), notes: $('#q_notes').value.trim(),
-    blow_hours: parseFloat($('#q_blow').value)||null,
-    drive_hours: parseFloat($('#q_drive').value)||null,
-    equip_hours: parseFloat($('#o_eqhr').textContent)||null,
-    labor_hours: parseFloat($('#o_labhr').textContent)||null,
-    bid_amount: State.lastPrice ? State.lastPrice.bidAmount : null,
-  };
-  const ev = await G.upsertEvent(q, crew, hold, eventId);
-  const saved = await DB.setBooking(quoteId, {
-    scheduled_date: date, crew_id: String(crewId),
-    calendar_event_id: ev.id, calendar_id: G.calendarId,
-    scheduled_at: new Date().toISOString(),
-  });
-  return {hold, quote:saved, event:ev};
+   The script re-reads the quote from Supabase under the rep's own token and
+   decides from the stored status, so what this page sends cannot make an
+   unapproved quote look sold. The same event is edited across transitions, so
+   approving turns its hold solid rather than creating a second entry. */
+async function syncBooking(quoteId, crewId, date){
+  return GS.sync(quoteId, crewId, date, $('#q_schedtime').value || null, slotDuration());
 }
 
 async function doSchedule(){
@@ -2805,15 +2628,9 @@ async function doSchedule(){
   const date=$('#q_scheddate').value, crewId=$('#q_crew').value;
   if(!date || !crewId){ msg('Pick a date and a crew first.', true); return; }
   if(!State.savedQuoteId){ msg('Save the quote first — the booking is attached to it.', true); return; }
-  if(!G.connected()){
-    // Asking Google for a token needs a click, and this IS one -- so connect
-    // inline rather than making the rep press a second button first.
-    try{ await G.connect(); renderGoogleState(); }
-    catch(e){ msg(e.message, true); return; }
-  }
   $('#btnschedule').disabled=true;
   try{
-    const r = await syncBooking(State.savedQuoteId, crewId, date, $('#q_status').value);
+    const r = await syncBooking(State.savedQuoteId, crewId, date);
     State.scheduled = true;
     renderSchedState(r.quote || {scheduled_date:date, crew_id:crewId,
       calendar_event_id: r.removed ? null : 'x'});
@@ -2822,31 +2639,21 @@ async function doSchedule(){
                  'won and it becomes a confirmed booking.'
       : 'Booked on the calendar.', false);
     refreshCrewLoad();
-  }catch(e){ msg(e.message, true); if(e.needsConnect) renderGoogleState(); }
+  }catch(e){ msg(e.message, true); }
   finally{ $('#btnschedule').disabled=false; }
 }
 
 async function doUnschedule(){
   if(!State.savedQuoteId) return;
-  if(!G.connected()){
-    try{ await G.connect(); renderGoogleState(); }
-    catch(e){ $('#schedmsg').innerHTML='<div class="note bad" style="margin-top:10px">'+
-      esc(e.message)+'</div>'; return; }
-  }
   $('#btnunschedule').disabled=true;
   try{
-    const date=$('#q_scheddate').value;
-    const rows = date ? await DB.bookingsOn(date) : [];
-    const existing = (rows||[]).find(r=>String(r.id)===String(State.savedQuoteId));
-    if(existing && existing.calendar_event_id) await G.deleteEvent(existing.calendar_event_id);
-    const q = await DB.setBooking(State.savedQuoteId, {scheduled_date:null, crew_id:null,
-      calendar_event_id:null, calendar_id:null, scheduled_at:null});
+    const r = await GS.remove(State.savedQuoteId);
     State.scheduled = false;
-    renderSchedState(q||{});
+    renderSchedState((r&&r.quote)||{});
     $('#schedmsg').innerHTML='<div class="note ok" style="margin-top:10px">Booking removed.</div>';
     refreshCrewLoad();
   }catch(e){ $('#schedmsg').innerHTML='<div class="note bad" style="margin-top:10px">'+
-      esc(e.message)+'</div>'; if(e.needsConnect) renderGoogleState(); }
+      esc(e.message)+'</div>'; }
   finally{ $('#btnunschedule').disabled=false; }
 }
 
@@ -2901,22 +2708,15 @@ async function saveQuote(){
     let sync = '';
     if(saved && saved.scheduled_date && saved.crew_id){
       const wasLive = !!saved.calendar_event_id;
-      if(!G.connected()){
-        /* Saving is not a Google gesture, and a popup opened from here would be
-           blocked. So say plainly that the calendar is now behind, rather than
-           failing silently or hijacking the save. */
-        sync = ' Calendar not updated — connect Google and press Update booking.';
-      }else{
-        try{
-          const r = await syncBooking(saved.id, saved.crew_id, saved.scheduled_date, saved.status);
-          if(r && r.quote) saved = r.quote;
-          State.scheduled = true;
-          sync = r.removed ? ' Taken off the calendar (quote is lost).'
-               : r.hold    ? (wasLive ? ' Calendar hold updated.'
-                                      : ' Put on the calendar as a HOLD, pending approval.')
-               :             ' On the calendar as a confirmed job.';
-        }catch(e){ sync = ' Calendar not updated: '+e.message; }
-      }
+      try{
+        const r = await syncBooking(saved.id, saved.crew_id, saved.scheduled_date);
+        if(r && r.quote) saved = r.quote;
+        State.scheduled = true;
+        sync = r.removed ? ' Taken off the calendar (quote is lost).'
+             : r.hold    ? (wasLive ? ' Calendar hold updated.'
+                                    : ' Put on the calendar as a HOLD, pending approval.')
+             :             ' On the calendar as a confirmed job.';
+      }catch(e){ sync = ' Calendar not updated: '+e.message; }
       refreshCrewLoad();   // approved-vs-held just changed; the panel must follow
     }
     renderSchedState(saved||{});
@@ -2944,20 +2744,10 @@ function wire(){
   initPickers();
   $('#q_scheddate').addEventListener('change', ()=>{ refreshCrewLoad(); });
   $('#q_crew').addEventListener('change', ()=>{ refreshCrewLoad(); });
+  $('#q_schedtime').addEventListener('input', renderSlotHint);
+  $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); });
   $('#btnschedule').onclick = doSchedule;
   $('#btnunschedule').onclick = doUnschedule;
-  $('#btngconnect').onclick = async e=>{
-    e.stopPropagation();
-    const b=$('#btngconnect'); b.disabled=true;
-    const before=b.textContent; b.textContent='Connecting…';
-    try{ await G.connect(); renderGoogleState(); refreshCrewLoad(); }
-    catch(err){ $('#schedmsg').innerHTML='<div class="note bad" style="margin-top:10px">'+
-      esc(err.message)+'</div>'; b.textContent=before; }
-    finally{ b.disabled=false; renderGoogleState(); }
-  };
-  $('#btngdisconnect').onclick = e=>{
-    e.stopPropagation(); G.disconnect(); renderGoogleState(); refreshCrewLoad();
-  };
   $('#q_status').addEventListener('change', ()=>{
     setSchedButtonLabel(State.scheduled);
     renderWonHint(State.scheduled && State.calendarLive);
@@ -2983,7 +2773,9 @@ function wire(){
   $('#newquote').onclick=()=>{
     ['q_customer','q_phone','q_email','q_address','q_city','q_zip','q_notes','q_bid'].forEach(i=>$('#'+i).value='');
     State.site=null; State.savedQuoteId=null; State.scheduled=false; State.calendarLive=false;
-    $('#q_scheddate').value=''; $('#q_crew').value=''; $('#schedmsg').innerHTML='';
+    $('#q_scheddate').value=''; $('#q_schedtime').value='';
+    $('#q_scheddur').value=''; slotDurTouched=false;
+    $('#q_crew').value=''; $('#schedmsg').innerHTML='';
     $('#savequote').textContent='Save quote';
     renderSchedState(null); refreshCrewLoad();
     autoFill={drive:true,blow:true}; renderHistory(); recalc();
