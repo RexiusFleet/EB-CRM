@@ -340,6 +340,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                 <span class="k" style="font-weight:600;color:var(--ink)">Schedule</span>
                 <span class="small muted" id="schedstate"></span>
               </div>
+              <div id="suggestbox" style="margin-bottom:6px"></div>
               <div class="row">
                 <div><label class="f">Date</label><input type="date" id="q_scheddate"></div>
                 <div><label class="f">Truck</label><select id="q_crew"></select></div>
@@ -354,6 +355,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div class="small muted" id="slothint" style="margin-top:4px"></div>
               <div id="slotchips" style="margin-top:6px"></div>
               <div id="crewload" class="small muted" style="margin-top:9px"></div>
+              <div id="capnote"></div>
               <div id="schedwon" class="small muted" style="margin-top:8px"></div>
               <div class="row" style="margin-top:10px">
                 <span class="small muted" style="align-self:center"><b>Hold</b> places a grey
@@ -429,6 +431,9 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
         <div class="body" id="calcheckout"><span class="muted small">Run this once after
           deploying the Edge Function, before trusting it with a real booking. It walks
           the whole chain and names the step that failed.</span></div></div>
+      <div class="card"><h3>Truck capacity
+        <span class="muted small">yards per load, from the placement-truck sheet</span></h3>
+        <div class="body scroll" id="captable"></div></div>
       <div class="card"><h3>Product costs <span class="muted small">cost per unit ÷ yards per unit = cost per yard</span></h3>
         <div class="body scroll" id="ratetable"></div></div>
       <div class="row" style="align-items:flex-start">
@@ -804,7 +809,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-31-confirm';   // shown in the header; check it after deploying
+const BUILD = '2026-08-31-slots';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1160,7 +1165,30 @@ const DemoDB = {
     return [{id:'1',name:'Truck #56',color:'#2f6b3c',max_equip_hours:8,max_jobs:4,calendar_id:null},
             {id:'2',name:'Truck #17',color:'#a8620f',max_equip_hours:8,max_jobs:4,calendar_id:null}];
   },
-  async appConfig(){ return {}; },
+  async appConfig(){ return Object.assign({capacity_mode:'dry'}, this._cfg||{}); },
+  async setConfig(key, value){ (this._cfg=this._cfg||{})[key]=value; return {key, value}; },
+  async bookingsBetween(from,to){
+    return this._quotes.filter(q=>q.scheduled_date && q.crew_id &&
+      q.scheduled_date>=from && q.scheduled_date<=to &&
+      (q.status==='sent'||q.status==='won'));
+  },
+  async truckCaps(){
+    // Same numbers as sql/17_truck_capacity.sql -- the placement-truck sheet.
+    const base=[['BeautiBark',32,23],['Hemlock',23,18],['UltraKote',25,18],
+      ['DecoBark Nuggets',37.5,28],['Fresh Sawdust',37.5,30],['Alder Sawdust',37.5,30],
+      ['Flower-n-Garden',15,11],['Primary Planting Soil',23,15],['Turf Start',15,11],
+      ['Garden Compost',23,11],['GVO Compost',23,11],['GVO w/Worm Castings',23,11],
+      ['Steer Plus',23,11]];
+    const rows=[];
+    for(const c of ['1','2']){
+      base.forEach(([p,d,w])=>rows.push({crew_id:c,product:p,dry_yards:d,wet_yards:w}));
+      rows.push({crew_id:c,product:'Fiberex',dry_yards:c==='2'?45:40,wet_yards:c==='2'?45:40});
+    }
+    ['3/4" round rock from RiverBend','3/8" round rock from RiverBend',
+     'Quarter Ten from RiverBend','3/4" open quarry from Coburg Quarry']
+      .forEach(p=>rows.push({crew_id:'2',product:p,dry_yards:8,wet_yards:8}));
+    return rows;
+  },
   async patchQuote(id, patch){
     const ex=this._quotes.find(x=>x.id===id);
     if(ex){ Object.assign(ex,patch); saveLocalQuotes(this._quotes); }
@@ -1326,6 +1354,23 @@ const LiveDB = {
     return SB.rest('quotes?select=id,product,yards,equip_hours,customer_name,address_raw,'+
       'status,crew_id,scheduled_date,calendar_event_id'+
       '&scheduled_date=eq.'+encodeURIComponent(date)+'&status=neq.lost');
+  },
+  /* Everything holding or booked in a date window -- what the slot-suggestion
+     engine reasons over. Drafts hold nothing, lost quotes are gone. */
+  async bookingsBetween(from,to){
+    return SB.rest('quotes?select=id,product,yards,customer_name,status,crew_id,'+
+      'scheduled_date,scheduled_time,scheduled_hours,equip_hours'+
+      '&scheduled_date=gte.'+encodeURIComponent(from)+
+      '&scheduled_date=lte.'+encodeURIComponent(to)+
+      '&status=in.(sent,won)&limit=500');
+  },
+  async truckCaps(){
+    return SB.rest('truck_capacity?select=crew_id,product,dry_yards,wet_yards&limit=500');
+  },
+  async setConfig(key, value){
+    const r = await SB.rest('app_config?key=eq.'+encodeURIComponent(key),
+      {method:'PATCH', headers:{Prefer:'return=representation'}, body:JSON.stringify({value})});
+    return r && r[0];
   },
   async tableCounts(){
     const names=['rate_card','markup_curve','settings','blow_benchmarks','drive_zones',
@@ -1849,6 +1894,8 @@ function recalc(){
 
   State.lastPrice = p;
   renderYardRef();
+  renderSuggestionsDebounced();
+  renderCapNoteDebounced();
 }
 
 /* "Has this customer had work done anywhere else?" -- searched by the ERP
@@ -2637,6 +2684,7 @@ async function renderDataStatus(){
 }
 
 function renderRates(){
+  renderCapTable();
   const canEdit = DB.mode==='demo' || State.isAdmin;
   $('#ratesadminnote').innerHTML = canEdit
     ? (DB.mode==='demo'
@@ -2911,6 +2959,261 @@ function renderSlotChips(){
    The iframe follows the chosen date's week; viewing it needs the rep's own
    Google account to have read access to the calendar -- the embed is Google's
    page, not ours, and it renders as the person looking at it. */
+/* ========================== slot suggestions =============================
+   The scheduling day, per the office:
+     - each truck runs ~2 jobs a day;
+     - job 1 starts 7:30 AM (except Truck #17 starts 10:00 AM on Mondays);
+     - job 2 starts 60 minutes after job 1 ENDS (drive back + reload);
+     - crews run Monday-Friday.
+   Suggestion rules, in strict priority order (a better rule later in the
+   window beats a worse rule sooner):
+     1. a scheduled job has the SAME PRODUCT and this quote FITS in the
+        truck's remaining load -> ride along: start when that job ends plus a
+        short travel gap, no reload;
+     2a. same product, doesn't fit -> the second slot of that day (reload,
+         but no washout between products);
+     2b. an empty day right after a day that ENDED on this product -> its
+         first slot;
+     3. the soonest open slot.
+   Capacities come from truck_capacity (the placement-truck sheet), read as
+   dry or winter/wet per the app_config toggle on the Rate Card tab. */
+const SLOT_RULES = {
+  FIRST_START: '07:30',
+  MON_17_START: '10:00',     // Truck #17's Monday first job
+  TRAVEL_MIN: 15,            // site-to-site gap when sharing a load
+  RELOAD_MIN: 60,            // the office's 60 minutes between jobs
+  JOBS_PER_DAY: 2,
+  HORIZON_DAYS: 14,
+  LATEST_START_MIN: 16.5 * 60   // do not suggest starts after 4:30 PM
+};
+const toMin = t => { const p = String(t).split(':'); return (+p[0])*60 + (+p[1]||0); };
+const toHM  = m => String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+const fmtMin = m => new Date(2000,0,1,Math.floor(m/60),m%60)
+  .toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+
+function firstStartFor(crew, dateStr){
+  const dow = new Date(dateStr+'T00:00:00').getDay();
+  return (dow===1 && /#17\b/.test(String(crew.name||''))) ? SLOT_RULES.MON_17_START
+                                                          : SLOT_RULES.FIRST_START;
+}
+function jobSpan(j, crew, dateStr){
+  const start = j.scheduled_time ? toMin(String(j.scheduled_time).slice(0,5))
+                                 : toMin(firstStartFor(crew, dateStr));
+  const hrs = Number(j.scheduled_hours) > 0 ? Number(j.scheduled_hours)
+            : Number(j.equip_hours) > 0 ? Number(j.equip_hours) : 2;
+  return { start, end: Math.round(start + hrs*60) };
+}
+const RULE_RANK = { '1':0, '2a':1, '2b':2, '3':3 };
+
+/* Pure: (quote facts, bookings, capacities) -> best candidate per truck.
+   Exposed on window so the numbers can be checked from the console. */
+function suggestSlots(product, yards, bookings, capMap, mode, crews, fromDate){
+  const results = [];
+  for(const crew of crews){
+    const capRow = capMap.get(String(crew.id)+'|'+product);
+    const cap = capRow ? Number(mode==='wet' ? capRow.wet_yards : capRow.dry_yards) : null;
+    const mine = bookings.filter(b => String(b.crew_id)===String(crew.id));
+    const onDay = ds => mine.filter(b => b.scheduled_date===ds)
+      .map(j => Object.assign({}, j, jobSpan(j, crew, ds)))
+      .sort((a,b) => a.start-b.start);
+    let best = null;
+    for(let i=0; i<SLOT_RULES.HORIZON_DAYS; i++){
+      const d = new Date(fromDate+'T00:00:00'); d.setDate(d.getDate()+i);
+      const dow = d.getDay();
+      if(dow===0 || dow===6) continue;                       // crews run Mon-Fri
+      const ds = d.toISOString().slice(0,10);
+      const jobs = onDay(ds);
+      let cand = null;
+      if(jobs.length >= SLOT_RULES.JOBS_PER_DAY){
+        continue;                                            // day is full
+      }else if(jobs.length === 1){
+        const j = jobs[0];
+        if(j.product===product && cap!=null && (Number(j.yards)||0) + yards <= cap){
+          cand = { rule:'1', date:ds, min:j.end + SLOT_RULES.TRAVEL_MIN,
+            why:'rides the '+fmtMin(j.start)+' '+product+' load — '+
+                (Math.round((cap-(Number(j.yards)||0))*10)/10)+' of '+cap+' yd free, no reload' };
+        }else if(j.product===product){
+          cand = { rule:'2a', date:ds, min:j.end + SLOT_RULES.RELOAD_MIN,
+            why:'second job after the '+fmtMin(j.start)+' '+product+' job — reload, no washout' };
+        }else{
+          cand = { rule:'3', date:ds, min:j.end + SLOT_RULES.RELOAD_MIN,
+            why:'second job of the day, after '+(j.product||'the first job') };
+        }
+      }else{
+        // Empty day: does the previous WORKING day end on this product?
+        const prev = new Date(d); prev.setDate(prev.getDate() - (dow===1 ? 3 : 1));
+        const pj = onDay(prev.toISOString().slice(0,10));
+        const last = pj[pj.length-1];
+        const t = toMin(firstStartFor(crew, ds));
+        cand = (last && last.product===product)
+          ? { rule:'2b', date:ds, min:t,
+              why:'first job the morning after a '+product+' day — the truck is already dialed in' }
+          : { rule:'3', date:ds, min:t, why:'first open slot' };
+      }
+      if(!cand || cand.min > SLOT_RULES.LATEST_START_MIN) continue;
+      if(!best || RULE_RANK[cand.rule] < RULE_RANK[best.rule]) best = cand;
+      if(best && best.rule==='1') break;         // nothing beats sharing the load
+    }
+    results.push({ crew, best, cap, hasCap: !!capRow });
+  }
+  return results;
+}
+window.suggestSlots = suggestSlots;
+
+/* Cache of what the engine needs; 30s so a save shows up on the next look. */
+let suggData = { t:0 };
+async function loadSuggData(force){
+  if(!force && Date.now()-suggData.t < 30000 && suggData.capMap) return suggData;
+  const today = new Date();
+  const from = new Date(today); from.setDate(from.getDate()-4);   // rule 2b looks back
+  const to = new Date(today); to.setDate(to.getDate()+SLOT_RULES.HORIZON_DAYS+3);
+  const iso = x => x.toISOString().slice(0,10);
+  const [bookings, caps, cfg] = await Promise.all([
+    DB.bookingsBetween(iso(from), iso(to)), DB.truckCaps(), DB.appConfig()]);
+  const capMap = new Map();
+  (caps||[]).forEach(r => capMap.set(String(r.crew_id)+'|'+r.product, r));
+  suggData = { t:Date.now(), bookings:bookings||[], capMap,
+               mode:(cfg.capacity_mode==='wet'?'wet':'dry') };
+  return suggData;
+}
+function bustSuggCache(){ suggData.t = 0; }
+
+let suggReq = 0;
+async function renderSuggestions(){
+  const box = $('#suggestbox'); if(!box) return;
+  const product = $('#q_product').value, yards = parseFloat($('#q_yards').value)||0;
+  if(!product || !yards || !(CREWS||[]).length || !State.user && DB.mode!=='demo'){
+    box.innerHTML=''; return;
+  }
+  const my = ++suggReq;
+  try{
+    const d = await loadSuggData();
+    if(my !== suggReq) return;
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1);
+    const res = suggestSlots(product, yards, d.bookings, d.capMap, d.mode,
+                             CREWS||[], tomorrow.toISOString().slice(0,10));
+    const ranked = res.filter(r=>r.best).sort((a,b)=>
+      RULE_RANK[a.best.rule]-RULE_RANK[b.best.rule] ||
+      a.best.date.localeCompare(b.best.date) || a.best.min-b.best.min);
+    const bestKey = ranked.length ? ranked[0].crew.id : null;
+    let html = '<div class="small" style="font-weight:600;margin-bottom:4px">Suggested slots '+
+      '<span class="muted" style="font-weight:400">· '+d.mode+' capacities '+
+      '<span title="Change on the Rate Card tab">(Rate Card tab to switch)</span></span></div>';
+    if(!ranked.length){
+      box.innerHTML = html+'<div class="small muted">No open slot in the next '+
+        SLOT_RULES.HORIZON_DAYS+' days — both trucks are full.</div>';
+      return;
+    }
+    html += res.map(r=>{
+      if(!r.best) return '<div class="small muted" style="padding:2px 0">'+esc(r.crew.name)+
+        ' — no open slot in the next '+SLOT_RULES.HORIZON_DAYS+' days</div>';
+      const b = r.best;
+      const star = String(r.crew.id)===String(bestKey);
+      const cls = b.rule==='1' ? 'g' : (b.rule==='3' ? '' : 'w');
+      return '<button class="btn ghost sm suggslot" data-date="'+b.date+'" data-crew="'+r.crew.id+
+        '" data-time="'+toHM(b.min)+'" style="display:block;width:100%;text-align:left;margin:3px 0">'+
+        (star?'★ ':'')+'<b>'+esc(r.crew.name)+'</b> · '+esc(dfmt(b.date))+' · '+fmtMin(b.min)+
+        ' <span class="tag '+cls+'">'+(b.rule==='1'?'share load':b.rule==='3'?'open':'same product')+'</span>'+
+        '<br><span class="small muted">'+esc(b.why)+
+        (!r.hasCap ? ' · no capacity on file for '+esc(product)+' — share-a-load off' : '')+
+        '</span></button>';
+    }).join('');
+    box.innerHTML = html;
+    box.querySelectorAll('.suggslot').forEach(btn=>{
+      btn.onclick = ()=>{
+        $('#q_scheddate').value = btn.dataset.date;
+        $('#q_crew').value = btn.dataset.crew;
+        $('#q_schedtime').value = btn.dataset.time;
+        refreshCrewLoad(); renderSlotHint(); renderCalEmbed();
+      };
+    });
+  }catch(e){
+    if(my !== suggReq) return;
+    box.innerHTML = '<div class="small muted">Slot suggestions unavailable — '+esc(e.message)+
+      (/truck_capacity/.test(e.message)?' (run sql/17_truck_capacity.sql)':'')+'</div>';
+  }
+}
+const renderSuggestionsDebounced = debounce(renderSuggestions, 400);
+
+/* Over-capacity warning for the slot the rep actually picked: same truck, same
+   day, same product -- would this load exceed the sheet? */
+/* The dry/wet switch and the capacity sheet, on the Rate Card tab. Any rep can
+   flip the mode -- it describes the material in the yard today, not policy. */
+async function renderCapTable(){
+  const box = $('#captable'); if(!box) return;
+  box.innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  let d;
+  try{ d = await loadSuggData(true); }
+  catch(e){
+    box.innerHTML = '<div class="note bad">'+esc(e.message)+
+      (DB.mode==='demo'?'':' — run <code>sql/17_truck_capacity.sql</code>.')+'</div>';
+    return;
+  }
+  const mode = d.mode;
+  let html = '<div class="row" style="align-items:center;margin-bottom:10px">'+
+    '<span class="small">Material is:</span>'+
+    '<button class="btn sm'+(mode==='dry'?'':' ghost')+'" id="capdry">Dry</button>'+
+    '<button class="btn sm'+(mode==='wet'?'':' ghost')+'" id="capwet">Winter / wet</button>'+
+    '<span class="small muted">Every capacity check and slot suggestion uses this.</span></div>';
+  const prods = [...new Set([...d.capMap.keys()].map(k=>k.split('|').slice(1).join('|')))].sort();
+  if(prods.length){
+    const t = ['<table><thead><tr><th>Product</th>'+
+      (CREWS||[]).map(c=>'<th class="num">'+esc(c.name)+'</th>').join('')+'</tr></thead><tbody>'];
+    prods.forEach(p=>{
+      t.push('<tr><td class="small">'+esc(p)+'</td>'+
+        (CREWS||[]).map(c=>{
+          const r = d.capMap.get(String(c.id)+'|'+p);
+          if(!r) return '<td class="num muted small">—</td>';
+          const cur = mode==='wet' ? r.wet_yards : r.dry_yards;
+          const oth = mode==='wet' ? r.dry_yards : r.wet_yards;
+          return '<td class="num"><b>'+cur+'</b> <span class="small muted">('+oth+' '+
+                 (mode==='wet'?'dry':'wet')+')</span></td>';
+        }).join('')+'</tr>');
+    });
+    t.push('</tbody></table>');
+    html += t.join('')+
+      '<div class="small muted" style="margin-top:8px">Yards per load. Products not '+
+      'listed have no capacity on file — the scheduler won’t offer share-a-load slots '+
+      'for them. Numbers live in the <span class="mono">truck_capacity</span> table.</div>';
+  }else{
+    html += '<div class="empty">No capacities loaded — run sql/17_truck_capacity.sql.</div>';
+  }
+  box.innerHTML = html;
+  const setMode = async m=>{
+    try{
+      await DB.setConfig('capacity_mode', m);
+      bustSuggCache(); renderCapTable(); renderSuggestionsDebounced();
+    }catch(e){ box.insertAdjacentHTML('afterbegin','<div class="note bad">'+esc(e.message)+'</div>'); }
+  };
+  $('#capdry').onclick = ()=>setMode('dry');
+  $('#capwet').onclick = ()=>setMode('wet');
+}
+
+async function renderCapNote(){
+  const box = $('#capnote'); if(!box) return;
+  const date=$('#q_scheddate').value, crewId=$('#q_crew').value;
+  const product=$('#q_product').value, yards=parseFloat($('#q_yards').value)||0;
+  if(!date || !crewId || !product || !yards){ box.innerHTML=''; return; }
+  try{
+    const d = await loadSuggData();
+    const capRow = d.capMap.get(String(crewId)+'|'+product);
+    if(!capRow){ box.innerHTML=''; return; }
+    const cap = Number(d.mode==='wet' ? capRow.wet_yards : capRow.dry_yards);
+    const same = d.bookings.filter(b => String(b.crew_id)===String(crewId) &&
+      b.scheduled_date===date && b.product===product &&
+      String(b.id)!==String(State.savedQuoteId||''));
+    const booked = same.reduce((s,b)=>s+(Number(b.yards)||0), 0);
+    box.innerHTML = (booked + yards > cap)
+      ? '<div class="note" style="margin-top:8px">'+booked+' yd of '+esc(product)+
+        ' already on this truck that day — adding '+yards+' yd exceeds the '+cap+
+        ' yd load ('+d.mode+'). It will need its own trip; the 60-min second slot '+
+        'covers the reload.</div>'
+      : '';
+  }catch(e){ box.innerHTML=''; }
+}
+
+const renderCapNoteDebounced = debounce(renderCapNote, 400);
+
 let CAL_EMBED_ID = null;
 function renderCalEmbed(){
   const holder=$('#calembedbody'); if(!holder) return;
@@ -3080,6 +3383,7 @@ async function saveQuote(status){
       refreshCrewLoad();
     }
     renderSchedState(saved||{});
+    bustSuggCache(); renderSuggestionsDebounced(); renderCapNoteDebounced();
     const verb = status==='won' ? 'Scheduled.' : status==='sent' ? 'On hold.'
                : status==='lost' ? 'Marked lost.' : (wasNew?'Saved.':'Updated.');
     msg(verb+(DB.mode==='demo'&&!sync?' (demo mode — this browser only)':'')+sync, false);
@@ -3101,8 +3405,8 @@ function msg(t,bad){ $('#savemsg').innerHTML='<div class="note '+(bad?'bad':'ok'
 /* ================================ wiring ================================ */
 function wire(){
   initPickers();
-  $('#q_scheddate').addEventListener('change', ()=>{ refreshCrewLoad(); });
-  $('#q_crew').addEventListener('change', ()=>{ refreshCrewLoad(); });   // load ends by re-rendering the chips
+  $('#q_scheddate').addEventListener('change', ()=>{ refreshCrewLoad(); renderCapNoteDebounced(); });
+  $('#q_crew').addEventListener('change', ()=>{ refreshCrewLoad(); renderCapNoteDebounced(); });   // load ends by re-rendering the chips
   $('#q_schedtime').addEventListener('input', ()=>{ renderSlotHint(); renderSlotChips(); });
   $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); renderSlotChips(); });
   $('#q_scheddate').addEventListener('change', renderCalEmbed);
