@@ -66,6 +66,7 @@ main{max-width:1400px;margin:0 auto;padding:20px 18px 80px}
 .btn:hover{filter:brightness(1.07)}
 .btn.ghost{background:none;border:1px solid var(--line);color:var(--ink)}
 .btn.ghost:hover{background:var(--line-2);filter:none}
+.slotchip.on{background:var(--ink);color:#fff;border-color:var(--ink)}
 .btn.sm{padding:5px 10px;font-size:13px;border-radius:6px}
 .btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
 label.f{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;letter-spacing:.02em}
@@ -338,13 +339,24 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                          placeholder="from equip hrs"></div>
               </div>
               <div class="small muted" id="slothint" style="margin-top:4px"></div>
+              <div id="slotchips" style="margin-top:6px"></div>
               <div id="crewload" class="small muted" style="margin-top:9px"></div>
               <div id="schedwon" class="small muted" style="margin-top:8px"></div>
               <div class="row" style="margin-top:10px">
-                <button class="btn ghost sm" id="btnschedule">Book on calendar</button>
+                <span class="small muted" style="align-self:center">Saving the quote books,
+                  updates or removes the calendar entry to match.</span>
                 <button class="btn ghost sm hide" id="btnunschedule">Remove booking</button>
               </div>
               <div id="schedmsg"></div>
+              <details id="calembed" style="margin-top:12px">
+                <summary class="small" style="cursor:pointer;color:var(--muted)">
+                  Show the crew calendar</summary>
+                <div id="calembedbody" style="margin-top:8px"></div>
+                <div class="small muted" style="margin-top:6px">This is the live Google
+                  Calendar. If it asks for permission, your Google account needs at least
+                  read access to the crew calendar — ask an admin to share it
+                  (<i>See all event details</i> is enough).</div>
+              </details>
             </div>
 
             <div class="saverow">
@@ -751,7 +763,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-31-slots';   // shown in the header; check it after deploying
+const BUILD = '2026-08-31-save2';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2070,8 +2082,23 @@ function attachPicker(opts){
     }
     else if(e.key==='Escape'){ box.classList.add('hide'); input.blur(); }
   });
-  document.addEventListener('click', e=>{
+  /* Closing on document 'click' misses two things reps actually do:
+       - Tab to the next field: no click anywhere.
+       - click a native control (the crew/status <select>, the date field):
+         Safari opens the native popup and swallows the click event entirely.
+     'pointerdown' fires before either of those gets a chance to eat it, and a
+     blur fallback with a grace period catches keyboard-only movement. The grace
+     period matters: blur fires before a result button's click, and Safari does
+     not focus buttons on click, so closing instantly on blur would make picking
+     a result impossible there. */
+  document.addEventListener('pointerdown', e=>{
     if(!e.target.closest(opts.wrap)) box.classList.add('hide');
+  });
+  input.addEventListener('blur', ()=>{
+    setTimeout(()=>{
+      const wrapEl=document.querySelector(opts.wrap);
+      if(wrapEl && !wrapEl.contains(document.activeElement)) box.classList.add('hide');
+    }, 200);
   });
   return {open, close:()=>box.classList.add('hide')};
 }
@@ -2436,6 +2463,7 @@ async function loadCrews(){
   try{
     const cfg = await DB.appConfig();
     GS.url = (cfg.apps_script_url || '').trim() || null;
+    CAL_EMBED_ID = (cfg.master_calendar_id || '').trim() || null;
   }catch(e){ /* reported by the connection check, not here */ }
   const sel=$('#q_crew');
   sel.innerHTML = '<option value="">— choose —</option>' +
@@ -2469,6 +2497,8 @@ async function refreshCrewLoad(){
     catch(e){ calErr = e.message; }
   }
   if(my!==loadReq) return;
+  State.dayEvents = events;          // the chips pick from these
+  renderSlotChips();
 
   const chosen=$('#q_crew').value;
   const hrs = rs => rs.reduce((s,q)=>s+(Number(q.equip_hours)||0),0);
@@ -2549,7 +2579,6 @@ function renderSchedState(q){
       esc(when)+(crew?' · '+esc(crew.name):'')
     : (State.savedQuoteId ? '<span class="tag">not booked</span>' : '');
   $('#btnunschedule').classList.toggle('hide', !has);
-  setSchedButtonLabel(has);
   renderWonHint(live);
 }
 
@@ -2585,10 +2614,72 @@ function renderSlotHint(){
   box.textContent = f(new Date(2000,0,1,h,m))+' \u2192 '+f(end)+' ('+d+' hr)';
 }
 
-function setSchedButtonLabel(booked){
-  $('#btnschedule').textContent = booked
-    ? (isWon()?'Update booking':'Update hold')
-    : (isWon()?'Book on calendar':'Put a hold on the calendar');
+/* Open start times as chips. A rep should be able to tap a slot rather than
+   guess one: candidates run every half hour across the working day, and a chip
+   only shows if the whole slot fits without overlapping a TIMED event already
+   on that crew. All-day entries cannot block a time -- they have no hours -- so
+   they are the crew-load line's problem, not the chips'. */
+function renderSlotChips(){
+  const box=$('#slotchips'); if(!box) return;
+  const crewId=$('#q_crew').value, dur=slotDuration();
+  const events=State.dayEvents;
+  if(!crewId || !dur || !$('#q_scheddate').value || events==null){ box.innerHTML=''; return; }
+  const busy=(events||[])
+    .filter(e=>String(e.crewId||'')===String(crewId) && e.start && e.start.dateTime)
+    .map(e=>{
+      const s=new Date(e.start.dateTime), en=e.end&&e.end.dateTime?new Date(e.end.dateTime):null;
+      return {s: s.getHours()*60+s.getMinutes(),
+              e: en ? en.getHours()*60+en.getMinutes() : s.getHours()*60+s.getMinutes()+60};
+    });
+  const need=Math.round(dur*60);
+  const chips=[];
+  for(let m=7*60; m+need<=17*60 && chips.length<10; m+=30){
+    if(busy.some(b=>m < b.e && m+need > b.s)) continue;
+    chips.push(m);
+  }
+  const fmt=m=>new Date(2000,0,1,Math.floor(m/60),m%60)
+    .toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
+  const cur=$('#q_schedtime').value;
+  box.innerHTML = chips.length
+    ? '<span class="small muted" style="margin-right:6px">Open starts:</span>'+
+      chips.map(m=>{
+        const v=String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+        return '<button type="button" class="btn ghost sm slotchip'+(cur===v?' on':'')+
+          '" data-t="'+v+'" style="margin:2px 4px 2px 0;padding:3px 10px">'+fmt(m)+'</button>';
+      }).join('')
+    : '<span class="small muted">No open '+dur+'-hour slot in working hours for this crew — '+
+      'pick a time by hand or another day.</span>';
+  box.querySelectorAll('.slotchip').forEach(b=>b.onclick=()=>{
+    $('#q_schedtime').value=b.dataset.t;
+    renderSlotHint(); renderSlotChips();
+  });
+}
+
+/* The live Google Calendar, embedded. Collapsed by default so Google is only
+   loaded when a rep actually wants the picture. The iframe follows the chosen
+   date's week; viewing it needs the rep's own Google account to have read
+   access to the calendar -- the embed is Google's page, not ours. */
+let CAL_EMBED_ID = null;
+function renderCalEmbed(){
+  const holder=$('#calembedbody'); if(!holder) return;
+  if(!CAL_EMBED_ID){ holder.innerHTML='<span class="small muted">No calendar configured.</span>'; return; }
+  const d=$('#q_scheddate').value;
+  let dates='';
+  if(d){
+    const s=new Date(d+'T00:00:00'); s.setDate(s.getDate()-((s.getDay()+6)%7));  // Monday
+    const e=new Date(s); e.setDate(e.getDate()+6);
+    const f=x=>x.toISOString().slice(0,10).replace(/-/g,'');
+    dates='&dates='+f(s)+'%2F'+f(e);
+  }
+  const src='https://calendar.google.com/calendar/embed?src='+encodeURIComponent(CAL_EMBED_ID)+
+    '&ctz=America%2FLos_Angeles&mode=WEEK&wkst=2&showTitle=0&showPrint=0&showTz=0'+
+    '&showCalendars=0&showTabs=0'+dates;
+  // Only swap the iframe when the src actually changed -- reloading Google's
+  // embed on every keystroke would flicker and hammer their servers.
+  const cur=holder.querySelector('iframe');
+  if(cur && cur.getAttribute('src')===src) return;
+  holder.innerHTML='<iframe src="'+src+'" style="width:100%;height:420px;border:1px solid '+
+    'var(--line);border-radius:8px;background:#fff" frameborder="0" scrolling="no"></iframe>';
 }
 
 function renderWonHint(live){
@@ -2596,14 +2687,14 @@ function renderWonHint(live){
   if(isWon()){
     box.innerHTML = live
       ? '<span class="tag g">approved — on the calendar as a confirmed job</span>'
-      : 'Status is <b>won</b> — this goes on the calendar as a confirmed job.';
+      : 'Status is <b>won</b> — saving books this on the calendar as a confirmed job.';
   }else if(isLost()){
     box.innerHTML = 'Status is <b>lost</b>. Saving takes this off the calendar — '+
       'a lost quote isn’t waiting on approval, so it shouldn’t hold a crew day.';
   }else{
-    box.innerHTML = 'Status is <b>'+esc($('#q_status').value)+'</b>, so this goes on '+
-      'the calendar as a <b>HOLD</b> — grey, marked <i>not approved</i>, and shown '+
-      'as free rather than busy. Mark it <b>won</b> and the same event turns into a '+
+    box.innerHTML = 'Status is <b>'+esc($('#q_status').value)+'</b>, so saving puts this '+
+      'on the calendar as a <b>HOLD</b> — grey, marked <i>not approved</i>, shown as '+
+      'free. Change it to <b>won</b> and save again: the same event becomes a '+
       'confirmed booking.';
   }
 }
@@ -2620,27 +2711,6 @@ function renderWonHint(live){
    approving turns its hold solid rather than creating a second entry. */
 async function syncBooking(quoteId, crewId, date){
   return GS.sync(quoteId, crewId, date, $('#q_schedtime').value || null, slotDuration());
-}
-
-async function doSchedule(){
-  const msg=(t,bad)=>{ $('#schedmsg').innerHTML='<div class="note '+(bad?'bad':'ok')+
-    '" style="margin-top:10px">'+esc(t)+'</div>'; };
-  const date=$('#q_scheddate').value, crewId=$('#q_crew').value;
-  if(!date || !crewId){ msg('Pick a date and a crew first.', true); return; }
-  if(!State.savedQuoteId){ msg('Save the quote first — the booking is attached to it.', true); return; }
-  $('#btnschedule').disabled=true;
-  try{
-    const r = await syncBooking(State.savedQuoteId, crewId, date);
-    State.scheduled = true;
-    renderSchedState(r.quote || {scheduled_date:date, crew_id:crewId,
-      calendar_event_id: r.removed ? null : 'x'});
-    msg(r.removed ? 'Taken off the calendar — this quote is marked lost.'
-      : r.hold ? 'Hold placed on the calendar, marked not approved. Mark the quote '+
-                 'won and it becomes a confirmed booking.'
-      : 'Booked on the calendar.', false);
-    refreshCrewLoad();
-  }catch(e){ msg(e.message, true); }
-  finally{ $('#btnschedule').disabled=false; }
 }
 
 async function doUnschedule(){
@@ -2691,7 +2761,14 @@ async function saveQuote(){
     target_price: p.targetPrice, bid_amount: p.bidAmount,
     material_rev: p.materialRev, labor_rev: p.laborRev, equip_rev: p.equipRev,
     gross_margin: p.grossMargin,
-    notes: $('#q_notes').value.trim()||null
+    notes: $('#q_notes').value.trim()||null,
+    /* The booking lives on the quote like everything else, so one Save carries
+       it. In live mode the calendar sync below re-writes these via the script
+       (idempotent); in demo mode this is all the booking there is. */
+    scheduled_date: $('#q_scheddate').value || null,
+    crew_id: $('#q_crew').value || null,
+    scheduled_time: $('#q_schedtime').value || null,
+    scheduled_hours: ($('#q_scheddate').value && $('#q_schedtime').value) ? slotDuration() : null
   };
   try{
     const wasNew = !State.savedQuoteId;
@@ -2699,31 +2776,42 @@ async function saveQuote(){
     State.savedQuoteId = saved && saved.id;
     State.scheduled = !!(saved && saved.scheduled_date);
 
-    /* Push the status change through to the calendar so the rep never has to
-       remember a second button. Approving turns a HOLD solid; un-approving turns
-       it back into a HOLD; marking it lost pulls it off entirely. We re-send on
-       every save rather than trying to detect a change, because the event body
-       carries the customer, address, product and hours too -- editing any of
-       those should reach the calendar as well. */
+    /* Save is the ONLY calendar verb. Pick a date and a crew and Save books it;
+       change the status and Save re-books it as hold/confirmed/removed; edit the
+       customer or the hours and Save updates the event body. There used to be a
+       separate "Book on calendar" button, and it produced exactly the failure
+       you would expect: the button synced the STORED status while the dropdown
+       showed a new one, so a hold refused to become a booking. One verb, no
+       skew. */
     let sync = '';
-    if(saved && saved.scheduled_date && saved.crew_id){
-      const wasLive = !!saved.calendar_event_id;
-      try{
-        const r = await syncBooking(saved.id, saved.crew_id, saved.scheduled_date);
-        if(r && r.quote) saved = r.quote;
+    const wantDate = $('#q_scheddate').value, wantCrew = $('#q_crew').value;
+    if(wantDate && wantCrew){
+      const wasLive = !!(saved && saved.calendar_event_id);
+      if(DB.mode==='demo'){
+        sync = ' (demo — the booking is saved here, no real calendar)';
         State.scheduled = true;
-        sync = r.removed ? ' Taken off the calendar (quote is lost).'
-             : r.hold    ? (wasLive ? ' Calendar hold updated.'
-                                    : ' Put on the calendar as a HOLD, pending approval.')
-             :             ' On the calendar as a confirmed job.';
-      }catch(e){ sync = ' Calendar not updated: '+e.message; }
-      refreshCrewLoad();   // approved-vs-held just changed; the panel must follow
+      }else{
+        try{
+          const r = await syncBooking(saved.id, wantCrew, wantDate);
+          if(r && r.quote) saved = r.quote;
+          State.scheduled = !r.removed;
+          sync = r.removed ? ' Taken off the calendar (quote is lost).'
+               : r.hold    ? (wasLive ? ' Calendar hold updated.'
+                                      : ' Put on the calendar as a HOLD, pending approval.')
+               :             ' Booked on the calendar.';
+        }catch(e){ sync = ' Calendar not updated: '+e.message; }
+      }
+      refreshCrewLoad();
+    }else if(saved && saved.calendar_event_id){
+      /* The form's date or crew was cleared but an event is still out there.
+         Never delete silently on Save -- say so and leave Remove booking as the
+         explicit way to take it off. */
+      sync = ' The calendar still shows the old booking — use Remove booking to take it off, '+
+             'or set a date and crew and Save again to move it.';
     }
     renderSchedState(saved||{});
-    msg((wasNew?'Saved.':'Updated.')+(DB.mode==='demo'?' (demo mode — this browser only)':'')+
-        sync+
-        (State.savedQuoteId && !saved.scheduled_date
-          ? ' You can put it on the crew calendar below.':''), false);
+    msg((wasNew?'Saved.':'Updated.')+(DB.mode==='demo'&&!sync?' (demo mode — this browser only)':'')+
+        sync, false);
     $('#savequote').textContent = 'Update quote';
     if(State.site && State.site.key===q.site_key){
       State.site.quotes.unshift({quote_date:new Date().toISOString().slice(0,10),product:q.product,yards:q.yards,
@@ -2743,13 +2831,13 @@ function msg(t,bad){ $('#savemsg').innerHTML='<div class="note '+(bad?'bad':'ok'
 function wire(){
   initPickers();
   $('#q_scheddate').addEventListener('change', ()=>{ refreshCrewLoad(); });
-  $('#q_crew').addEventListener('change', ()=>{ refreshCrewLoad(); });
-  $('#q_schedtime').addEventListener('input', renderSlotHint);
-  $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); });
-  $('#btnschedule').onclick = doSchedule;
+  $('#q_crew').addEventListener('change', ()=>{ refreshCrewLoad(); });   // load ends by re-rendering the chips
+  $('#q_schedtime').addEventListener('input', ()=>{ renderSlotHint(); renderSlotChips(); });
+  $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); renderSlotChips(); });
+  $('#calembed').addEventListener('toggle', ()=>{ if($('#calembed').open) renderCalEmbed(); });
+  $('#q_scheddate').addEventListener('change', ()=>{ if($('#calembed').open) renderCalEmbed(); });
   $('#btnunschedule').onclick = doUnschedule;
   $('#q_status').addEventListener('change', ()=>{
-    setSchedButtonLabel(State.scheduled);
     renderWonHint(State.scheduled && State.calendarLive);
   });
   $('#refreshcounts').onclick=e=>{ e.stopPropagation(); renderDataStatus(); };
