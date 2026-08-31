@@ -227,6 +227,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                   <div class="results hide" id="custresults"></div>
                 </div></div>
               <div><label class="f">Phone</label><input type="text" id="q_phone"></div>
+              <div style="max-width:130px"><label class="f">Customer #</label>
+                <input type="text" id="q_custno" autocomplete="off" class="mono" placeholder="020105687"></div>
               <div style="flex:2"><label class="f">Email</label><input type="text" id="q_email"></div>
             </div>
             <div class="row">
@@ -249,8 +251,9 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
         </div>
 
         <div class="card">
-          <h3>Comparable delivered jobs <span class="muted" id="compsub"></span></h3>
-          <div class="body scroll" id="comparables"><div class="empty">Pick a product and volume.</div></div>
+          <h3>Other jobs for this customer <span class="muted" id="custjobssub"></span></h3>
+          <div class="body scroll" id="custjobs"><div class="empty">Jobs delivered to this customer
+            at other addresses show here — enter a Customer # above to search.</div></div>
         </div>
       </div>
 
@@ -308,20 +311,30 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
 
             <div class="row" style="align-items:flex-end">
               <div><label class="f">Bid amount</label><input type="number" id="q_bid" step="1" class="mono num"></div>
-              <div style="max-width:150px"><label class="f">Status</label>
-                <select id="q_status"><option>draft</option><option>sent</option><option>won</option><option>lost</option></select></div>
+              <div style="align-self:center" id="statusnow"></div>
             </div>
             <div id="marginnote"></div>
 
             <div>
-              <div class="kv"><span class="k">Material revenue <span class="small">bid − labor − equip</span></span>
+              <div class="kv"><span class="k" id="k_mrev">Material revenue <span class="small">bid − labor − equip</span></span>
                 <span class="v" id="o_mrev">—</span></div>
-              <div class="kv"><span class="k">Labor revenue</span><span class="v" id="o_lrev">—</span></div>
-              <div class="kv"><span class="k">Equipment revenue</span><span class="v" id="o_erev">—</span></div>
+              <div class="kv"><span class="k" id="k_lrev">Labor revenue</span><span class="v" id="o_lrev">—</span></div>
+              <div class="kv"><span class="k" id="k_erev">Equipment revenue</span><span class="v" id="o_erev">—</span></div>
             </div>
 
             <div><label class="f">Notes</label><textarea id="q_notes" rows="2"
                  placeholder="Access, hose pull, gate code, staging…"></textarea></div>
+            <div class="row">
+              <div><label class="f">Account #</label>
+                <input type="text" id="q_account" autocomplete="off" placeholder="02-0104761"></div>
+              <div><label class="f">SO #</label>
+                <input type="text" id="q_so" autocomplete="off" placeholder="0208260049"></div>
+              <div><label class="f">PN #</label>
+                <input type="text" id="q_pn" autocomplete="off" placeholder="EB20267443"></div>
+            </div>
+            <div class="small muted" style="margin-top:-6px">ERP numbers, once assigned.
+              They print into the calendar event — type them here, not into Google, or
+              the next save overwrites them.</div>
             <div id="schedwrap" style="border-top:1px solid var(--line-2);padding-top:14px">
               <div class="kv" style="border:0;padding:0 0 8px">
                 <span class="k" style="font-weight:600;color:var(--ink)">Schedule</span>
@@ -343,8 +356,9 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div id="crewload" class="small muted" style="margin-top:9px"></div>
               <div id="schedwon" class="small muted" style="margin-top:8px"></div>
               <div class="row" style="margin-top:10px">
-                <span class="small muted" style="align-self:center">Saving the quote books,
-                  updates or removes the calendar entry to match.</span>
+                <span class="small muted" style="align-self:center"><b>Hold</b> places a grey
+                  hold on this slot; <b>Schedule</b> books it as a confirmed job;
+                  <b>Save quote</b> leaves the calendar alone.</span>
                 <button class="btn ghost sm hide" id="btnunschedule">Remove booking</button>
               </div>
               <div id="schedmsg"></div>
@@ -352,7 +366,10 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
 
             <div class="saverow">
               <button class="btn" id="savequote">Save quote</button>
+              <button class="btn" id="holdquote" style="background:#6b7280">Hold</button>
+              <button class="btn" id="schedquote" style="background:var(--good)">Schedule</button>
               <button class="btn ghost" id="newquote">Clear</button>
+              <button class="btn ghost" id="lostquote" style="color:var(--danger)">Mark lost</button>
               <div id="savemsg" style="flex:1 1 100%"></div>
             </div>
           </div>
@@ -773,7 +790,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-31-piles';   // shown in the header; check it after deploying
+const BUILD = '2026-08-31-verbs';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -831,6 +848,30 @@ function streetKey(addr){
   s=s.replace(/[.,#]/g,' ').replace(/\b(\d+)(?:st|nd|rd|th)\b/g,'$1');
   return s.split(/\s+/).filter(Boolean).map(t=>SUFFIX[t]||t).join(' ').trim();
 }
+/* A rep types the address the CUSTOMER said -- "33860 Oak Springs Lane" --
+   while the ERP filed it as "...Dr". An exact key match then finds nothing, the
+   contact fails to populate, and worse, saving would mint a second site key and
+   split the property's history in two. So: exact key first, and failing that, a
+   match with the street-suffix word ignored, taken only when it is UNIQUE --
+   guessing between two candidates would silently attach the quote to the wrong
+   property, which is worse than asking the rep to pick from the dropdown. */
+const SUFFIX_WORDS = new Set(['ave','av','avenue','st','street','rd','road','dr','drive',
+  'ln','lane','ct','court','blvd','boulevard','pl','place','ter','terrace','cir','circle',
+  'pkwy','parkway','hwy','highway','way','loop','trl','trail','sq','square','rdg','ridge',
+  'vw','view','hts','heights','xing','crossing']);
+function stripSuffixWords(key){
+  return String(key||'').split(' ').filter(w=>!SUFFIX_WORDS.has(w)).join(' ');
+}
+function resolveSiteKey(addr){
+  const k = streetKey(addr);
+  if(!k || !indexReady()) return k;
+  if(State.index.some(r=>r.site_key===k)) return k;
+  const bare = stripSuffixWords(k);
+  if(!bare) return k;
+  const hits = State.index.filter(r=>stripSuffixWords(r.site_key)===bare);
+  return hits.length===1 ? hits[0].site_key : k;
+}
+
 /* The leading house number must never be read as a ZIP: "81372 Lost Creek Rd"
    has no ZIP at all. Strip the house number, then take the LAST 5-digit group.
    Mirrors extract_zip() in addr.py. */
@@ -856,7 +897,8 @@ function extractCity(a){
 /* ============================ data adapters ============================== */
 const LIVE = !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
 const State = { user:null, token:null, isAdmin:false, ref:null, site:null, comps:[],
-                index:null, indexErr:null, savedQuoteId:null, scheduled:false };
+                index:null, indexErr:null, savedQuoteId:null, scheduled:false,
+                qstatus:'draft' };
 
 /* ---- request tracing, so a hang can always explain itself ---- */
 const Diag = {
@@ -1064,20 +1106,24 @@ const DemoDB = {
     const orders=(this._ordBySite.get(key)||[]).slice();
     const custId = orders.length ? orders[0].cust_id : null;
     if(!this._custById) this._custById = new Map(this.B.customers.map(c=>[c.cust_id,c]));
-    return {orders, quotes:(this._qhBySite.get(key)||[]).slice(),
+    // Same merge as live mode: quotes saved in the app join the history.
+    const saved=(this._quotes||[]).filter(q=>q.site_key===key).map(q=>({
+      quote_date:(q.created_at||'').slice(0,10), customer_name:q.customer_name,
+      phone:q.phone, email:q.email, address_raw:q.address_raw, city:q.city, zip:q.zip,
+      product:q.product, yards:q.yards, drive_hours:q.drive_hours, blow_hours:q.blow_hours,
+      labor_hours:q.labor_hours, equip_hours:q.equip_hours, bid_amount:q.bid_amount,
+      sales_person:q.rep_name, notes:q.notes, saved_in_app:true
+    }));
+    const quotes=saved.concat((this._qhBySite.get(key)||[]).slice());
+    quotes.sort((a,b)=>String(b.quote_date||'').localeCompare(String(a.quote_date||'')));
+    return {orders, quotes,
             lines:this.B.order_lines,
             site:this._sitesByKey.get(key)||null,
             customer: custId ? (this._custById.get(custId)||null) : null};
   },
-  async comparables(product,yards){
-    // Delivered ERP jobs only -- what was actually done and invoiced. Matches
-    // where the blow-time estimate comes from, so the rep's sanity-check list
-    // and the suggested number are drawn from the same evidence.
-    const lo=yards*0.6, hi=yards*1.6;
-    return this.B.orders
-      .filter(o=>o.order_type==='blow_in' && o.product===product &&
-                 o.total_yards>=lo && o.total_yards<=hi && o.equip_hours>0)
-      .sort((a,b)=>(b.ord_date||'').localeCompare(a.ord_date||'')).slice(0,12);
+  async customerJobs(custId){
+    return this.B.orders.filter(o=>String(o.cust_id)===String(custId))
+      .sort((a,b)=>(b.ord_date||'').localeCompare(a.ord_date||'')).slice(0,100);
   },
   async listQuotes(){ return this._quotes.slice().sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')); },
   async saveQuote(q, id){
@@ -1185,11 +1231,24 @@ const LiveDB = {
   },
   async siteHistory(key){
     const k=encodeURIComponent(key);
-    const [orders,quotes,siteRows]=await Promise.all([
+    const [orders,histQuotes,siteRows,savedQuotes]=await Promise.all([
       SB.rest(`orders?select=*&site_key=eq.${k}&order=ord_date.desc`),
       SB.rest(`quote_history?select=*&site_key=eq.${k}&order=quote_date.desc`),
-      SB.rest(`sites?select=*&site_key=eq.${k}&limit=1`)
+      SB.rest(`sites?select=*&site_key=eq.${k}&limit=1`),
+      SB.rest(`quotes?select=*&site_key=eq.${k}&order=created_at.desc`).catch(()=>[])
     ]);
+    /* Quotes saved in THIS app join the history, newest first, in the same
+       shape as the old workbook's log -- so autofill takes the most recent
+       contact wherever it came from, and a customer quoted here last week
+       populates today without waiting for the ERP. */
+    const quotes = (savedQuotes||[]).map(q=>({
+      quote_date:(q.created_at||'').slice(0,10), customer_name:q.customer_name,
+      phone:q.phone, email:q.email, address_raw:q.address_raw, city:q.city, zip:q.zip,
+      product:q.product, yards:q.yards, drive_hours:q.drive_hours, blow_hours:q.blow_hours,
+      labor_hours:q.labor_hours, equip_hours:q.equip_hours, bid_amount:q.bid_amount,
+      sales_person:q.rep_name, notes:q.notes, saved_in_app:true
+    })).concat(histQuotes||[]);
+    quotes.sort((a,b)=>String(b.quote_date||'').localeCompare(String(a.quote_date||'')));
     let customer=null;
     if(orders.length && orders[0].cust_id){
       try{
@@ -1205,14 +1264,10 @@ const LiveDB = {
     }
     return {orders,quotes,lines,site:(siteRows&&siteRows[0])||null,customer};
   },
-  async comparables(product,yards){
-    // Delivered ERP jobs only -- see DemoDB.comparables for why.
-    const p=encodeURIComponent(product);
-    return SB.rest('orders?select=ord_date,ship_addr1,ship_city,customer_name,total_yards,'+
-      'labor_hours,equip_hours,invc_tot,product'+
-      `&order_type=eq.blow_in&product=eq.${p}`+
-      `&total_yards=gte.${(yards*0.6).toFixed(2)}&total_yards=lte.${(yards*1.6).toFixed(2)}`+
-      '&equip_hours=gt.0&order=ord_date.desc&limit=12');
+  async customerJobs(custId){
+    return SB.rest('orders?select=ord_date,ship_addr1,ship_city,site_key,customer_name,'+
+      'primary_product,product,total_yards,labor_hours,equip_hours,invc_tot,cust_id'+
+      '&cust_id=eq.'+encodeURIComponent(custId)+'&order=ord_date.desc&limit=100');
   },
   async listQuotes(){ return SB.rest('quotes?select=*&order=created_at.desc&limit=300'); },
   /* With an id this updates the row in place. Without it, a rep clicking Save
@@ -1760,6 +1815,12 @@ function recalc(){
   $('#o_mk').textContent = p.cost==null?'—':money2(p.targetPrice-p.cost);
   $('#o_target').textContent=money(p.targetPrice);
   if($('#q_bid').value==='' && p.targetPrice!=null) $('#q_bid').placeholder = Math.round(p.targetPrice);
+  /* The split carries the job facts in its titles, so a rep reading the
+     bottom of the quote sees what the money is FOR without scrolling up. */
+  $('#k_mrev').innerHTML='Material revenue <span class="small">'+
+    esc($('#q_product').value)+' · '+yards+' yd</span>';
+  $('#k_lrev').innerHTML='Labor revenue <span class="small">'+hrs(laborHours)+'</span>';
+  $('#k_erev').innerHTML='Equipment revenue <span class="small">'+hrs(equipHours)+'</span>';
   $('#o_mrev').textContent=money2(p.materialRev);
   $('#o_lrev').textContent=money2(p.laborRev);
   $('#o_erev').textContent=money2(p.equipRev);
@@ -1774,42 +1835,74 @@ function recalc(){
 
   State.lastPrice = p;
   renderYardRef();
-  renderComparables();
 }
 
-async function renderComparables(){
-  const prod=$('#q_product').value, yards=parseFloat($('#q_yards').value)||0;
-  if(!yards){ $('#comparables').innerHTML='<div class="empty">Enter yards.</div>'; return; }
-  const rows = await DB.comparables(prod, yards);
-  $('#compsub').textContent = rows.length ? prod+' · '+Math.round(yards*0.6)+'–'+Math.round(yards*1.6)+' yd' : '';
-  if(!rows.length){
-    $('#comparables').innerHTML='<div class="empty">No delivered '+esc(prod)+' jobs near '+yards+' yd.</div>';
+/* "Has this customer had work done anywhere else?" -- searched by the ERP
+   customer number, which survives address changes and name spellings. The
+   number autofills when a site with history loads, and is editable so a rep
+   can look any account up directly. */
+async function renderCustJobs(){
+  const box=$('#custjobs'), sub=$('#custjobssub');
+  const id=($('#q_custno').value||'').trim();
+  sub.textContent='';
+  if(!id){
+    box.innerHTML='<div class="empty">Jobs delivered to this customer at other addresses '+
+      'show here — enter a Customer # above to search.</div>';
     return;
   }
+  let rows=[];
+  try{ rows = await DB.customerJobs(id); }
+  catch(e){ box.innerHTML='<div class="note bad">'+esc(e.message)+'</div>'; return; }
+  const here = State.site && State.site.key;
+  const other = rows.filter(o=>!here || o.site_key!==here);
+  const atThis = rows.length - other.length;
+  if(!other.length){
+    box.innerHTML='<div class="empty">'+
+      (rows.length
+        ? 'Customer #'+esc(id)+' has no delivered jobs at other addresses'+
+          (atThis?' — all '+atThis+' on file are at this one.':'.')
+        : 'No delivered jobs on file for customer #'+esc(id)+'.')+'</div>';
+    return;
+  }
+  sub.textContent = '· '+other.length+' at other address'+(other.length>1?'es':'');
   const t=el('table');
-  t.innerHTML='<thead><tr><th>Delivered</th><th>Address</th><th class="num">Yd</th>'+
-    '<th class="num">Labor hr</th><th class="num">Equip hr</th><th class="num">Equip hr/yd</th>'+
-    '<th class="num">Invoiced</th></tr></thead>';
+  t.innerHTML='<thead><tr><th>Delivered</th><th>Address</th><th>Product</th>'+
+    '<th class="num">Yd</th><th class="num">Invoiced</th></tr></thead>';
   const tb=el('tbody');
-  rows.forEach(r=>{
-    const y=+r.total_yards, e=+r.equip_hours;
+  other.slice(0,25).forEach(o=>{
     const tr=el('tr');
-    tr.innerHTML='<td class="mono small">'+dfmt(r.ord_date)+'</td>'+
-      '<td class="small">'+esc((r.ship_addr1||'').slice(0,30))+
-        (r.ship_city?'<span class="muted"> · '+esc(r.ship_city)+'</span>':'')+'</td>'+
-      '<td class="num">'+(y||'—')+'</td>'+
-      '<td class="num">'+(r.labor_hours??'—')+'</td>'+
-      '<td class="num">'+(e||'—')+'</td>'+
-      '<td class="num">'+((y&&e)?(e/y).toFixed(3):'—')+'</td>'+
-      '<td class="num">'+money(r.invc_tot)+'</td>';
+    tr.innerHTML='<td class="mono small">'+dfmt(o.ord_date)+'</td>'+
+      '<td class="small">'+esc((o.ship_addr1||'').slice(0,30))+
+        (o.ship_city?'<span class="muted"> · '+esc(o.ship_city)+'</span>':'')+'</td>'+
+      '<td class="small">'+esc(o.primary_product||o.product||'')+'</td>'+
+      '<td class="num">'+(o.total_yards??'—')+'</td>'+
+      '<td class="num">'+money(o.invc_tot)+'</td>';
     tb.appendChild(tr);
   });
   t.appendChild(tb);
-  $('#comparables').innerHTML=''; $('#comparables').appendChild(t);
-  const foot=el('div','small muted',
-    'Delivered jobs from the ERP — billed hours and invoiced totals, the same source as the blow-time '+
-    'estimate. Reference only: the quote above is priced from the current rate card.');
-  foot.style.marginTop='10px'; $('#comparables').appendChild(foot);
+  box.innerHTML=''; box.appendChild(t);
+  if(atThis){
+    const f=el('div','small muted', atThis+' more at the address above — shown in its history.');
+    f.style.marginTop='8px'; box.appendChild(f);
+  }
+}
+
+/* Requote: pull a past job's product and volume back into the builder. The
+   contact and address are already loaded from the site, so this is the one
+   click that turns "do it again like last time" into a priced quote. */
+function requoteFrom(product, yards){
+  const sel=$('#q_product');
+  if(product){
+    const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const opt=[...sel.options].find(o=>o.value===product) ||
+              [...sel.options].find(o=>norm(o.value)===norm(product));
+    if(opt) sel.value=opt.value;
+  }
+  if(yards!=null && yards!=='') $('#q_yards').value=yards;
+  autoFill={drive:true,blow:true};
+  recalc();
+  msg('Repopulated from the '+(product||'previous')+' job — check the hours and bid.', false);
+  $('#q_yards').scrollIntoView({block:'center',behavior:'smooth'});
 }
 
 /* ============================ site + history ============================= */
@@ -1861,8 +1954,10 @@ async function loadSite(key, seed, opts){
   // company names -- and a rep must never see "POWR" where an email goes.
   set('q_phone', pickPhone(pick(first&&first.phone, cu&&cu.phone, st&&st.phone)));
   set('q_email', pickEmail(first&&first.email, cu&&cu.email));
+  set('q_custno', pick(cu&&cu.cust_id, fo&&fo.cust_id));
   autoFill={drive:true,blow:true};
   renderHistory();
+  renderCustJobs();
   recalc();
 }
 
@@ -1910,15 +2005,19 @@ function renderHistory(){
       const lines=(s.lines[o.ord_nbr]||[]);
       const disc=lines.filter(l=>l.k==='discount');
       d.innerHTML='<div class="h"><span class="t">'+esc(o.primary_product||'Order')+
-        (o.total_yards?' · '+o.total_yards+' yd':'')+'</span>'+
+        (o.total_yards?' · '+o.total_yards+' yd':'')+
+        (o.customer_name?' <span class="muted">— '+esc(o.customer_name)+'</span>':'')+'</span>'+
         '<span class="d">'+dfmt(o.ord_date)+' <span class="tag g">delivered</span></span></div>'+
         '<div class="m">'+
           (o.labor_hours?'Labor '+o.labor_hours+' hr · ':'')+
           (o.equip_hours?'Equip '+o.equip_hours+' hr · ':'')+
-          'Invoiced '+money(o.invc_tot)+
-          (o.customer_name?' · '+esc(o.customer_name):'')+'</div>'+
+          'Invoiced '+money(o.invc_tot)+'</div>'+
         (disc.length?'<div class="m">'+disc.map(l=>'<span class="tag w">'+esc(l.d)+' '+money(l.e)+'</span>').join(' ')+'</div>':'')+
         (o.sum_descr?'<div class="n">'+esc(o.sum_descr)+(o.spcl_inst?'\n'+esc(o.spcl_inst):'')+'</div>':'');
+      const rq=el('button','btn ghost sm','Requote');
+      rq.style.marginTop='6px';
+      rq.onclick=()=>requoteFrom(o.primary_product||o.product, o.total_yards);
+      d.appendChild(rq);
     }
     tl.appendChild(d);
   });
@@ -2192,7 +2291,8 @@ async function renderQuotesList(){
 
   /* Three piles that mean different things to the business. Pending first --
      it is the pile that needs somebody's decision. */
-  const pending = shown.filter(r=>r.status!=='won' && r.status!=='lost');
+  const pending = shown.filter(r=>r.status==='sent');
+  const saved   = shown.filter(r=>r.status!=='sent' && r.status!=='won' && r.status!=='lost');
   const won     = shown.filter(r=>r.status==='won');
   const lost    = shown.filter(r=>r.status==='lost');
 
@@ -2232,26 +2332,21 @@ async function renderQuotesList(){
         '<td class="small">'+sched+'</td>'+
         '<td style="white-space:nowrap">'+
           '<button class="btn ghost sm" data-act="open">Open</button>'+
-          (opts&&opts.decide
-            ? ' <button class="btn ghost sm" data-act="win" style="color:var(--good)">Won</button>'+
-              ' <button class="btn ghost sm" data-act="lose" style="color:var(--danger)">Lost</button>'
-            : '')+
+          ((opts&&opts.acts)||[]).filter(a=>!a.when || a.when(r)).map(a=>
+            ' <button class="btn ghost sm" data-act="'+a.act+'" style="color:'+a.color+'">'+
+            a.label+'</button>').join('')+
         '</td>';
       tr.querySelector('[data-act="open"]').onclick=()=>openQuote(r);
-      if(opts&&opts.decide){
-        tr.querySelector('[data-act="win"]').onclick=async e=>{
+      ((opts&&opts.acts)||[]).forEach(a=>{
+        const btn=tr.querySelector('[data-act="'+a.act+'"]');
+        if(!btn) return;
+        btn.onclick=async e=>{
           const b=e.target; b.disabled=true; b.textContent='\u2026';
-          const note=await setQuoteStatus(r,'won').catch(err=>' \u2014 '+err.message);
-          flashQuotesMsg('Marked won'+note+'.');
+          const note=await setQuoteStatus(r,a.status).catch(err=>' \u2014 '+err.message);
+          flashQuotesMsg(a.done+note+'. Open the quote to undo.');
           renderQuotesList();
         };
-        tr.querySelector('[data-act="lose"]').onclick=async e=>{
-          const b=e.target; b.disabled=true; b.textContent='\u2026';
-          const note=await setQuoteStatus(r,'lost').catch(err=>' \u2014 '+err.message);
-          flashQuotesMsg('Marked lost'+note+'. Open it and change the status to undo.');
-          renderQuotesList();
-        };
-      }
+      });
       tb.appendChild(tr);
     });
     t.appendChild(tb); wrap.appendChild(t);
@@ -2263,7 +2358,23 @@ async function renderQuotesList(){
   box.innerHTML='<div id="qlistmsg">'+
     (qflashMsg?'<div class="note ok">'+esc(qflashMsg)+'</div>':'')+'</div>';
   qflashMsg='';
-  box.appendChild(section('Pending \u2014 awaiting confirmation', pending, 'w', {decide:true}));
+  /* Four piles. On hold first -- those are blocking a truck's day and need
+     somebody's decision. Saved quotes hold nothing, so they wait quietly. */
+  box.appendChild(section('On hold \u2014 awaiting confirmation', pending, 'w', {acts:[
+    {act:'sched', label:'Schedule', status:'won',  color:'var(--good)',
+     done:'Scheduled \u2014 the hold is now a confirmed booking'},
+    {act:'lose',  label:'Lost',     status:'lost', color:'var(--danger)',
+     done:'Marked lost \u2014 the hold is off the calendar'}
+  ]}));
+  box.appendChild(section('Saved \u2014 not on the calendar', saved, '', {acts:[
+    {act:'hold', label:'Hold', status:'sent', color:'var(--warn)',
+     when:r=>!!(r.scheduled_date && r.crew_id),
+     done:'On hold \u2014 placed on the calendar'},
+    {act:'sched', label:'Schedule', status:'won', color:'var(--good)',
+     when:r=>!!(r.scheduled_date && r.crew_id),
+     done:'Scheduled \u2014 booked on the calendar'},
+    {act:'lose', label:'Lost', status:'lost', color:'var(--danger)', done:'Marked lost'}
+  ]}));
   box.appendChild(section('Won', won, 'g'));
   box.appendChild(section('Lost', lost, 'd'));
 }
@@ -2372,11 +2483,12 @@ async function openQuote(r){
   const set=(id,v)=>{ const e=$('#'+id); if(e) e.value = (v==null?'':String(v)); };
   set('q_customer', r.customer_name); set('q_phone', r.phone); set('q_email', r.email);
   set('q_address', r.address_raw);    set('q_city', r.city);   set('q_zip', r.zip);
+  set('q_account', r.account_no); set('q_so', r.so_no); set('q_pn', r.project_no);
   set('q_yards', r.yards); set('q_prep', r.prep_hours); set('q_drive', r.drive_hours);
   set('q_blow', r.blow_hours); set('q_helpers', r.helpers); set('q_notes', r.notes);
   set('q_bid', r.bid_amount);
   $('#q_pw').value = r.prevailing_wage ? '1' : '0';
-  $('#q_status').value = r.status || 'draft';
+  State.qstatus = r.status || 'draft';
   if(r.product && [...$('#q_product').options].some(o=>o.value===r.product))
     $('#q_product').value = r.product;
 
@@ -2661,8 +2773,20 @@ async function refreshCrewLoad(){
    writes a HOLD: grey, titled HOLD, marked Free rather than Busy, and saying NOT
    APPROVED in the body. Approving turns that same event solid in place. A lost
    quote comes off the calendar entirely: it is not waiting on anything. */
-function isWon(){ return $('#q_status').value === 'won'; }
-function isLost(){ return $('#q_status').value === 'lost'; }
+/* There is no status dropdown any more: the three buttons ARE the status.
+   Save quote = draft (saved pile, nothing on the calendar), Hold = sent (grey
+   hold), Schedule = won (confirmed booking), Mark lost = lost. State.qstatus
+   remembers what the open quote currently is. */
+function isWon(){ return State.qstatus === 'won'; }
+function isLost(){ return State.qstatus === 'lost'; }
+function renderStatusNow(){
+  const s = State.qstatus || 'draft';
+  const tag = s==='won' ? '<span class="tag g">scheduled</span>'
+            : s==='sent' ? '<span class="tag w">on hold</span>'
+            : s==='lost' ? '<span class="tag d">lost</span>'
+            : '<span class="tag">saved</span>';
+  const box=$('#statusnow'); if(box) box.innerHTML = State.savedQuoteId ? tag : '';
+}
 
 function renderSchedState(q){
   const has  = q && q.scheduled_date && q.crew_id;
@@ -2787,18 +2911,20 @@ function renderCalEmbed(){
 
 function renderWonHint(live){
   const box = $('#schedwon'); if(!box) return;
+  renderStatusNow();
   if(isWon()){
     box.innerHTML = live
-      ? '<span class="tag g">approved — on the calendar as a confirmed job</span>'
-      : 'Status is <b>won</b> — saving books this on the calendar as a confirmed job.';
+      ? '<span class="tag g">scheduled — on the calendar as a confirmed job</span>'
+      : 'This quote is <b>scheduled</b> — Schedule again after edits to update the booking.';
   }else if(isLost()){
-    box.innerHTML = 'Status is <b>lost</b>. Saving takes this off the calendar — '+
-      'a lost quote isn’t waiting on approval, so it shouldn’t hold a crew day.';
+    box.innerHTML = 'This quote is marked <b>lost</b> and holds nothing on the calendar. '+
+      'Hold or Schedule puts it back.';
+  }else if(State.qstatus==='sent'){
+    box.innerHTML = 'This quote is <b>on hold</b> — grey, marked <i>not approved</i>, shown '+
+      'as free. <b>Schedule</b> turns the same event into a confirmed booking; '+
+      '<b>Hold</b> again after edits updates it.';
   }else{
-    box.innerHTML = 'Status is <b>'+esc($('#q_status').value)+'</b>, so saving puts this '+
-      'on the calendar as a <b>HOLD</b> — grey, marked <i>not approved</i>, shown as '+
-      'free. Change it to <b>won</b> and save again: the same event becomes a '+
-      'confirmed booking.';
+    box.innerHTML = '';
   }
 }
 
@@ -2831,23 +2957,35 @@ async function doUnschedule(){
 }
 
 /* ================================ save ================================== */
-async function saveQuote(){
+/* One function, four verbs. The buttons pass the status they mean:
+     Save quote -> 'draft'  saved pile only; any hold/booking comes OFF
+     Hold       -> 'sent'   grey HOLD on the calendar (needs date + truck)
+     Schedule   -> 'won'    confirmed booking          (needs date + truck)
+     Mark lost  -> 'lost'   saved as lost; event removed
+   Every verb also saves the form, so updating a held job is one click of Hold
+   -- there is no separate "update the calendar" step to forget. */
+async function saveQuote(status){
+  status = status || State.qstatus || 'draft';
   const p = State.lastPrice; if(!p) return;
   const rc = currentRate();
   if(rc && rc.needs_cost){ msg('Set a cost for '+rc.product+' first.', true); return; }
+  if((status==='sent'||status==='won') && !($('#q_scheddate').value && $('#q_crew').value)){
+    msg((status==='sent'?'A hold':'Scheduling')+' needs a slot — pick a date and a truck first.', true);
+    return;
+  }
   const addr=$('#q_address').value.trim();
   const ctx=estimateCtx();
   const d=Engine.estimateDrive(ctx), b=Engine.estimateBlow(ctx);
   const q={
     rep_name: (State.user&&State.user.email) || 'demo',
-    status: $('#q_status').value,
+    status: status,
     customer_name: $('#q_customer').value.trim()||null,
     phone: $('#q_phone').value.trim()||null,
     email: $('#q_email').value.trim()||null,
     address_raw: addr||null,
     city: $('#q_city').value.trim()||extractCity(addr)||null,
     zip: $('#q_zip').value.trim()||extractZip(addr)||null,
-    site_key: streetKey(addr)||null,
+    site_key: resolveSiteKey(addr)||null,
     product: $('#q_product').value,
     yards: parseFloat($('#q_yards').value)||0,
     prep_hours: parseFloat($('#q_prep').value)||0,
@@ -2865,6 +3003,9 @@ async function saveQuote(){
     material_rev: p.materialRev, labor_rev: p.laborRev, equip_rev: p.equipRev,
     gross_margin: p.grossMargin,
     notes: $('#q_notes').value.trim()||null,
+    account_no: $('#q_account').value.trim()||null,
+    so_no: $('#q_so').value.trim()||null,
+    project_no: $('#q_pn').value.trim()||null,
     /* The booking lives on the quote like everything else, so one Save carries
        it. In live mode the calendar sync below re-writes these via the script
        (idempotent); in demo mode this is all the booking there is. */
@@ -2877,19 +3018,17 @@ async function saveQuote(){
     const wasNew = !State.savedQuoteId;
     let saved = await DB.saveQuote(q, State.savedQuoteId);
     State.savedQuoteId = saved && saved.id;
+    State.qstatus = status;
     State.scheduled = !!(saved && saved.scheduled_date);
 
-    /* Save is the ONLY calendar verb. Pick a date and a crew and Save books it;
-       change the status and Save re-books it as hold/confirmed/removed; edit the
-       customer or the hours and Save updates the event body. There used to be a
-       separate "Book on calendar" button, and it produced exactly the failure
-       you would expect: the button synced the STORED status while the dropdown
-       showed a new one, so a hold refused to become a booking. One verb, no
-       skew. */
+    /* The clicked button is the ONLY calendar verb. Hold and Schedule write or
+       update the event (the script re-reads the freshly-saved status, so what
+       lands matches the button); Save quote and Mark lost take any existing
+       event off. Nothing here creates an event the rep did not ask for. */
     let sync = '';
     const wantDate = $('#q_scheddate').value, wantCrew = $('#q_crew').value;
-    if(wantDate && wantCrew){
-      const wasLive = !!(saved && saved.calendar_event_id);
+    const wasLive = !!(saved && saved.calendar_event_id);
+    if(status==='sent' || status==='won'){
       if(DB.mode==='demo'){
         sync = ' (demo — the booking is saved here, no real calendar)';
         State.scheduled = true;
@@ -2898,23 +3037,27 @@ async function saveQuote(){
           const r = await syncBooking(saved.id, wantCrew, wantDate);
           if(r && r.quote) saved = r.quote;
           State.scheduled = !r.removed;
-          sync = r.removed ? ' Taken off the calendar (quote is lost).'
-               : r.hold    ? (wasLive ? ' Calendar hold updated.'
-                                      : ' Put on the calendar as a HOLD, pending approval.')
-               :             ' Booked on the calendar.';
+          sync = status==='won'
+               ? ' Booked on the calendar as a confirmed job.'
+               : (wasLive ? ' Calendar hold updated.'
+                          : ' Placed on the calendar as a grey HOLD.');
         }catch(e){ sync = ' Calendar not updated: '+e.message; }
       }
       refreshCrewLoad();
-    }else if(saved && saved.calendar_event_id){
-      /* The form's date or crew was cleared but an event is still out there.
-         Never delete silently on Save -- say so and leave Remove booking as the
-         explicit way to take it off. */
-      sync = ' The calendar still shows the old booking — use Remove booking to take it off, '+
-             'or set a date and crew and Save again to move it.';
+    }else if(wasLive && DB.mode!=='demo'){
+      /* draft or lost with an event still out there: take it off. */
+      try{
+        const r = await GS.remove(saved.id);
+        if(r && r.quote) saved = r.quote;
+        State.scheduled = false;
+        sync = ' Taken off the calendar — Hold or Schedule puts it back.';
+      }catch(e){ sync = ' Calendar not updated: '+e.message; }
+      refreshCrewLoad();
     }
     renderSchedState(saved||{});
-    msg((wasNew?'Saved.':'Updated.')+(DB.mode==='demo'&&!sync?' (demo mode — this browser only)':'')+
-        sync, false);
+    const verb = status==='won' ? 'Scheduled.' : status==='sent' ? 'On hold.'
+               : status==='lost' ? 'Marked lost.' : (wasNew?'Saved.':'Updated.');
+    msg(verb+(DB.mode==='demo'&&!sync?' (demo mode — this browser only)':'')+sync, false);
     $('#savequote').textContent = 'Update quote';
     if(State.site && State.site.key===q.site_key){
       State.site.quotes.unshift({quote_date:new Date().toISOString().slice(0,10),product:q.product,yards:q.yards,
@@ -2939,9 +3082,6 @@ function wire(){
   $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); renderSlotChips(); });
   $('#q_scheddate').addEventListener('change', renderCalEmbed);
   $('#btnunschedule').onclick = doUnschedule;
-  $('#q_status').addEventListener('change', ()=>{
-    renderWonHint(State.scheduled && State.calendarLive);
-  });
   $('#qsearch').addEventListener('input', debounce(()=>{
     qsearchTerm = $('#qsearch').value.trim();
     renderQuotesList();
@@ -2957,16 +3097,22 @@ function wire(){
   $('#q_blow').addEventListener('input',()=>{autoFill.blow=false; recalc();});
   $('#q_bid').addEventListener('input',recalc);
   $('#q_address').addEventListener('change',()=>{
-    const k=streetKey($('#q_address').value);
+    const k=resolveSiteKey($('#q_address').value);
     if(!$('#q_city').value) $('#q_city').value=extractCity($('#q_address').value);
     if(!$('#q_zip').value)  $('#q_zip').value=extractZip($('#q_address').value);
     if(k) loadSite(k,{address1:$('#q_address').value,city:$('#q_city').value,zip:$('#q_zip').value},
                    {keepTyped:true});
   });
-  $('#savequote').onclick=saveQuote;
+  $('#savequote').onclick=()=>saveQuote('draft');
+  $('#holdquote').onclick=()=>saveQuote('sent');
+  $('#schedquote').onclick=()=>saveQuote('won');
+  $('#lostquote').onclick=()=>saveQuote('lost');
+  $('#q_custno').addEventListener('change', renderCustJobs);
   $('#newquote').onclick=()=>{
-    ['q_customer','q_phone','q_email','q_address','q_city','q_zip','q_notes','q_bid'].forEach(i=>$('#'+i).value='');
+    ['q_customer','q_phone','q_email','q_address','q_city','q_zip','q_notes','q_bid',
+     'q_account','q_so','q_pn','q_custno'].forEach(i=>$('#'+i).value='');
     State.site=null; State.savedQuoteId=null; State.scheduled=false; State.calendarLive=false;
+    State.qstatus='draft'; renderCustJobs();
     $('#q_scheddate').value=''; $('#q_schedtime').value='';
     $('#q_scheddur').value=''; slotDurTouched=false;
     $('#q_crew').value=''; $('#schedmsg').innerHTML='';
