@@ -451,6 +451,19 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   </div>
 </form></dialog>
 
+<!-- Shown when a rep edits a customer name or address that was filled from an
+     existing record. Guessing silently either way would be wrong: keeping the
+     record's value hides a genuine correction, keeping the edit can silently
+     detach a quote from the customer's history. So the rep decides. -->
+<dialog id="editdlg"><div class="dlg">
+  <h2>Confirm this change</h2>
+  <div id="editdlgmsg" class="small" style="margin:8px 0 16px"></div>
+  <div class="row">
+    <button class="btn" id="editkeep">Keep my edit</button>
+    <button class="btn ghost" id="editrestore">Put the original back</button>
+  </div>
+</div></dialog>
+
 <!-- engine.js inlined at build time (etl/build.py) so this file is
      entirely self-contained: nothing else needs deploying with it. -->
 <script>
@@ -791,7 +804,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-31-verbs';   // shown in the header; check it after deploying
+const BUILD = '2026-08-31-confirm';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -899,7 +912,7 @@ function extractCity(a){
 const LIVE = !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
 const State = { user:null, token:null, isAdmin:false, ref:null, site:null, comps:[],
                 index:null, indexErr:null, savedQuoteId:null, scheduled:false,
-                qstatus:'draft' };
+                qstatus:'draft', prefill:{customer:null, address:null} };
 
 /* ---- request tracing, so a hang can always explain itself ---- */
 const Diag = {
@@ -1956,6 +1969,17 @@ async function loadSite(key, seed, opts){
   set('q_phone', pickPhone(pick(first&&first.phone, cu&&cu.phone, st&&st.phone)));
   set('q_email', pickEmail(first&&first.email, cu&&cu.email));
   set('q_custno', pick(cu&&cu.cust_id, fo&&fo.cust_id));
+  /* Remember what came from the records, so a later edit to it can ask for
+     confirmation. Only sites with actual history count -- a brand-new address
+     is the rep's own text, and second-guessing that would be noise. And the
+     customer name is only "from the records" when the field actually holds the
+     record's value, not something the rep typed that keepTyped protected. */
+  const hasRecord = !!((h.orders&&h.orders.length) || (h.quotes&&h.quotes.length) || h.site);
+  const recCust = pick(fo&&fo.customer_name, first&&first.customer_name, cu&&cu.customer_name, st&&st.attention);
+  State.prefill = {
+    customer: (hasRecord && recCust && $('#q_customer').value.trim()===recCust) ? recCust : null,
+    address:  hasRecord ? ($('#q_address').value.trim()||null) : null
+  };
   autoFill={drive:true,blow:true};
   renderHistory();
   renderCustJobs();
@@ -3097,12 +3121,39 @@ function wire(){
   $('#q_drive').addEventListener('input',()=>{autoFill.drive=false; recalc();});
   $('#q_blow').addEventListener('input',()=>{autoFill.blow=false; recalc();});
   $('#q_bid').addEventListener('input',recalc);
+  /* A field that was filled from an existing record does not change silently:
+     the rep confirms the edit (or puts the original back). Picking a different
+     site from the dropdown is already an explicit choice, so only typed edits
+     -- which fire 'change' -- go through the dialog. */
+  function confirmPrefillEdit(field, label, oldVal, onKeep){
+    const dlg=$('#editdlg'); if(!dlg || !dlg.showModal){ State.prefill[field]=null; if(onKeep) onKeep(); return; }
+    const now=$(field==='customer'?'#q_customer':'#q_address').value.trim();
+    $('#editdlgmsg').innerHTML =
+      'The '+label+' was filled from an existing customer record:<br>'+
+      '<b>'+esc(oldVal)+'</b><br>and you changed it to:<br><b>'+esc(now)+'</b><br><br>'+
+      'Keep your edit, or put the record’s value back?';
+    dlg.showModal();
+    $('#editkeep').onclick=()=>{ dlg.close(); State.prefill[field]=null; if(onKeep) onKeep(); };
+    $('#editrestore').onclick=()=>{
+      dlg.close();
+      $(field==='customer'?'#q_customer':'#q_address').value=oldVal;
+    };
+  }
+  $('#q_customer').addEventListener('change',()=>{
+    const old=State.prefill.customer, now=$('#q_customer').value.trim();
+    if(old && now!==old) confirmPrefillEdit('customer','customer name', old);
+  });
   $('#q_address').addEventListener('change',()=>{
-    const k=resolveSiteKey($('#q_address').value);
-    if(!$('#q_city').value) $('#q_city').value=extractCity($('#q_address').value);
-    if(!$('#q_zip').value)  $('#q_zip').value=extractZip($('#q_address').value);
-    if(k) loadSite(k,{address1:$('#q_address').value,city:$('#q_city').value,zip:$('#q_zip').value},
-                   {keepTyped:true});
+    const proceed=()=>{
+      const k=resolveSiteKey($('#q_address').value);
+      if(!$('#q_city').value) $('#q_city').value=extractCity($('#q_address').value);
+      if(!$('#q_zip').value)  $('#q_zip').value=extractZip($('#q_address').value);
+      if(k) loadSite(k,{address1:$('#q_address').value,city:$('#q_city').value,zip:$('#q_zip').value},
+                     {keepTyped:true});
+    };
+    const old=State.prefill.address, now=$('#q_address').value.trim();
+    if(old && now!==old) confirmPrefillEdit('address','address', old, proceed);
+    else proceed();
   });
   $('#savequote').onclick=()=>saveQuote('draft');
   $('#holdquote').onclick=()=>saveQuote('sent');
@@ -3113,7 +3164,7 @@ function wire(){
     ['q_customer','q_phone','q_email','q_address','q_city','q_zip','q_notes','q_bid',
      'q_account','q_so','q_pn','q_custno'].forEach(i=>$('#'+i).value='');
     State.site=null; State.savedQuoteId=null; State.scheduled=false; State.calendarLive=false;
-    State.qstatus='draft'; renderCustJobs();
+    State.qstatus='draft'; State.prefill={customer:null,address:null}; renderCustJobs();
     $('#q_scheddate').value=''; $('#q_schedtime').value='';
     $('#q_scheddur').value=''; slotDurTouched=false;
     $('#q_crew').value=''; $('#schedmsg').innerHTML='';
