@@ -329,7 +329,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               </div>
               <div class="row">
                 <div><label class="f">Date</label><input type="date" id="q_scheddate"></div>
-                <div><label class="f">Crew</label><select id="q_crew"></select></div>
+                <div><label class="f">Truck</label><select id="q_crew"></select></div>
               </div>
               <div class="row" style="margin-top:8px">
                 <div><label class="f">Start time</label><input type="time" id="q_schedtime" step="900"></div>
@@ -363,12 +363,12 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
            spans both columns of .qgrid; on narrow screens the grid is one
            column anyway. -->
       <div class="card" id="calembedcard" style="grid-column:1/-1">
-        <h3>Crew calendar <span class="muted small">live from Google — follows the
+        <h3>Truck calendar <span class="muted small">live from Google — follows the
           date you pick</span></h3>
         <div class="body">
           <div id="calembedbody"></div>
           <div class="small muted" style="margin-top:6px">If this asks for permission,
-            your Google account needs at least read access to the crew calendar — ask
+            your Google account needs at least read access to the truck calendar — ask
             an admin to share it (<i>See all event details</i> is enough).</div>
         </div>
       </div>
@@ -378,7 +378,12 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   <!-- ============================ SAVED QUOTES ============================ -->
   <section id="view-quotes" class="hide">
     <div class="card"><h3>Saved quotes <span class="muted" id="qcount"></span></h3>
-      <div class="body scroll" id="quoteslist"></div></div>
+      <div class="body">
+        <input type="text" id="qsearch" autocomplete="off"
+               placeholder="Search by customer or address…"
+               style="max-width:420px;margin-bottom:14px">
+        <div class="scroll" id="quoteslist"></div>
+      </div></div>
   </section>
 
   <!-- ============================ DASHBOARD ============================ -->
@@ -768,7 +773,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-31-cal';   // shown in the header; check it after deploying
+const BUILD = '2026-08-31-piles';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1092,10 +1097,15 @@ const DemoDB = {
   async ordersAll(){ return this.B.orders; },
   async quoteHistoryAll(){ return this.B.quote_history; },
   async crews(){
-    return [{id:'1',name:'Crew #1',color:'#2f6b3c',max_equip_hours:8,max_jobs:4,calendar_id:null},
-            {id:'2',name:'Crew #2',color:'#a8620f',max_equip_hours:8,max_jobs:4,calendar_id:null}];
+    return [{id:'1',name:'Truck #56',color:'#2f6b3c',max_equip_hours:8,max_jobs:4,calendar_id:null},
+            {id:'2',name:'Truck #17',color:'#a8620f',max_equip_hours:8,max_jobs:4,calendar_id:null}];
   },
   async appConfig(){ return {}; },
+  async patchQuote(id, patch){
+    const ex=this._quotes.find(x=>x.id===id);
+    if(ex){ Object.assign(ex,patch); saveLocalQuotes(this._quotes); }
+    return ex;
+  },
   async setBooking(){
     // Demo mode is deliberately unable to book. A demo that appeared to write to
     // a real calendar would be worse than one that cannot.
@@ -1232,6 +1242,11 @@ const LiveDB = {
     const rows = await SB.rest('app_config?select=key,value');
     const m = {}; (rows||[]).forEach(r=>{ m[r.key] = r.value; });
     return m;
+  },
+  async patchQuote(id, patch){
+    const r = await SB.rest('quotes?id=eq.'+encodeURIComponent(id),
+      {method:'PATCH', headers:{Prefer:'return=representation'}, body:JSON.stringify(patch)});
+    return r && r[0];
   },
   async setBooking(quoteId, patch){
     const r = await SB.rest('quotes?id=eq.'+encodeURIComponent(quoteId),
@@ -2132,47 +2147,129 @@ function initPickers(){
 }
 
 /* ============================ saved quotes ============================== */
+/* One place to change a quote's status from the list, carrying the calendar
+   with it. "Win" is the moment a pending hold becomes sold work: the status is
+   written first, then the same server-side sync that Save uses re-reads the
+   quote and turns the grey hold into a solid booking. "Lost" removes the event
+   entirely. Neither asks for confirmation -- both are one click to undo (Open
+   the quote, change the status, Save). */
+async function setQuoteStatus(r, status){
+  await (DB.patchQuote
+    ? DB.patchQuote(r.id, {status})
+    : DB.saveQuote({status}, r.id));
+  let note='';
+  if(r.scheduled_date && r.crew_id && GS.configured() && DB.mode!=='demo'){
+    try{
+      const time = r.scheduled_time ? String(r.scheduled_time).slice(0,5) : null;
+      const res = await GS.sync(r.id, r.crew_id, r.scheduled_date, time,
+        Number(r.scheduled_hours)||null);
+      note = res.removed ? ' — taken off the calendar'
+           : res.hold    ? ' — still a hold on the calendar'
+           :               ' — hold converted to a confirmed booking';
+    }catch(e){ note=' — calendar not updated: '+e.message; }
+  }
+  return note;
+}
+
+let qsearchTerm = '';
 async function renderQuotesList(){
   const box=$('#quoteslist');
   box.innerHTML='<div class="empty"><span class="spin"></span></div>';
   let rows=[]; try{ rows=await DB.listQuotes(); }catch(e){ box.innerHTML='<div class="note bad">'+esc(e.message)+'</div>'; return; }
-  $('#qcount').textContent = rows.length ? '· '+rows.length : '';
+  $('#qcount').textContent = rows.length ? '\u00b7 '+rows.length : '';
   if(!rows.length){ box.innerHTML='<div class="empty">No quotes saved yet.'+
     (DB.mode==='demo'?' In demo mode these are kept in this browser only.':'')+'</div>'; return; }
-  const t=el('table');
-  t.innerHTML='<thead><tr><th>Saved</th><th>Rep</th><th>Customer</th><th>Address</th><th>Product</th>'+
-    '<th class="num">Yd</th><th class="num">Cost</th><th class="num">Bid</th><th class="num">Margin</th>'+
-    '<th>Status</th><th>Scheduled</th><th></th></tr></thead>';
-  const tb=el('tbody');
-  rows.forEach(r=>{
-    const tr=el('tr');
-    const gm=r.gross_margin;
-    const crew = CREWS.find(c=>String(c.id)===String(r.crew_id));
-    const onCal = !!r.calendar_event_id;
-    const isHold = onCal && r.status !== 'won';
-    const sched = r.scheduled_date
-      ? '<span class="tag '+(onCal ? (isHold?'w':'g') : 'd')+'">'+
-        (onCal ? (isHold?'hold':'booked') : 'not on calendar')+'</span> '+
-        esc(dfmt(r.scheduled_date))+
-        (crew?'<br><span class="small muted">'+esc(crew.name)+'</span>':'')
-      : '<span class="muted small">—</span>';
-    tr.innerHTML='<td class="mono small">'+esc((r.created_at||'').slice(0,10))+'</td>'+
-      '<td class="small">'+esc(r.rep_name||'')+'</td>'+
-      '<td class="small">'+esc(r.customer_name||'')+'</td>'+
-      '<td class="small">'+esc((r.address_raw||'').slice(0,30))+'</td>'+
-      '<td class="small">'+esc(r.product||'')+'</td>'+
-      '<td class="num">'+(r.yards??'')+'</td>'+
-      '<td class="num">'+money(r.total_cost)+'</td>'+
-      '<td class="num">'+money(r.bid_amount)+'</td>'+
-      '<td class="num">'+(gm==null?'—':'<span class="'+(gm<0?'tag d':'')+'">'+pctf(gm)+'</span>')+'</td>'+
-      '<td><span class="tag'+(r.status==='won'?' g':r.status==='lost'?' d':'')+'">'+esc(r.status||'draft')+'</span></td>'+
-      '<td class="small">'+sched+'</td>'+
-      '<td><button class="btn ghost sm">Open</button></td>';
-    tr.querySelector('button').onclick=()=>openQuote(r);
-    tb.appendChild(tr);
-  });
-  t.appendChild(tb); box.innerHTML=''; box.appendChild(t);
+
+  /* Search: customer or address, any word order. "smith oak" finds the Smith
+     quote on Oak St, whichever field each word lives in. */
+  const terms = qsearchTerm.toLowerCase().split(/\s+/).filter(Boolean);
+  const match = r => {
+    if(!terms.length) return true;
+    const hay = ((r.customer_name||'')+' '+(r.address_raw||'')+' '+(r.city||'')).toLowerCase();
+    return terms.every(w=>hay.includes(w));
+  };
+  const shown = rows.filter(match);
+
+  /* Three piles that mean different things to the business. Pending first --
+     it is the pile that needs somebody's decision. */
+  const pending = shown.filter(r=>r.status!=='won' && r.status!=='lost');
+  const won     = shown.filter(r=>r.status==='won');
+  const lost    = shown.filter(r=>r.status==='lost');
+
+  const section = (title, list, cls, opts) => {
+    const wrap=el('div');
+    wrap.innerHTML='<div class="kv" style="border:0;padding:14px 0 6px">'+
+      '<span class="k" style="font-weight:600;color:var(--ink)">'+esc(title)+
+      ' <span class="tag '+cls+'">'+list.length+'</span></span></div>';
+    if(!list.length){
+      wrap.innerHTML+='<div class="empty small" style="padding:8px 0 14px">'+
+        (terms.length?'Nothing here matches the search.':'Nothing here.')+'</div>';
+      return wrap;
+    }
+    const t=el('table');
+    t.innerHTML='<thead><tr><th>Saved</th><th>Customer</th><th>Address</th><th>Product</th>'+
+      '<th class="num">Yd</th><th class="num">Bid</th><th>Scheduled</th><th></th></tr></thead>';
+    const tb=el('tbody');
+    list.forEach(r=>{
+      const tr=el('tr');
+      const crew = CREWS.find(c=>String(c.id)===String(r.crew_id));
+      const onCal = !!r.calendar_event_id;
+      const isHold = onCal && r.status !== 'won';
+      const sched = r.scheduled_date
+        ? '<span class="tag '+(onCal ? (isHold?'w':'g') : 'd')+'">'+
+          (onCal ? (isHold?'hold':'booked') : 'not on calendar')+'</span> '+
+          esc(dfmt(r.scheduled_date))+
+          (r.scheduled_time?' '+esc(String(r.scheduled_time).slice(0,5)):'')+
+          (crew?'<br><span class="small muted">'+esc(crew.name)+'</span>':'')
+        : '<span class="muted small">\u2014</span>';
+      tr.innerHTML='<td class="mono small">'+esc((r.created_at||'').slice(0,10))+'</td>'+
+        '<td class="small">'+esc(r.customer_name||'')+
+          '<br><span class="small muted">'+esc(r.rep_name||'')+'</span></td>'+
+        '<td class="small">'+esc((r.address_raw||'').slice(0,34))+'</td>'+
+        '<td class="small">'+esc(r.product||'')+'</td>'+
+        '<td class="num">'+(r.yards??'')+'</td>'+
+        '<td class="num">'+money(r.bid_amount)+'</td>'+
+        '<td class="small">'+sched+'</td>'+
+        '<td style="white-space:nowrap">'+
+          '<button class="btn ghost sm" data-act="open">Open</button>'+
+          (opts&&opts.decide
+            ? ' <button class="btn ghost sm" data-act="win" style="color:var(--good)">Won</button>'+
+              ' <button class="btn ghost sm" data-act="lose" style="color:var(--danger)">Lost</button>'
+            : '')+
+        '</td>';
+      tr.querySelector('[data-act="open"]').onclick=()=>openQuote(r);
+      if(opts&&opts.decide){
+        tr.querySelector('[data-act="win"]').onclick=async e=>{
+          const b=e.target; b.disabled=true; b.textContent='\u2026';
+          const note=await setQuoteStatus(r,'won').catch(err=>' \u2014 '+err.message);
+          flashQuotesMsg('Marked won'+note+'.');
+          renderQuotesList();
+        };
+        tr.querySelector('[data-act="lose"]').onclick=async e=>{
+          const b=e.target; b.disabled=true; b.textContent='\u2026';
+          const note=await setQuoteStatus(r,'lost').catch(err=>' \u2014 '+err.message);
+          flashQuotesMsg('Marked lost'+note+'. Open it and change the status to undo.');
+          renderQuotesList();
+        };
+      }
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb); wrap.appendChild(t);
+    return wrap;
+  };
+
+  /* The status buttons flash a message and then re-render this list -- so the
+     message must be carried INTO the render, not written before it. */
+  box.innerHTML='<div id="qlistmsg">'+
+    (qflashMsg?'<div class="note ok">'+esc(qflashMsg)+'</div>':'')+'</div>';
+  qflashMsg='';
+  box.appendChild(section('Pending \u2014 awaiting confirmation', pending, 'w', {decide:true}));
+  box.appendChild(section('Won', won, 'g'));
+  box.appendChild(section('Lost', lost, 'd'));
 }
+
+let qflashMsg='';
+function flashQuotesMsg(text){ qflashMsg=text; }
 
 /* One-click proof that the whole chain works: signed-in user -> Edge Function ->
    Google token -> the calendar itself. Worth having as a button because the
@@ -2222,7 +2319,7 @@ async function runCalCheck(){
       'sign-in page instead of an answer.'));
     btn.disabled=false; return;
   }
-  rows.push(line(true,'Crews', (CREWS||[]).length+' active'));
+  rows.push(line(true,'Trucks', (CREWS||[]).length+' active'));
 
   /* The service itself. This is the part that can be slow -- a cold Apps Script
      takes a couple of seconds -- so it is timed and reported separately. */
@@ -2262,7 +2359,7 @@ async function runCalCheck(){
 
   paint('<div class="small muted" style="margin-top:8px">Finished in '+secs()+'. Everything '+
     'is connected — a real booking will work. Reps never see a Google prompt: the script '+
-    'does the writing as '+esc(ping.runningAs||'its owner')+'.<br>Crew colours: '+
+    'does the writing as '+esc(ping.runningAs||'its owner')+'.<br>Truck colours: '+
     esc((CREWS||[]).map(c=>c.name+' '+(c.calendar_color_id||'—')).join(' · '))+'</div>');
   btn.disabled=false;
 }
@@ -2484,7 +2581,7 @@ let loadReq = 0;
 async function refreshCrewLoad(){
   const box=$('#crewload');
   const date=$('#q_scheddate').value;
-  if(!date){ box.innerHTML='<span class="muted">Pick a date to see what each crew already has.</span>'; return; }
+  if(!date){ box.innerHTML='<span class="muted">Pick a date to see what each truck already has.</span>'; return; }
   const my=++loadReq;
   box.innerHTML='<span class="spin" style="width:10px;height:10px"></span> checking crew load…';
 
@@ -2540,7 +2637,7 @@ async function refreshCrewLoad(){
         (over?' \u2014 <b>at capacity</b>':'')+
         (slots.length?' <span class="small muted">\u00b7 '+esc(slots.join(', '))+'</span>':'')+
         '</span></div>';
-  }).join('') || '<span class="muted">No crews configured.</span>';
+  }).join('') || '<span class="muted">No trucks configured.</span>';
 
   /* Anything on the shared calendar without a crew stamp was put there by hand.
      It belongs to nobody in particular but still consumes the day, so it is
@@ -2845,6 +2942,10 @@ function wire(){
   $('#q_status').addEventListener('change', ()=>{
     renderWonHint(State.scheduled && State.calendarLive);
   });
+  $('#qsearch').addEventListener('input', debounce(()=>{
+    qsearchTerm = $('#qsearch').value.trim();
+    renderQuotesList();
+  }, 150));
   $('#refreshcounts').onclick=e=>{ e.stopPropagation(); renderDataStatus(); };
   $('#calcheck').onclick=e=>{ e.stopPropagation(); runCalCheck(); };
   $$('#tabs button').forEach(b=>b.onclick=()=>show(b.dataset.view));
