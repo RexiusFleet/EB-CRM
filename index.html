@@ -348,15 +348,6 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                 <button class="btn ghost sm hide" id="btnunschedule">Remove booking</button>
               </div>
               <div id="schedmsg"></div>
-              <details id="calembed" style="margin-top:12px">
-                <summary class="small" style="cursor:pointer;color:var(--muted)">
-                  Show the crew calendar</summary>
-                <div id="calembedbody" style="margin-top:8px"></div>
-                <div class="small muted" style="margin-top:6px">This is the live Google
-                  Calendar. If it asks for permission, your Google account needs at least
-                  read access to the crew calendar — ask an admin to share it
-                  (<i>See all event details</i> is enough).</div>
-              </details>
             </div>
 
             <div class="saverow">
@@ -365,6 +356,20 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div id="savemsg" style="flex:1 1 100%"></div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- FULL WIDTH: the live crew calendar, always visible. gridColumn 1/-1
+           spans both columns of .qgrid; on narrow screens the grid is one
+           column anyway. -->
+      <div class="card" id="calembedcard" style="grid-column:1/-1">
+        <h3>Crew calendar <span class="muted small">live from Google — follows the
+          date you pick</span></h3>
+        <div class="body">
+          <div id="calembedbody"></div>
+          <div class="small muted" style="margin-top:6px">If this asks for permission,
+            your Google account needs at least read access to the crew calendar — ask
+            an admin to share it (<i>See all event details</i> is enough).</div>
         </div>
       </div>
     </div>
@@ -763,7 +768,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-31-save2';   // shown in the header; check it after deploying
+const BUILD = '2026-08-31-cal';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2465,6 +2470,7 @@ async function loadCrews(){
     GS.url = (cfg.apps_script_url || '').trim() || null;
     CAL_EMBED_ID = (cfg.master_calendar_id || '').trim() || null;
   }catch(e){ /* reported by the connection check, not here */ }
+  renderCalEmbed();
   const sel=$('#q_crew');
   sel.innerHTML = '<option value="">— choose —</option>' +
     CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+
@@ -2655,10 +2661,10 @@ function renderSlotChips(){
   });
 }
 
-/* The live Google Calendar, embedded. Collapsed by default so Google is only
-   loaded when a rep actually wants the picture. The iframe follows the chosen
-   date's week; viewing it needs the rep's own Google account to have read
-   access to the calendar -- the embed is Google's page, not ours. */
+/* The live Google Calendar, embedded and always visible on the quote form.
+   The iframe follows the chosen date's week; viewing it needs the rep's own
+   Google account to have read access to the calendar -- the embed is Google's
+   page, not ours, and it renders as the person looking at it. */
 let CAL_EMBED_ID = null;
 function renderCalEmbed(){
   const holder=$('#calembedbody'); if(!holder) return;
@@ -2834,8 +2840,7 @@ function wire(){
   $('#q_crew').addEventListener('change', ()=>{ refreshCrewLoad(); });   // load ends by re-rendering the chips
   $('#q_schedtime').addEventListener('input', ()=>{ renderSlotHint(); renderSlotChips(); });
   $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); renderSlotChips(); });
-  $('#calembed').addEventListener('toggle', ()=>{ if($('#calembed').open) renderCalEmbed(); });
-  $('#q_scheddate').addEventListener('change', ()=>{ if($('#calembed').open) renderCalEmbed(); });
+  $('#q_scheddate').addEventListener('change', renderCalEmbed);
   $('#btnunschedule').onclick = doUnschedule;
   $('#q_status').addEventListener('change', ()=>{
     renderWonHint(State.scheduled && State.calendarLive);
