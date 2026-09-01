@@ -217,7 +217,9 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
       <!-- LEFT: job + history -->
       <div class="grid">
         <div class="card">
-          <h3>Job site <span id="sitetag"></span></h3>
+          <h3>Job site <span id="sitetag"></span>
+            <button class="btn ghost sm" id="clearsite"
+              title="Clear the customer and address fields — the rest of the quote stays">Clear site</button></h3>
           <div class="body grid" style="gap:12px">
             <div class="row">
               <div style="flex:2"><label class="f">Customer name</label>
@@ -810,7 +812,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-01-trucks';   // shown in the header; check it after deploying
+const BUILD = '2026-09-01-clear';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -3537,6 +3539,18 @@ function wire(){
   $('#schedquote').onclick=()=>saveQuote('won');
   $('#lostquote').onclick=()=>saveQuote('lost');
   $('#q_custno').addEventListener('change', renderCustJobs);
+  /* Clear ONLY the who-and-where: the rep picked the wrong site, or is
+     retargeting a built quote to someone new. Product, volume, pricing, notes
+     and the schedule all stay -- Clear (the button by Save) resets everything. */
+  $('#clearsite').onclick=()=>{
+    ['q_customer','q_phone','q_custno','q_email','q_address','q_city','q_zip']
+      .forEach(i=>$('#'+i).value='');
+    State.site=null;
+    State.prefill={customer:null,address:null};
+    autoFill={drive:true,blow:true};      // drive time was the old site's city
+    renderHistory(); renderCustJobs(); recalc();
+    $('#sitebanner').innerHTML='';
+  };
   $('#newquote').onclick=()=>{
     ['q_customer','q_phone','q_email','q_address','q_city','q_zip','q_notes','q_bid',
      'q_account','q_so','q_pn','q_custno'].forEach(i=>$('#'+i).value='');
