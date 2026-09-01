@@ -810,7 +810,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-31-pages';   // shown in the header; check it after deploying
+const BUILD = '2026-09-01-trucks';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1163,8 +1163,8 @@ const DemoDB = {
   async ordersAll(){ return this.B.orders; },
   async quoteHistoryAll(){ return this.B.quote_history; },
   async crews(){
-    return [{id:'1',name:'Truck #56',color:'#2f6b3c',max_equip_hours:8,max_jobs:4,calendar_id:null},
-            {id:'2',name:'Truck #17',color:'#a8620f',max_equip_hours:8,max_jobs:4,calendar_id:null}];
+    return [{id:'1',name:'Truck #17',color:'#a8620f',max_equip_hours:8,max_jobs:4,calendar_id:null},
+            {id:'2',name:'Truck #56',color:'#2f6b3c',max_equip_hours:8,max_jobs:4,calendar_id:null}];
   },
   async appConfig(){ return Object.assign({capacity_mode:'dry'}, this._cfg||{}); },
   async setConfig(key, value){ (this._cfg=this._cfg||{})[key]=value; return {key, value}; },
@@ -1181,13 +1181,14 @@ const DemoDB = {
       ['Garden Compost',23,11],['GVO Compost',23,11],['GVO w/Worm Castings',23,11],
       ['Steer Plus',23,11]];
     const rows=[];
+    // Crew '1' is Truck #17 (rock-capable, Fiberex 45); crew '2' is Truck #56.
     for(const c of ['1','2']){
       base.forEach(([p,d,w])=>rows.push({crew_id:c,product:p,dry_yards:d,wet_yards:w}));
-      rows.push({crew_id:c,product:'Fiberex',dry_yards:c==='2'?45:40,wet_yards:c==='2'?45:40});
+      rows.push({crew_id:c,product:'Fiberex',dry_yards:c==='1'?45:40,wet_yards:c==='1'?45:40});
     }
     ['3/4" round rock from RiverBend','3/8" round rock from RiverBend',
      'Quarter Ten from RiverBend','3/4" open quarry from Coburg Quarry']
-      .forEach(p=>rows.push({crew_id:'2',product:p,dry_yards:8,wet_yards:8}));
+      .forEach(p=>rows.push({crew_id:'1',product:p,dry_yards:8,wet_yards:8}));
     return rows;
   },
   async patchQuote(id, patch){
@@ -1954,7 +1955,7 @@ async function renderCustJobs(){
   sub.textContent = '· '+other.length+' at other address'+(other.length>1?'es':'');
   const t=el('table');
   t.innerHTML='<thead><tr><th>Delivered</th><th>Address</th><th>Product</th>'+
-    '<th class="num">Yd</th><th class="num">Invoiced</th></tr></thead>';
+    '<th class="num">Yd</th><th class="num">Invoiced</th><th></th></tr></thead>';
   const tb=el('tbody');
   other.slice(0,25).forEach(o=>{
     const tr=el('tr');
@@ -1963,7 +1964,15 @@ async function renderCustJobs(){
         (o.ship_city?'<span class="muted"> · '+esc(o.ship_city)+'</span>':'')+'</td>'+
       '<td class="small">'+esc(o.primary_product||o.product||'')+'</td>'+
       '<td class="num">'+(o.total_yards??'—')+'</td>'+
-      '<td class="num">'+money(o.invc_tot)+'</td>';
+      '<td class="num">'+money(o.invc_tot)+'</td>'+
+      '<td><button class="btn ghost sm" data-rq>Requote</button></td>';
+    /* Requoting a job at ANOTHER address is a new quote for THAT site: load
+       its history and contact first, then pull the product and volume in. */
+    tr.querySelector('[data-rq]').onclick=async ()=>{
+      if(o.site_key) await loadSite(o.site_key,
+        {address1:o.ship_addr1, city:o.ship_city, zip:o.ship_zip});
+      requoteFrom(o.primary_product||o.product, o.total_yards);
+    };
     tb.appendChild(tr);
   });
   t.appendChild(tb);
@@ -2832,7 +2841,7 @@ async function refreshCrewLoad(){
   const date=$('#q_scheddate').value;
   if(!date){ box.innerHTML='<span class="muted">Pick a date to see what each truck already has.</span>'; return; }
   const my=++loadReq;
-  box.innerHTML='<span class="spin" style="width:10px;height:10px"></span> checking crew load…';
+  box.innerHTML='<span class="spin" style="width:10px;height:10px"></span> checking truck loads…';
 
   /* Two sources, deliberately. Our own bookings carry the hours -- Google has
      no field for them -- and the calendar carries anything a person added by
