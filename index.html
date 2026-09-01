@@ -828,7 +828,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-01-vercheck';   // shown in the header; check it after deploying
+const BUILD = '2026-09-01-guard';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -3643,6 +3643,19 @@ async function saveQuote(status){
                ? ' Booked on the calendar as a confirmed job.'
                : (wasLive ? ' Calendar hold updated.'
                           : ' Placed on the calendar as a grey HOLD.');
+          /* The script reports how many loads IT counted. A mismatch means the
+             event body is lying about the job -- stale deployment or a failed
+             capacity read -- and must be said out loud, not discovered by a
+             crew with the wrong number of trips planned. */
+          const localLoads = projectLoads().loads;
+          if(r && r.loads === undefined){
+            sync += ' ⚠ The deployed calendar script is an old version — its event '+
+                    'details (loads, split projects) are out of date. Rate Card → Check.';
+          }else if(r && Number(r.loads) !== localLoads){
+            sync += ' ⚠ The calendar script counted '+r.loads+' loads; this quote is '+
+                    localLoads+'. Its deployment is stale or it could not read '+
+                    'truck_capacity — Rate Card → Check.';
+          }
         }catch(e){ sync = ' Calendar not updated: '+e.message; }
       }
       refreshCrewLoad();
