@@ -810,7 +810,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-31-diag';   // shown in the header; check it after deploying
+const BUILD = '2026-08-31-pages';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1382,14 +1382,39 @@ const LiveDB = {
     }
     return out;
   },
-  async searchIndex(){
-    // One compact row per site (~3,400). Small enough to filter in the browser,
-    // which is what makes the dropdown instant and word-order independent.
-    return SB.rest('site_index?select=site_key,address1,city,zip,customer_name,'+
-      'n_orders,n_quotes,last_activity,all_names&order=last_activity.desc.nullslast&limit=20000');
+  /* Supabase caps EVERY response at 1,000 rows regardless of the limit you
+     ask for. Asking for 20,000 and getting the newest 1,000 back is a silent
+     lie that cost a real bug: sites older than the newest thousand -- most of
+     the customer base -- vanished from search and autofill. So every big read
+     pages until a short page comes back. The order must include a UNIQUE
+     column, or rows shuffle across page boundaries and get skipped. */
+  async _pageAll(base, cap){
+    const page=1000, out=[];
+    for(let off=0; out.length<(cap||20000); off+=page){
+      const rows = await SB.rest(base+'&limit='+page+'&offset='+off);
+      out.push(...(rows||[]));
+      if(!rows || rows.length<page) break;
+    }
+    return out;
   },
-  async ordersAll(){ return SB.rest('orders?select=ord_date,primary_product,total_yards,labor_hours,equip_hours,invc_tot,sales_person_id,order_type&limit=6000'); },
-  async quoteHistoryAll(){ return SB.rest('quote_history?select=quote_date,sales_person,product,yards,blow_hours,drive_hours,bid_amount&limit=4000'); }
+  async searchIndex(){
+    // One compact row per site (~3,400) -- small enough to filter in the
+    // browser, which is what makes the dropdown instant.
+    const rows = await this._pageAll('site_index?select=site_key,address1,city,zip,'+
+      'customer_name,n_orders,n_quotes,last_activity,all_names'+
+      '&order=last_activity.desc.nullslast,site_key.asc');
+    // Belt and braces: a write between pages could duplicate a boundary row.
+    const seen=new Set();
+    return rows.filter(r=>!seen.has(r.site_key)&&seen.add(r.site_key));
+  },
+  async ordersAll(){
+    return this._pageAll('orders?select=ord_nbr,ord_date,primary_product,total_yards,'+
+      'labor_hours,equip_hours,invc_tot,sales_person_id,order_type&order=ord_nbr.asc');
+  },
+  async quoteHistoryAll(){
+    return this._pageAll('quote_history?select=id,quote_date,sales_person,product,'+
+      'yards,blow_hours,drive_hours,bid_amount&order=id.asc');
+  }
 };
 
 let DB = LIVE ? LiveDB : DemoDB;
