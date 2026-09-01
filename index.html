@@ -838,7 +838,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-01-projreq';   // shown in the header; check it after deploying
+const BUILD = '2026-09-01-mirrors';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2750,7 +2750,7 @@ async function runCalCheck(){
   /* The single most common failure in this whole system: the code was edited
      but the deployment was not. The script reports its version so that state
      is visible instead of mysterious. */
-  const SCRIPT_WANT = '2026-09-01-depth';
+  const SCRIPT_WANT = '2026-09-01-mirrors';
   if(ping.version === SCRIPT_WANT){
     rows.push(line(true,'Script version', ping.version));
   }else{
