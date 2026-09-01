@@ -838,7 +838,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-01-projects';   // shown in the header; check it after deploying
+const BUILD = '2026-09-01-projreq';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2208,11 +2208,14 @@ function renderHistory(){
   const projs = new Map();
   s.orders.forEach(o=>{
     if(!o.project_id) return;
-    const g = projs.get(o.project_id) || {n:0, yards:0, inv:0, first:null, last:null, prods:new Set()};
+    const g = projs.get(o.project_id) || {n:0, yards:0, inv:0, lab:0, eq:0,
+      first:null, last:null, prods:new Map()};
     g.n++; g.yards += (+o.total_yards||0); g.inv += (+o.invc_tot||0);
+    g.lab += (+o.labor_hours||0); g.eq += (+o.equip_hours||0);
     const d=o.ord_date||'';
     if(d){ if(!g.first||d<g.first) g.first=d; if(!g.last||d>g.last) g.last=d; }
-    if(o.primary_product) g.prods.add(o.primary_product);
+    if(o.primary_product)
+      g.prods.set(o.primary_product, (g.prods.get(o.primary_product)||0)+(+o.total_yards||1));
     projs.set(o.project_id, g);
   });
   const multi = [...projs.entries()].filter(([,g])=>g.n>1)
@@ -2222,12 +2225,24 @@ function renderHistory(){
     pa.id='projagg';
     pa.innerHTML='<div class="small" style="font-weight:600;margin-bottom:4px">Projects at this address'+
       ' <span class="muted" style="font-weight:400">· each spans several sales orders</span></div>'+
-      multi.map(([pid,g])=>'<div class="note" style="margin-bottom:6px"><b>PN '+esc(pid)+'</b> — '+
+      multi.map(([pid,g],i)=>'<div class="note" style="margin-bottom:6px"><b>PN '+esc(pid)+'</b> — '+
         g.n+' jobs · '+(Math.round(g.yards*10)/10)+' yd · '+money(g.inv)+' invoiced'+
         (g.first?' · '+dfmt(g.first)+(g.last&&g.last!==g.first?' – '+dfmt(g.last):''):'')+
-        (g.prods.size?'<br><span class="small muted">'+esc([...g.prods].join(', '))+'</span>':'')+
-        '</div>').join('');
+        '<br><span class="small">Labor '+(Math.round(g.lab*100)/100)+' hr · '+
+        'Equip '+(Math.round(g.eq*100)/100)+' hr (billed totals)</span>'+
+        (g.prods.size?'<br><span class="small muted">'+esc([...g.prods.keys()].join(', '))+'</span>':'')+
+        '<br><button class="btn ghost sm" data-rqproj="'+i+'" style="margin-top:6px">'+
+        'Requote whole project</button></div>').join('');
     box.innerHTML=''; box.appendChild(pa);
+    /* Requote the WHOLE project: total volume, dominant product (by yards).
+       The multi-load math takes it from there -- loads, doubled drive, plans. */
+    pa.querySelectorAll('[data-rqproj]').forEach(btn=>{
+      btn.onclick=()=>{
+        const g = multi[Number(btn.dataset.rqproj)][1];
+        const prod = [...g.prods.entries()].sort((a,b)=>b[1]-a[1])[0];
+        requoteFrom(prod && prod[0], Math.round(g.yards*10)/10);
+      };
+    });
   }
   const tl=el('div','timeline');
   items.slice(0,30).forEach(it=>{
@@ -2282,7 +2297,8 @@ function renderQuoteRows(box, quotes, append){
     .slice(0,30).forEach(q=>{
       const d=el('div','tl q');
       d.innerHTML='<div class="h"><span class="t">'+esc(q.product||'Quote')+
-        (q.yards?' · '+q.yards+' yd':'')+'</span>'+
+        (q.yards?' · '+q.yards+' yd':'')+
+        (q.customer_name?' <span class="muted">— '+esc(q.customer_name)+'</span>':'')+'</span>'+
         '<span class="d">'+dfmt(q.quote_date)+' <span class="tag">quoted</span></span></div>'+
         '<div class="m">'+
           (q.drive_hours!=null?'Drive '+q.drive_hours+' hr · ':'')+
@@ -2291,6 +2307,14 @@ function renderQuoteRows(box, quotes, append){
           'Bid '+money(q.bid_amount)+
           (q.sales_person?' · '+esc(q.sales_person):'')+'</div>'+
         (q.notes?'<div class="n">'+esc(q.notes)+'</div>':'');
+      /* A quote that never sold is still a lead: one click re-prices it at
+         today's rates. */
+      if(q.product || q.yards){
+        const rq=el('button','btn ghost sm','Requote');
+        rq.style.marginTop='6px';
+        rq.onclick=()=>requoteFrom(q.product, q.yards);
+        d.appendChild(rq);
+      }
       tl.appendChild(d);
     });
   wrap.appendChild(el('div','small muted','Quotes — estimates, not delivered work.'));
