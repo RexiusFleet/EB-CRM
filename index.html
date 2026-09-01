@@ -332,9 +332,10 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div><label class="f">PN #</label>
                 <input type="text" id="q_pn" autocomplete="off" placeholder="EB20267443"></div>
             </div>
-            <div class="small muted" style="margin-top:-6px">ERP numbers, once assigned.
-              They print into the calendar event — type them here, not into Google, or
-              the next save overwrites them.</div>
+            <div class="small muted" style="margin-top:-6px">Optional — most jobs are
+              scheduled before the ERP assigns these. When they arrive, type them here and
+              press <b>Hold</b> or <b>Schedule</b> again: the calendar event picks them up.
+              (Typed straight into Google they'd be overwritten by the next save.)</div>
             <div id="schedwrap" style="border-top:1px solid var(--line-2);padding-top:14px">
               <div class="kv" style="border:0;padding:0 0 8px">
                 <span class="k" style="font-weight:600;color:var(--ink)">Schedule</span>
@@ -809,7 +810,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-08-31-slots';   // shown in the header; check it after deploying
+const BUILD = '2026-08-31-diag';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2206,11 +2207,28 @@ function attachPicker(opts){
   const input = $(opts.input), box = $(opts.results);
   let nav = -1;
 
-  function render(rows, q){
+  /* When nothing matches, say WHY nothing matched. "No match" over a healthy
+     3,400-site index and "no match" because the index never loaded are
+     different failures with different fixes, and a rep's screenshot of this
+     box should be enough to tell them apart. */
+  function searchDiag(){
+    if(State.indexErr)
+      return 'The site list failed to load ('+
+        (State.indexErr.status ? 'HTTP '+State.indexErr.status+' — ' : '')+
+        (State.indexErr.message||State.indexErr)+'). See Data status on the Rate Card tab.';
+    if(State.index && !State.index.length)
+      return 'The site list loaded but has 0 rows — site_index is empty. '+
+        'See Data status on the Rate Card tab.';
+    if(State.index)
+      return 'Searched '+State.index.length.toLocaleString()+' job sites.';
+    return 'Site list still loading — asked the server directly.';
+  }
+  function render(rows, q, diag){
     nav = -1;
     if(!rows.length){
       box.innerHTML='<div class="empty small">No match for “'+esc(q)+'”'+
-        (opts.allowFreeText ? ' — keep typing to quote a new address.' : '')+'</div>';
+        (opts.allowFreeText ? ' — keep typing to quote a new address.' : '')+
+        '<br><span class="muted">'+esc(diag || searchDiag())+'</span></div>';
       box.classList.remove('hide'); return;
     }
     box.innerHTML='';
@@ -2236,11 +2254,12 @@ function attachPicker(opts){
                         : '<span class="spin"></span> Loading the site list…')+'</div>';
       box.classList.remove('hide'); return;
     }
-    let rows=[];
-    try{ rows=await DB.search(q); }catch(e){}
+    let rows=[], searchErr=null;
+    try{ rows=await DB.search(q); }catch(e){ searchErr=e; }
     render(rows.map(r=>({site_key:r.site_key, address1:r.address1, city:r.city, zip:r.zip,
       customer_name:Array.from(r.names||[]).filter(Boolean)[0]||'',
-      n_orders:'', n_quotes:'', last_activity:r.last})), q);
+      n_orders:'', n_quotes:'', last_activity:r.last})), q,
+      searchErr ? 'The server search failed: '+(searchErr.message||searchErr) : null);
   }
 
   function move(d){
@@ -2343,10 +2362,12 @@ async function setQuoteStatus(r, status){
 }
 
 let qsearchTerm = '';
+let quotesListHash = '';
 async function renderQuotesList(){
   const box=$('#quoteslist');
   box.innerHTML='<div class="empty"><span class="spin"></span></div>';
   let rows=[]; try{ rows=await DB.listQuotes(); }catch(e){ box.innerHTML='<div class="note bad">'+esc(e.message)+'</div>'; return; }
+  quotesListHash = JSON.stringify(rows);
   $('#qcount').textContent = rows.length ? '\u00b7 '+rows.length : '';
   if(!rows.length){ box.innerHTML='<div class="empty">No quotes saved yet.'+
     (DB.mode==='demo'?' In demo mode these are kept in this browser only.':'')+'</div>'; return; }
@@ -2453,6 +2474,24 @@ async function renderQuotesList(){
 
 let qflashMsg='';
 function flashQuotesMsg(text){ qflashMsg=text; }
+
+/* The calendar->quote sync lands moves in the database within about a minute,
+   so while the Saved Quotes list is on screen it re-checks itself. It only
+   re-renders when a row actually changed -- a quiet minute must not flash the
+   list or jump the scroll -- and it stays quiet while the tab is hidden or a
+   dialog is up. */
+async function quotesAutoTick(){
+  const view=$('#view-quotes');
+  if(!view || view.classList.contains('hide')) return;
+  if(document.visibilityState!=='visible') return;
+  const dlg=$('#editdlg'); if(dlg && dlg.open) return;
+  let rows; try{ rows=await DB.listQuotes(); }catch(e){ return; }
+  if(JSON.stringify(rows)!==quotesListHash){
+    flashQuotesMsg('Updated — the schedule changed on the calendar or in another session.');
+    renderQuotesList();
+  }
+}
+setInterval(quotesAutoTick, 60000);
 
 /* One-click proof that the whole chain works: signed-in user -> Edge Function ->
    Google token -> the calendar itself. Worth having as a button because the
