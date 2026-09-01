@@ -273,6 +273,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div><label class="f">Yards</label><input type="number" id="q_yards" min="0" step="0.5" value="15"></div>
             </div>
             <div id="costwarn"></div>
+            <div id="loadsnote"></div>
 
             <div class="grid" style="gap:10px">
               <div class="hrbox">
@@ -358,6 +359,15 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                   <span class="small muted" id="scheddurhint"></span></label>
                   <input type="number" id="q_scheddur" step="0.25" min="0.5" max="14"
                          placeholder="from equip hrs"></div>
+              </div>
+              <!-- Only multi-load projects see this. Blank second truck = the
+                   FIRST truck runs both loads back-to-back (one long event). -->
+              <div class="row hide" id="load2row" style="margin-top:8px">
+                <div><label class="f">Load 2 truck
+                  <span class="small muted">blank = same truck, back-to-back</span></label>
+                  <select id="q_crew2"></select></div>
+                <div><label class="f">Load 2 start</label>
+                  <input type="time" id="q_schedtime2" step="900"></div>
               </div>
               <div class="small muted" id="slothint" style="margin-top:4px"></div>
               <div id="slotchips" style="margin-top:6px"></div>
@@ -816,7 +826,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-01-polish';   // shown in the header; check it after deploying
+const BUILD = '2026-09-01-loads';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1367,7 +1377,7 @@ const LiveDB = {
      engine reasons over. Drafts hold nothing, lost quotes are gone. */
   async bookingsBetween(from,to){
     return SB.rest('quotes?select=id,product,yards,customer_name,status,crew_id,'+
-      'scheduled_date,scheduled_time,scheduled_hours,equip_hours'+
+      'scheduled_date,scheduled_time,scheduled_hours,equip_hours,crew2_id,scheduled_time2'+
       '&scheduled_date=gte.'+encodeURIComponent(from)+
       '&scheduled_date=lte.'+encodeURIComponent(to)+
       '&status=in.(sent,won)&limit=500');
@@ -1790,15 +1800,36 @@ function estimateCtx(){
 
 let autoFill = {drive:true, blow:true};   // stop overwriting once the rep types
 
+/* How many truckloads is this quote? ceil(yards / capacity), using the picked
+   truck's capacity for the product -- or the LARGEST active truck's when none
+   is picked yet -- in the current dry/wet mode. 1 when the capacity table has
+   not loaded or has no row for the product. */
+function projectLoads(){
+  const product=$('#q_product').value, yards=parseFloat($('#q_yards').value)||0;
+  if(!product || !yards || !suggData.capMap) return {loads:1, cap:null};
+  const pickCap = id => { const r=suggData.capMap.get(String(id)+'|'+product);
+    return r ? Number(suggData.mode==='wet'?r.wet_yards:r.dry_yards) : null; };
+  let cap = $('#q_crew').value ? pickCap($('#q_crew').value) : null;
+  if(cap==null) (CREWS||[]).forEach(c=>{
+    const v=pickCap(c.id); if(v!=null && (cap==null||v>cap)) cap=v; });
+  if(!(cap>0)) return {loads:1, cap:null};
+  return {loads: Math.max(1, Math.ceil(yards/cap)), cap};
+}
+
 function suggest(){
   const ctx = estimateCtx();
   if(!ctx.yards){ return; }
   const d = Engine.estimateDrive(ctx);
   const b = Engine.estimateBlow(ctx);
-  if(autoFill.drive) $('#q_drive').value = d.hours;
+  /* A project bigger than one truckload means one round trip PER LOAD, so the
+     drive estimate multiplies. Blow time already covers the full volume --
+     blowing 30 yards takes 30 yards' time however it arrives. */
+  const proj = projectLoads();
+  if(autoFill.drive) $('#q_drive').value = Math.round(d.hours*proj.loads*100)/100;
   if(autoFill.blow)  $('#q_blow').value  = b.hours;
 
   $('#drivebasis').innerHTML = basisLabel(d.basis) + esc(d.detail) +
+    (proj.loads>1 ? ' <b>× '+proj.loads+' loads</b> (one round trip each)' : '') +
     (autoFill.drive?'':' <span class="tag">overridden</span>');
   $('#blowbasis').innerHTML  = basisLabel(b.basis) + esc(b.detail) +
     (autoFill.blow?'':' <span class="tag">overridden</span>');
@@ -1927,8 +1958,26 @@ function recalc(){
 
   State.lastPrice = p;
   renderYardRef();
+  renderLoadsNote();
   renderSuggestionsDebounced();
   renderCapNoteDebounced();
+}
+
+/* The multi-load banner and the Load-2 scheduling row appear together: both
+   exist only when the volume is bigger than one truckload. */
+function renderLoadsNote(){
+  const box=$('#loadsnote'); if(!box) return;
+  const proj = projectLoads();
+  const row = $('#load2row');
+  if(row) row.classList.toggle('hide', proj.loads<2);
+  if(proj.loads<2){ box.innerHTML=''; if(row){ $('#q_crew2').value=''; $('#q_schedtime2').value=''; } return; }
+  const yards=parseFloat($('#q_yards').value)||0;
+  box.innerHTML = '<div class="note"><b>'+proj.loads+'-load project</b> — '+yards+' yd of '+
+    esc($('#q_product').value)+' at '+proj.cap+' yd/load ('+
+    (suggData.mode==='wet'?'wet':'dry')+'). Drive time ×'+proj.loads+
+    '; blow time covers the full volume. Schedule it below: pick a <b>Load 2 '+
+    'truck</b> to run both loads at once (or staggered — set its start), or '+
+    'leave it blank and one truck runs them back-to-back in one long slot.</div>';
 }
 
 /* "Has this customer had work done anywhere else?" -- searched by the ERP
@@ -2655,6 +2704,8 @@ async function openQuote(r){
   slotDurTouched = !!r.scheduled_hours;
   $('#q_scheddur').value = r.scheduled_hours || '';
   $('#q_crew').value = r.crew_id ? String(r.crew_id) : '';
+  $('#q_crew2').value = r.crew2_id ? String(r.crew2_id) : '';
+  $('#q_schedtime2').value = r.scheduled_time2 ? String(r.scheduled_time2).slice(0,5) : '';
   $('#schedmsg').innerHTML = '';
   $('#savequote').textContent = 'Update quote';
   autoFill={drive:false,blow:false};        // these are the rep's saved numbers
@@ -2847,6 +2898,9 @@ async function loadCrews(){
   sel.innerHTML = '<option value="">— choose —</option>' +
     CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+
       '</option>').join('');
+  const sel2=$('#q_crew2');
+  if(sel2) sel2.innerHTML = '<option value="">— same truck —</option>' +
+    CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('');
   // Crews share one master calendar now, so "no calendar for this crew" is not
   // a meaningful per-crew state any more; the availability panel reports the
   // single calendar's configuration instead.
@@ -2983,7 +3037,17 @@ function slotDuration(){
   const typed = parseFloat($('#q_scheddur').value);
   if(slotDurTouched && typed > 0) return Math.min(14, Math.max(0.5, typed));
   const eq = parseFloat($('#o_eqhr').textContent);
-  return eq > 0 ? Math.min(14, Math.max(0.5, Math.round(eq*4)/4)) : null;
+  if(!(eq > 0)) return null;
+  /* Multi-load: equip hours already carry the multiplied drive. Two trucks at
+     once each work ~1/loads of it; one truck back-to-back works all of it plus
+     a reload (the office's 60 minutes) between loads. */
+  const proj = projectLoads();
+  let base = eq;
+  if(proj.loads > 1){
+    base = $('#q_crew2') && $('#q_crew2').value ? eq/proj.loads
+                                                : eq + (proj.loads-1)*1;
+  }
+  return Math.min(14, Math.max(0.5, Math.round(base*4)/4));
 }
 
 function syncSlotDurField(){
@@ -3158,11 +3222,23 @@ async function loadSuggData(force){
   const from = new Date(today); from.setDate(from.getDate()-4);   // rule 2b looks back
   const to = new Date(today); to.setDate(to.getDate()+SLOT_RULES.HORIZON_DAYS+3);
   const iso = x => x.toISOString().slice(0,10);
-  const [bookings, caps, cfg] = await Promise.all([
+  const [rawBookings, caps, cfg] = await Promise.all([
     DB.bookingsBetween(iso(from), iso(to)), DB.truckCaps(), DB.appConfig()]);
+  /* A split multi-load booking occupies TWO trucks. Expand it into one entry
+     per truck so the engine, the capacity note and the plans all see both
+     days as taken -- each carrying half the volume. */
+  const bookings = [];
+  (rawBookings||[]).forEach(b=>{
+    if(b.crew2_id){
+      const half = (Number(b.yards)||0)/2;
+      bookings.push(Object.assign({}, b, {yards: half}));
+      bookings.push(Object.assign({}, b, {crew_id: b.crew2_id, yards: half,
+        scheduled_time: b.scheduled_time2 || b.scheduled_time}));
+    }else bookings.push(b);
+  });
   const capMap = new Map();
   (caps||[]).forEach(r => capMap.set(String(r.crew_id)+'|'+r.product, r));
-  suggData = { t:Date.now(), bookings:bookings||[], capMap,
+  suggData = { t:Date.now(), bookings, capMap,
                mode:(cfg.capacity_mode==='wet'?'wet':'dry') };
   return suggData;
 }
@@ -3179,7 +3255,76 @@ async function renderSuggestions(){
   try{
     const d = await loadSuggData();
     if(my !== suggReq) return;
+    /* First time the capacity data lands, re-run the calculator: the loads
+       math could not know the truck capacities until now. */
+    if(!renderSuggestions.primed){ renderSuggestions.primed=true; recalc(); return; }
     const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1);
+
+    /* ---- multi-load projects get PLANS, not single slots ----
+       Rule 1 (share a load) is impossible when the quote alone overflows the
+       truck, so the choices that matter are: both trucks at once (or
+       staggered), or one truck back-to-back. */
+    const proj = projectLoads();
+    if(proj.loads>1 && (CREWS||[]).length){
+      const eq = parseFloat($('#o_eqhr').textContent)||0;
+      const jobsOn=(c,ds)=>d.bookings.filter(b=>String(b.crew_id)===String(c.id)&&
+        b.scheduled_date===ds).length;
+      const plans=[];
+      for(let i=0;i<SLOT_RULES.HORIZON_DAYS;i++){
+        const day=new Date(tomorrow); day.setDate(day.getDate()+i);
+        if(day.getDay()===0||day.getDay()===6) continue;
+        const ds=day.toISOString().slice(0,10);
+        if((CREWS||[]).length>1 && CREWS.every(c=>jobsOn(c,ds)===0)){
+          const start=CREWS.map(c=>firstStartFor(c,ds)).sort().slice(-1)[0];
+          plans.push({date:ds, time:start, crew:CREWS[0].id, crew2:CREWS[1].id,
+            tag:'both trucks', cls:'g', label:'Both trucks at once',
+            why:CREWS.map(c=>c.name).join(' + ')+' each bring a load — on site '+
+                'together, ~'+(Math.round(eq/proj.loads*4)/4)+' hr each. Stagger it '+
+                'by editing the Load 2 start after picking.'});
+          break;
+        }
+      }
+      for(const c of (CREWS||[])){
+        for(let i=0;i<SLOT_RULES.HORIZON_DAYS;i++){
+          const day=new Date(tomorrow); day.setDate(day.getDate()+i);
+          if(day.getDay()===0||day.getDay()===6) continue;
+          const ds=day.toISOString().slice(0,10);
+          if(jobsOn(c,ds)===0){
+            plans.push({date:ds, time:firstStartFor(c,ds), crew:c.id, crew2:'',
+              tag:'back-to-back', cls:'w', label:c.name+' runs both loads',
+              why:proj.loads+' loads with a reload between — one long slot, ~'+
+                  (Math.round((eq+(proj.loads-1))*4)/4)+' hr total'});
+            break;
+          }
+        }
+      }
+      let html = '<div class="small" style="font-weight:600;margin-bottom:4px">Project plans '+
+        '<span class="muted" style="font-weight:400">· '+proj.loads+' loads · '+
+        d.mode+' capacities</span></div>';
+      html += plans.length ? plans.map((pl,i)=>
+        '<button class="btn ghost sm suggslot" data-date="'+pl.date+'" data-crew="'+pl.crew+
+        '" data-crew2="'+pl.crew2+'" data-time="'+pl.time+
+        '" style="display:block;width:100%;text-align:left;margin:3px 0">'+
+        (i===0?'★ ':'')+'<b>'+esc(pl.label)+'</b> · '+esc(dfmt(pl.date))+' · '+fmtMin(toMin(pl.time))+
+        ' <span class="tag '+pl.cls+'">'+pl.tag+'</span>'+
+        '<br><span class="small muted">'+esc(pl.why)+'</span></button>').join('')
+        : '<div class="small muted">No day in the next '+SLOT_RULES.HORIZON_DAYS+
+          ' days has room for a '+proj.loads+'-load project.</div>';
+      box.innerHTML = html;
+      box.querySelectorAll('.suggslot').forEach(btn=>{
+        btn.onclick = ()=>{
+          $('#q_scheddate').value = btn.dataset.date;
+          $('#q_crew').value = btn.dataset.crew;
+          $('#q_schedtime').value = btn.dataset.time;
+          $('#q_crew2').value = btn.dataset.crew2 || '';
+          $('#q_schedtime2').value = btn.dataset.crew2 ? btn.dataset.time : '';
+          slotDurTouched=false; syncSlotDurField(); renderSlotHint();
+          refreshCrewLoad(); renderCalEmbed();
+        };
+      });
+      return;
+    }
+
     const res = suggestSlots(product, yards, d.bookings, d.capMap, d.mode,
                              CREWS||[], tomorrow.toISOString().slice(0,10));
     const ranked = res.filter(r=>r.best).sort((a,b)=>
@@ -3289,6 +3434,7 @@ async function renderCapNote(){
     const capRow = d.capMap.get(String(crewId)+'|'+product);
     if(!capRow){ box.innerHTML=''; return; }
     const cap = Number(d.mode==='wet' ? capRow.wet_yards : capRow.dry_yards);
+    if(yards > cap){ box.innerHTML=''; return; }   // multi-load: the loads note explains
     const same = d.bookings.filter(b => String(b.crew_id)===String(crewId) &&
       b.scheduled_date===date && b.product===product &&
       String(b.id)!==String(State.savedQuoteId||''));
@@ -3430,7 +3576,12 @@ async function saveQuote(status){
     scheduled_date: $('#q_scheddate').value || null,
     crew_id: $('#q_crew').value || null,
     scheduled_time: $('#q_schedtime').value || null,
-    scheduled_hours: ($('#q_scheddate').value && $('#q_schedtime').value) ? slotDuration() : null
+    scheduled_hours: ($('#q_scheddate').value && $('#q_schedtime').value) ? slotDuration() : null,
+    /* Second load, multi-load projects only. Its start defaults to load 1's
+       start (both trucks at once); the rep staggers it by editing the time. */
+    crew2_id: (projectLoads().loads>1 && $('#q_crew2').value) ? $('#q_crew2').value : null,
+    scheduled_time2: (projectLoads().loads>1 && $('#q_crew2').value)
+      ? ($('#q_schedtime2').value || $('#q_schedtime').value || null) : null
   };
   try{
     const wasNew = !State.savedQuoteId;
@@ -3497,6 +3648,7 @@ function wire(){
   initPickers();
   $('#q_scheddate').addEventListener('change', ()=>{ refreshCrewLoad(); renderCapNoteDebounced(); });
   $('#q_crew').addEventListener('change', ()=>{ refreshCrewLoad(); renderCapNoteDebounced(); });   // load ends by re-rendering the chips
+  $('#q_crew2').addEventListener('change', ()=>{ syncSlotDurField(); renderSlotHint(); refreshCrewLoad(); });
   $('#q_schedtime').addEventListener('input', ()=>{ renderSlotHint(); renderSlotChips(); });
   $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); renderSlotChips(); });
   $('#q_scheddate').addEventListener('change', renderCalEmbed);
@@ -3573,7 +3725,8 @@ function wire(){
     State.qstatus='draft'; State.prefill={customer:null,address:null}; renderCustJobs();
     $('#q_scheddate').value=''; $('#q_schedtime').value='';
     $('#q_scheddur').value=''; slotDurTouched=false;
-    $('#q_crew').value=''; $('#schedmsg').innerHTML='';
+    $('#q_crew').value=''; $('#q_crew2').value=''; $('#q_schedtime2').value='';
+    $('#schedmsg').innerHTML='';
     $('#savequote').textContent='Save quote';
     renderSchedState(null); refreshCrewLoad();
     autoFill={drive:true,blow:true}; renderHistory(); recalc();
