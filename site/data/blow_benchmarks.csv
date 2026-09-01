@@ -1,0 +1,87 @@
+product,volume_band,n,blow_hr_per_yard_p25,blow_hr_per_yard_median,blow_hr_per_yard_p75,source
+"3/4"" open quarry from Coburg Quarry",1-10,86,0.1667,0.2143,0.2812,erp_equipment_hours
+"3/4"" open quarry from Coburg Quarry",11-20,10,0.1562,0.2,0.2031,erp_equipment_hours
+"3/4"" open quarry from Coburg Quarry",ALL,98,0.1667,0.2031,0.25,erp_equipment_hours
+"3/4"" round rock from RiverBend",1-10,108,0.1667,0.2222,0.2778,erp_equipment_hours
+"3/4"" round rock from RiverBend",11-20,13,0.1875,0.2045,0.25,erp_equipment_hours
+"3/4"" round rock from RiverBend",ALL,123,0.1667,0.2188,0.2778,erp_equipment_hours
+"3/8"" round rock from RiverBend",1-10,52,0.1667,0.2222,0.3,erp_equipment_hours
+"3/8"" round rock from RiverBend",11-20,6,0.1875,0.1964,0.2188,erp_equipment_hours
+"3/8"" round rock from RiverBend",ALL,62,0.15,0.1944,0.2778,erp_equipment_hours
+BeautiBark,1-10,143,0.125,0.1667,0.2143,erp_equipment_hours
+BeautiBark,11-20,233,0.0833,0.1,0.125,erp_equipment_hours
+BeautiBark,21-35,672,0.0662,0.0809,0.1,erp_equipment_hours
+BeautiBark,36-60,54,0.0608,0.075,0.09,erp_equipment_hours
+BeautiBark,60+,34,0.0515,0.0703,0.0977,erp_equipment_hours
+BeautiBark,ALL,1136,0.0703,0.0893,0.1167,erp_equipment_hours
+DecoBark Nuggets,1-10,5,0.1111,0.125,0.1667,erp_equipment_hours
+DecoBark Nuggets,11-20,9,0.0833,0.1029,0.1136,erp_equipment_hours
+DecoBark Nuggets,21-35,6,0.0673,0.0682,0.0857,erp_equipment_hours
+DecoBark Nuggets,36-60,3,0.0338,0.0338,0.0405,erp_equipment_hours
+DecoBark Nuggets,ALL,23,0.0682,0.0875,0.1111,erp_equipment_hours
+Econo-Bark,1-10,40,0.125,0.1562,0.25,erp_equipment_hours
+Econo-Bark,11-20,39,0.0769,0.1,0.1364,erp_equipment_hours
+Econo-Bark,21-35,106,0.0543,0.0673,0.087,erp_equipment_hours
+Econo-Bark,36-60,22,0.0405,0.0473,0.0761,erp_equipment_hours
+Econo-Bark,60+,28,0.0404,0.0625,0.0742,erp_equipment_hours
+Econo-Bark,ALL,235,0.0543,0.0774,0.1111,erp_equipment_hours
+Extra Fine Bark,11-20,4,0.1,0.15,0.15,erp_equipment_hours
+Extra Fine Bark,21-35,11,0.0833,0.1023,0.11,erp_equipment_hours
+Extra Fine Bark,ALL,17,0.08,0.1,0.11,erp_equipment_hours
+Fiberex,1-10,74,0.1,0.1333,0.2,erp_equipment_hours
+Fiberex,11-20,101,0.0526,0.0667,0.0833,erp_equipment_hours
+Fiberex,21-35,103,0.0429,0.05,0.06,erp_equipment_hours
+Fiberex,36-60,347,0.0338,0.0375,0.05,erp_equipment_hours
+Fiberex,60+,26,0.0319,0.0375,0.0407,erp_equipment_hours
+Fiberex,ALL,651,0.0375,0.0473,0.0667,erp_equipment_hours
+Flower-n-Garden,1-10,89,0.1389,0.1875,0.25,erp_equipment_hours
+Flower-n-Garden,11-20,52,0.0938,0.1167,0.1364,erp_equipment_hours
+Flower-n-Garden,21-35,3,0.0761,0.0833,0.1042,erp_equipment_hours
+Flower-n-Garden,ALL,144,0.1176,0.15,0.2045,erp_equipment_hours
+Fresh Sawdust,11-20,5,0.0667,0.0667,0.0667,erp_equipment_hours
+Fresh Sawdust,36-60,3,0.05,0.05,0.05,erp_equipment_hours
+Fresh Sawdust,ALL,11,0.05,0.0667,0.0938,erp_equipment_hours
+GVO Compost,1-10,22,0.1667,0.2,0.3125,erp_equipment_hours
+GVO Compost,11-20,30,0.0875,0.1333,0.1667,erp_equipment_hours
+GVO Compost,21-35,16,0.0833,0.1087,0.125,erp_equipment_hours
+GVO Compost,36-60,4,0.1118,0.1222,0.1222,erp_equipment_hours
+GVO Compost,ALL,72,0.1053,0.1375,0.1944,erp_equipment_hours
+Garden Compost,1-10,21,0.15,0.175,0.2,erp_equipment_hours
+Garden Compost,11-20,77,0.0781,0.0909,0.1071,erp_equipment_hours
+Garden Compost,21-35,55,0.0625,0.08,0.1087,erp_equipment_hours
+Garden Compost,36-60,13,0.075,0.09,0.0978,erp_equipment_hours
+Garden Compost,ALL,167,0.075,0.0909,0.12,erp_equipment_hours
+Garden Mulch,11-20,6,0.1,0.1,0.1333,erp_equipment_hours
+Garden Mulch,ALL,6,0.1,0.1,0.1333,erp_equipment_hours
+Hemlock,1-10,282,0.1429,0.1786,0.25,erp_equipment_hours
+Hemlock,11-20,341,0.0938,0.1111,0.1364,erp_equipment_hours
+Hemlock,21-35,335,0.0761,0.0909,0.1136,erp_equipment_hours
+Hemlock,36-60,30,0.0815,0.0946,0.1316,erp_equipment_hours
+Hemlock,60+,4,0.0761,0.0938,0.0938,erp_equipment_hours
+Hemlock,ALL,992,0.09,0.1167,0.1591,erp_equipment_hours
+Opus #1,11-20,3,0.0875,0.15,0.1818,erp_equipment_hours
+Opus #1,ALL,7,0.0929,0.15,0.1818,erp_equipment_hours
+Primary Planting Soil,1-10,23,0.1364,0.15,0.1875,erp_equipment_hours
+Primary Planting Soil,11-20,43,0.0909,0.1094,0.1429,erp_equipment_hours
+Primary Planting Soil,21-35,17,0.0682,0.0795,0.1,erp_equipment_hours
+Primary Planting Soil,36-60,3,0.0543,0.1,0.1187,erp_equipment_hours
+Primary Planting Soil,ALL,86,0.0875,0.1111,0.15,erp_equipment_hours
+Quarter Ten from RiverBend,1-10,18,0.2188,0.25,0.3333,erp_equipment_hours
+Quarter Ten from RiverBend,ALL,21,0.2188,0.25,0.3125,erp_equipment_hours
+Steer Plus,11-20,12,0.1,0.1111,0.1176,erp_equipment_hours
+Steer Plus,ALL,16,0.1,0.1125,0.1304,erp_equipment_hours
+Tree-n-Shrub,1-10,9,0.1,0.15,0.2,erp_equipment_hours
+Tree-n-Shrub,11-20,13,0.0833,0.1,0.1333,erp_equipment_hours
+Tree-n-Shrub,ALL,22,0.0938,0.1071,0.15,erp_equipment_hours
+Turf Start,1-10,60,0.1429,0.2,0.25,erp_equipment_hours
+Turf Start,11-20,132,0.0938,0.1167,0.1429,erp_equipment_hours
+Turf Start,21-35,25,0.1,0.1083,0.125,erp_equipment_hours
+Turf Start,36-60,3,0.0875,0.0933,0.1333,erp_equipment_hours
+Turf Start,ALL,220,0.1,0.125,0.1667,erp_equipment_hours
+UltraKote,1-10,30,0.125,0.1667,0.25,erp_equipment_hours
+UltraKote,11-20,44,0.1,0.1053,0.1333,erp_equipment_hours
+UltraKote,21-35,33,0.0652,0.087,0.1087,erp_equipment_hours
+UltraKote,36-60,15,0.0833,0.0903,0.1,erp_equipment_hours
+UltraKote,60+,5,0.0751,0.0751,0.178,erp_equipment_hours
+UltraKote,ALL,127,0.0833,0.1087,0.1389,erp_equipment_hours
+Patio Potting Soil,ALL,8,0.0333,0.1875,0.25,quote_blow_hours

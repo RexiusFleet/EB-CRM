@@ -1,0 +1,31 @@
+product,erp_code,category,unit_cost,yards_per_unit,cost_per_yard,needs_cost,active,source
+Econo-Bark,321,bark,65,7.5,8.6667,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+BeautiBark,322,bark,111.7711,7.5,14.9028,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Hemlock,020,bark,224.25,7.5,29.9,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+UltraKote,040,bark,283.9959,7.5,37.8661,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+DecoBark Nuggets,004,bark,243.75,7.5,32.5,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Extra Fine Bark,002,bark,,7.5,,True,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Garden Mulch,032,bark,,7.5,,True,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Fiberex,301,bark,98.7764,7.5,13.1702,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Fresh Sawdust,300,bark,120,7.5,16.0,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Alder Sawdust,,bark,75.5,7.5,10.0667,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Commercial Hog,324,bark,,7.5,,True,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Primary Planting Soil,180,soil_compost,214.25,7.5,28.5667,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Tree-n-Shrub,106,soil_compost,,7.5,,True,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Flower-n-Garden,100,soil_compost,317.76,7.5,42.368,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Turf Start,107,soil_compost,255.9,7.5,34.12,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Patio Potting Soil,105,soil_compost,277.65,7.5,37.02,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Garden Compost,907,soil_compost,127.7323,7.5,17.031,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+GVO Compost,907,soil_compost,127.7323,7.5,17.031,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Steer Plus,121,soil_compost,228.3565,7.5,30.4475,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+GV Natural & Organic P.S.,103,soil_compost,422,7.5,56.2667,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Opus Zero,103,soil_compost,,7.5,,True,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Opus #1,103,soil_compost,857,7.5,114.2667,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Opus #2,103,soil_compost,860,7.5,114.6667,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Opus #3,103,soil_compost,842,7.5,112.2667,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Opus Bio Tope,103,soil_compost,504,7.5,67.2,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+GVO w/Worm Castings,103,soil_compost,690,7.5,92.0,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+"3/4"" round rock from RiverBend",,rock,120.9,7.5,16.12,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+"3/8"" round rock from RiverBend",,rock,247.65,7.5,33.02,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+Quarter Ten from RiverBend,,rock,,7.5,,True,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs
+"3/4"" open quarry from Coburg Quarry",,rock,234,7.5,31.2,False,True,Eugene Blower Pricing 2026 v2.xlsm / Product Costs

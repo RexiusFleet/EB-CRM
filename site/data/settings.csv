@@ -1,0 +1,12 @@
+key,value,note
+labor_rate_blended,27.5,"$/hr; avg(driver 30, helper 25) - Quote Calculator K14"
+driver_wage,30.0,$/hr - Quote Calculator I13
+helper_wage,25.0,$/hr - Quote Calculator I19
+prevailing_wage,70.0,$/hr; replaces both wages when PW job - I12/I18
+equipment_rate,85.0,$/hr - Quote Calculator I22
+overhead_per_yard,25.0,"$/yd, applied when yards < threshold - I23"
+overhead_per_equip_hour,145.0,"$/equip-hr, applied at/above threshold - I24"
+overhead_yard_threshold,16.0,"yards; below = per-yard OH, at/above = hourly OH"
+prep_hours_default,0.5,hr; constant on 1974/2024 saved quotes
+helpers_default,1.0,crew helpers; 1 on 1870/2024 saved quotes
+yards_per_unit,7.5,yards per truck unit
