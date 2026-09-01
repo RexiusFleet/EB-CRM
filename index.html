@@ -314,6 +314,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div class="kv"><span class="k">Markup <span class="small" id="o_mkpct"></span></span>
                 <span class="v" id="o_mk">—</span></div>
               <div class="kv total"><span class="k">Target price</span><span class="v" id="o_target">—</span></div>
+              <div class="kv hide" id="perloadrow"><span class="k" id="k_perload">Per truckload</span>
+                <span class="v" id="o_perload">—</span></div>
             </div>
 
             <div class="row" style="align-items:flex-end">
@@ -826,7 +828,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-01-loads';   // shown in the header; check it after deploying
+const BUILD = '2026-09-01-vercheck';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1937,6 +1939,22 @@ function recalc(){
   $('#o_mkpct').textContent='('+(p.markup*100).toFixed(0)+'% at '+yards+' yd)';
   $('#o_mk').textContent = p.cost==null?'—':money2(p.targetPrice-p.cost);
   $('#o_target').textContent=money(p.targetPrice);
+  /* Multi-load projects also read as price per truckload -- the number the
+     office compares against single-load jobs. Based on the bid when one is
+     typed (that's the real price), the target otherwise. */
+  {
+    const proj = projectLoads();
+    const row=$('#perloadrow');
+    if(row){
+      row.classList.toggle('hide', proj.loads<2);
+      if(proj.loads>=2){
+        const basis = p.bidAmount>0 ? p.bidAmount : p.targetPrice;
+        $('#k_perload').innerHTML='Price per truckload <span class="small">'+
+          (p.bidAmount>0?'bid':'target')+' ÷ '+proj.loads+' loads</span>';
+        $('#o_perload').textContent = basis!=null ? money(basis/proj.loads) : '—';
+      }
+    }
+  }
   if($('#q_bid').value==='' && p.targetPrice!=null) $('#q_bid').placeholder = Math.round(p.targetPrice);
   /* The split carries the job facts in its titles, so a rep reading the
      bottom of the quote sees what the money is FOR without scrolling up. */
@@ -2655,6 +2673,21 @@ async function runCalCheck(){
     btn.disabled=false; return;
   }
   rows.push(line(true,'Calendar service','answered in '+secs()));
+  /* The single most common failure in this whole system: the code was edited
+     but the deployment was not. The script reports its version so that state
+     is visible instead of mysterious. */
+  const SCRIPT_WANT = '2026-09-01-loads';
+  if(ping.version === SCRIPT_WANT){
+    rows.push(line(true,'Script version', ping.version));
+  }else{
+    rows.push(line(false,'Script version',
+      (ping.version || 'older than versioning') + ' — this app expects ' + SCRIPT_WANT));
+    paint(note('The DEPLOYED script is out of date, so recent features (second '+
+      'calendar event for split projects, inspection interop, …) are not live. '+
+      'Paste the current <code>calendar-appscript.gs</code>, then '+
+      '<b>Deploy → Manage deployments → ✏️ → New version</b>. Editing code alone '+
+      'changes nothing at the /exec URL.'));
+  }
   rows.push(line(true,'Running as', ping.runningAs||'(unknown)'));
   rows.push(line(true,'Calendar', (ping.calendar||'')+(ping.timeZone?' · '+ping.timeZone:'')));
 
