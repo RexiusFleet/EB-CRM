@@ -838,7 +838,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-01-mirrors';   // shown in the header; check it after deploying
+const BUILD = '2026-09-01-loads3';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2009,12 +2009,17 @@ function renderLoadsNote(){
   if(row) row.classList.toggle('hide', proj.loads<2);
   if(proj.loads<2){ box.innerHTML=''; if(row){ $('#q_crew2').value=''; $('#q_schedtime2').value=''; } return; }
   const yards=parseFloat($('#q_yards').value)||0;
+  const la=Math.ceil(proj.loads/2), lb=Math.floor(proj.loads/2);
   box.innerHTML = '<div class="note"><b>'+proj.loads+'-load project</b> — '+yards+' yd of '+
     esc($('#q_product').value)+' at '+proj.cap+' yd/load ('+
     (suggData.mode==='wet'?'wet':'dry')+'). Drive time ×'+proj.loads+
     '; blow time covers the full volume. Schedule it below: pick a <b>Load 2 '+
-    'truck</b> to run both loads at once (or staggered — set its start), or '+
-    'leave it blank and one truck runs them back-to-back in one long slot.</div>';
+    'truck</b> to split the loads across both trucks'+
+    (proj.loads>2 ? ' ('+la+' back-to-back on the first truck + '+lb+
+      ' on the second — the two slots get their own lengths)' :
+      ' at once, or staggered — set its start')+
+    ', or leave it blank and one truck runs all '+proj.loads+
+    ' back-to-back in one long slot.</div>';
 }
 
 /* "Has this customer had work done anywhere else?" -- searched by the ERP
@@ -2750,7 +2755,7 @@ async function runCalCheck(){
   /* The single most common failure in this whole system: the code was edited
      but the deployment was not. The script reports its version so that state
      is visible instead of mysterious. */
-  const SCRIPT_WANT = '2026-09-01-mirrors';
+  const SCRIPT_WANT = '2026-09-01-loads3';
   if(ping.version === SCRIPT_WANT){
     rows.push(line(true,'Script version', ping.version));
   }else{
@@ -3152,10 +3157,26 @@ function slotDuration(){
   const proj = projectLoads();
   let base = eq;
   if(proj.loads > 1){
-    base = $('#q_crew2') && $('#q_crew2').value ? eq/proj.loads
-                                                : eq + (proj.loads-1)*1;
+    if($('#q_crew2') && $('#q_crew2').value){
+      // Split: truck 1 takes the bigger share -- ceil(loads/2) loads
+      // back-to-back -- truck 2 the rest. 2 loads = one each.
+      const la = Math.ceil(proj.loads/2);
+      base = (eq/proj.loads)*la + (la-1)*1;
+    }else{
+      base = eq + (proj.loads-1)*1;
+    }
   }
   return Math.min(14, Math.max(0.5, Math.round(base*4)/4));
+}
+/* Truck 2's share of a split project, same shape. */
+function slotDuration2(){
+  const eq = parseFloat($('#o_eqhr').textContent);
+  const proj = projectLoads();
+  if(!(eq>0) || proj.loads<2) return null;
+  const lb = Math.floor(proj.loads/2);
+  if(lb<1) return null;
+  const d = (eq/proj.loads)*lb + (lb-1)*1;
+  return Math.min(14, Math.max(0.5, Math.round(d*4)/4));
 }
 
 function syncSlotDurField(){
@@ -3384,11 +3405,16 @@ async function renderSuggestions(){
         const ds=day.toISOString().slice(0,10);
         if((CREWS||[]).length>1 && CREWS.every(c=>jobsOn(c,ds)===0)){
           const start=CREWS.map(c=>firstStartFor(c,ds)).sort().slice(-1)[0];
+          const la2=Math.ceil(proj.loads/2), lb2=Math.floor(proj.loads/2);
           plans.push({date:ds, time:start, crew:CREWS[0].id, crew2:CREWS[1].id,
             tag:'both trucks', cls:'g', label:'Both trucks at once',
-            why:CREWS.map(c=>c.name).join(' + ')+' each bring a load — on site '+
-                'together, ~'+(Math.round(eq/proj.loads*4)/4)+' hr each. Stagger it '+
-                'by editing the Load 2 start after picking.'});
+            why:(proj.loads===2
+              ? CREWS.map(c=>c.name).join(' + ')+' each bring a load — on site together, ~'+
+                (Math.round(eq/proj.loads*4)/4)+' hr each.'
+              : CREWS[0].name+' runs '+la2+' loads back-to-back, '+CREWS[1].name+' brings '+
+                lb2+' — done together in ~'+
+                (Math.round(((eq/proj.loads)*la2+(la2-1))*4)/4)+' hr.')+
+              ' Stagger it by editing the Load 2 start after picking.'});
           break;
         }
       }
@@ -3399,7 +3425,8 @@ async function renderSuggestions(){
           const ds=day.toISOString().slice(0,10);
           if(jobsOn(c,ds)===0){
             plans.push({date:ds, time:firstStartFor(c,ds), crew:c.id, crew2:'',
-              tag:'back-to-back', cls:'w', label:c.name+' runs both loads',
+              tag:'back-to-back', cls:'w',
+              label:c.name+' runs '+(proj.loads===2?'both':'all '+proj.loads)+' loads',
               why:proj.loads+' loads with a reload between — one long slot, ~'+
                   (Math.round((eq+(proj.loads-1))*4)/4)+' hr total'});
             break;
@@ -3690,7 +3717,9 @@ async function saveQuote(status){
        start (both trucks at once); the rep staggers it by editing the time. */
     crew2_id: (projectLoads().loads>1 && $('#q_crew2').value) ? $('#q_crew2').value : null,
     scheduled_time2: (projectLoads().loads>1 && $('#q_crew2').value)
-      ? ($('#q_schedtime2').value || $('#q_schedtime').value || null) : null
+      ? ($('#q_schedtime2').value || $('#q_schedtime').value || null) : null,
+    scheduled_hours2: (projectLoads().loads>1 && $('#q_crew2').value &&
+      $('#q_scheddate').value && $('#q_schedtime').value) ? slotDuration2() : null
   };
   try{
     const wasNew = !State.savedQuoteId;
