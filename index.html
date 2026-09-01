@@ -77,7 +77,11 @@ input[type=text],input[type=number],input[type=email],input[type=password],selec
    Product and Yards line up in every browser. */
 input[type=text],input[type=number],input[type=email],input[type=password],select{
   min-height:42px;line-height:1.5}
-select{padding-right:30px}
+/* Safari ignores the height pin on native selects; drawing our own chevron
+   makes Product render exactly like Yards in every browser. */
+select{appearance:none;-webkit-appearance:none;padding-right:30px;
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23848b7e' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 10px center;background-size:12px 8px}
 input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
 .row{display:flex;gap:12px;flex-wrap:wrap}
 .row>*{flex:1;min-width:0}
@@ -812,7 +816,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-01-clear';   // shown in the header; check it after deploying
+const BUILD = '2026-09-01-polish';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2052,7 +2056,12 @@ async function loadSite(key, seed, opts){
   // company names -- and a rep must never see "POWR" where an email goes.
   set('q_phone', pickPhone(pick(first&&first.phone, cu&&cu.phone, st&&st.phone)));
   set('q_email', pickEmail(first&&first.email, cu&&cu.email));
-  set('q_custno', pick(cu&&cu.cust_id, fo&&fo.cust_id));
+  const cid = pick(cu&&cu.cust_id, fo&&fo.cust_id);
+  set('q_custno', cid);
+  /* The ERP account number is the customer number with a dash after the
+     company prefix: cust_id 020104709 -> account 02-0104709. Derived, not
+     stored -- and set() keeps anything the rep already typed. */
+  set('q_account', cid && cid.length>2 ? cid.slice(0,2)+'-'+cid.slice(2) : '');
   /* Remember what came from the records, so a later edit to it can ask for
      confirmation. Only sites with actual history count -- a brand-new address
      is the rep's own text, and second-guessing that would be noise. And the
@@ -2668,14 +2677,20 @@ async function renderDash(){
   $('#dashstats').innerHTML = stats.map(s=>
     '<div class="s"><div class="l">'+s[0]+'</div><div class="v">'+s[1]+'</div><div class="sub">'+s[2]+'</div></div>').join('');
 
-  // blow hr/yd by product
+  /* Blow performance from DELIVERED jobs -- billed equipment hours on blow-in
+     orders, the same evidence the estimator prices from. (This table used to
+     read the old quote log, i.e. what was PROMISED; billed is what happened.) */
   const byP={};
-  blow.forEach(q=>{(byP[q.product]=byP[q.product]||[]).push(q.blow_hours/q.yards)});
+  orders.forEach(o=>{
+    const y=+o.total_yards, e=+o.equip_hours;
+    if(o.order_type==='blow_in' && y>0 && e>0 && e/y<3)
+      (byP[o.primary_product]=byP[o.primary_product]||[]).push(e/y);
+  });
   const rows=Object.entries(byP).filter(([,v])=>v.length>=8)
     .map(([p,v])=>({p,n:v.length,m:med(v)})).sort((a,b)=>a.m-b.m);
   const mx=Math.max(...rows.map(r=>r.m),0.01);
-  $('#dashprod').innerHTML = '<table><thead><tr><th>Product</th><th class="num">Quotes</th>'+
-    '<th class="num">Blow hr/yd</th><th style="width:36%"></th></tr></thead><tbody>'+
+  $('#dashprod').innerHTML = '<table><thead><tr><th>Product</th><th class="num">Delivered</th>'+
+    '<th class="num">Billed equip hr/yd</th><th style="width:36%"></th></tr></thead><tbody>'+
     rows.map(r=>'<tr><td>'+esc(r.p)+'</td><td class="num">'+r.n+'</td><td class="num">'+r.m.toFixed(3)+'</td>'+
       '<td><div class="bar"><i style="width:'+(r.m/mx*100).toFixed(0)+'%"></i></div></td></tr>').join('')+
     '</tbody></table>';
