@@ -838,7 +838,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-01-tallcal';   // shown in the header; check it after deploying
+const BUILD = '2026-09-01-projects';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2201,6 +2201,34 @@ function renderHistory(){
     if(sq) sq.onclick=()=>renderQuoteRows(box, s.quotes);
     return;
   }
+  /* One ERP project number spanning several sales orders IS one project --
+     show the whole thing rolled up before the job-by-job list, so a rep sees
+     "this address was a 5-phase, 120-yd project" at a glance. Single-order
+     projects add nothing over their own row and are left out. */
+  const projs = new Map();
+  s.orders.forEach(o=>{
+    if(!o.project_id) return;
+    const g = projs.get(o.project_id) || {n:0, yards:0, inv:0, first:null, last:null, prods:new Set()};
+    g.n++; g.yards += (+o.total_yards||0); g.inv += (+o.invc_tot||0);
+    const d=o.ord_date||'';
+    if(d){ if(!g.first||d<g.first) g.first=d; if(!g.last||d>g.last) g.last=d; }
+    if(o.primary_product) g.prods.add(o.primary_product);
+    projs.set(o.project_id, g);
+  });
+  const multi = [...projs.entries()].filter(([,g])=>g.n>1)
+    .sort((a,b)=>String(b[1].last||'').localeCompare(String(a[1].last||'')));
+  if(multi.length){
+    const pa=el('div');
+    pa.id='projagg';
+    pa.innerHTML='<div class="small" style="font-weight:600;margin-bottom:4px">Projects at this address'+
+      ' <span class="muted" style="font-weight:400">· each spans several sales orders</span></div>'+
+      multi.map(([pid,g])=>'<div class="note" style="margin-bottom:6px"><b>PN '+esc(pid)+'</b> — '+
+        g.n+' jobs · '+(Math.round(g.yards*10)/10)+' yd · '+money(g.inv)+' invoiced'+
+        (g.first?' · '+dfmt(g.first)+(g.last&&g.last!==g.first?' – '+dfmt(g.last):''):'')+
+        (g.prods.size?'<br><span class="small muted">'+esc([...g.prods].join(', '))+'</span>':'')+
+        '</div>').join('');
+    box.innerHTML=''; box.appendChild(pa);
+  }
   const tl=el('div','timeline');
   items.slice(0,30).forEach(it=>{
     const d=el('div','tl'+(it.t==='quote'?' q':''));
@@ -2215,7 +2243,9 @@ function renderHistory(){
         '<div class="m">'+
           (o.labor_hours?'Labor '+o.labor_hours+' hr · ':'')+
           (o.equip_hours?'Equip '+o.equip_hours+' hr · ':'')+
-          'Invoiced '+money(o.invc_tot)+'</div>'+
+          'Invoiced '+money(o.invc_tot)+
+          (o.ord_nbr?' · SO '+esc(o.ord_nbr):'')+
+          (o.project_id?' · PN '+esc(o.project_id):'')+'</div>'+
         (disc.length?'<div class="m">'+disc.map(l=>'<span class="tag w">'+esc(l.d)+' '+money(l.e)+'</span>').join(' ')+'</div>':'')+
         (o.sum_descr?'<div class="n">'+esc(o.sum_descr)+(o.spcl_inst?'\n'+esc(o.spcl_inst):'')+'</div>':'');
       const rq=el('button','btn ghost sm','Requote');
@@ -2225,7 +2255,8 @@ function renderHistory(){
     }
     tl.appendChild(d);
   });
-  box.innerHTML=''; box.appendChild(tl);
+  if(!multi.length) box.innerHTML='';
+  box.appendChild(tl);
   if(nq){
     const more=el('div','small muted');
     more.style.marginTop='10px';
