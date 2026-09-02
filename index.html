@@ -838,7 +838,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-01-loads3';   // shown in the header; check it after deploying
+const BUILD = '2026-09-02-quotelink';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1174,6 +1174,7 @@ const DemoDB = {
       .sort((a,b)=>(b.ord_date||'').localeCompare(a.ord_date||'')).slice(0,100);
   },
   async listQuotes(){ return this._quotes.slice().sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')); },
+  async getQuote(id){ return this._quotes.find(x=>String(x.id)===String(id)) || null; },
   async saveQuote(q, id){
     if(id){
       const ex=this._quotes.find(x=>x.id===id);
@@ -1342,6 +1343,12 @@ const LiveDB = {
       '&cust_id=eq.'+encodeURIComponent(custId)+'&order=ord_date.desc&limit=100');
   },
   async listQuotes(){ return SB.rest('quotes?select=*&order=created_at.desc&limit=300'); },
+  /* One quote by id -- the calendar deep link uses this, so it must work even
+     for quotes old enough to fall off the 300-row list. */
+  async getQuote(id){
+    const r = await SB.rest('quotes?select=*&id=eq.'+encodeURIComponent(id));
+    return (r && r[0]) || null;
+  },
   /* With an id this updates the row in place. Without it, a rep clicking Save
      twice on the same form would leave two quotes for one job -- and the
      second one would have lost the calendar booking attached to the first. */
@@ -1510,7 +1517,12 @@ const GS = {
   ping(){ return this.call('ping', {}, 25000); },
   eventsOn(date){ return this.call('list', {date}).then(r=>r.events||[]); },
   sync(quoteId, crewId, date, time, hours){
-    return this.call('sync', {quoteId, crewId, date, time: time||null, hours: hours||null});
+    // appUrl: the calendar event body links back to this quote in THIS app --
+    // whatever address the rep is actually using, no configuration to go stale.
+    const appUrl = location.origin && location.origin !== 'null'
+      ? location.origin + location.pathname : null;
+    return this.call('sync', {quoteId, crewId, date, time: time||null, hours: hours||null,
+                              appUrl});
   },
   remove(quoteId){ return this.call('remove', {quoteId}); },
 };
@@ -1670,6 +1682,7 @@ async function loadData(){
     renderAuth(); fillProducts(); recalc();
     loadSearchIndex();
     loadCrews().then(()=>{ renderSchedState(null); refreshCrewLoad(); });
+    applyQuoteLink();     // #quote=<id> from a calendar event, once data is up
   }catch(err){
     $('#boot').classList.remove('hide');
     $('#boot').innerHTML = '<div class="body"><div class="note bad">'+
@@ -2755,7 +2768,7 @@ async function runCalCheck(){
   /* The single most common failure in this whole system: the code was edited
      but the deployment was not. The script reports its version so that state
      is visible instead of mysterious. */
-  const SCRIPT_WANT = '2026-09-01-loads3';
+  const SCRIPT_WANT = '2026-09-02-quotelink';
   if(ping.version === SCRIPT_WANT){
     rows.push(line(true,'Script version', ping.version));
   }else{
@@ -2791,6 +2804,30 @@ async function runCalCheck(){
     esc((CREWS||[]).map(c=>c.name+' '+(c.calendar_color_id||'—')).join(' · '))+'</div>');
   btn.disabled=false;
 }
+
+/* #quote=<id> in the URL: every calendar event body carries a link back to
+   its own quote, so a foreman standing in Google Calendar is one tap from the
+   full quote. Runs after each successful data load -- which covers both a
+   restored session at boot and the moment a signed-out visitor signs in
+   (until then RLS hides the quote, so we simply wait). Applied once per id;
+   pasting a different link into the same tab works via hashchange. */
+let deepLinkDone = '';
+async function applyQuoteLink(){
+  const m = (location.hash + location.search).match(/quote=([A-Za-z0-9_-]+)/);
+  if(!m || deepLinkDone === m[1]) return;
+  if(LIVE && !State.user) return;          // sign-in re-runs loadData -> back here
+  deepLinkDone = m[1];
+  let r = null;
+  try{ r = await DB.getQuote(m[1]); }catch(e){}
+  if(r){ openQuote(r); }
+  else{
+    show('quote');
+    $('#schedmsg').innerHTML = '<div class="note bad">The quote this link points to '+
+      '(#'+esc(m[1])+') was not found — it may have been deleted, or it belongs to '+
+      'another rep’s account.</div>';
+  }
+}
+window.addEventListener('hashchange', ()=>{ deepLinkDone=''; applyQuoteLink(); });
 
 /* Load a saved quote back into the builder. Scheduling lives on the quote
    form, so "Open" is how a rep gets at the booking for an existing quote --
