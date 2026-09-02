@@ -838,7 +838,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-02-quotelink';   // shown in the header; check it after deploying
+const BUILD = '2026-09-02-projjobs';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2227,9 +2227,10 @@ function renderHistory(){
   s.orders.forEach(o=>{
     if(!o.project_id) return;
     const g = projs.get(o.project_id) || {n:0, yards:0, inv:0, lab:0, eq:0,
-      first:null, last:null, prods:new Map()};
+      first:null, last:null, prods:new Map(), jobs:[]};
     g.n++; g.yards += (+o.total_yards||0); g.inv += (+o.invc_tot||0);
     g.lab += (+o.labor_hours||0); g.eq += (+o.equip_hours||0);
+    g.jobs.push(o);
     const d=o.ord_date||'';
     if(d){ if(!g.first||d<g.first) g.first=d; if(!g.last||d>g.last) g.last=d; }
     if(o.primary_product)
@@ -2249,7 +2250,25 @@ function renderHistory(){
         '<br><span class="small">Labor '+(Math.round(g.lab*100)/100)+' hr · '+
         'Equip '+(Math.round(g.eq*100)/100)+' hr (billed totals)</span>'+
         (g.prods.size?'<br><span class="small muted">'+esc([...g.prods.keys()].join(', '))+'</span>':'')+
-        '<br><button class="btn ghost sm" data-rqproj="'+i+'" style="margin-top:6px">'+
+        /* Expandable: the individual sales orders behind the roll-up. Numbered
+           in delivery order, so "Job 1" is the project's first phase. */
+        '<details style="margin-top:6px"><summary class="small" style="cursor:pointer">'+
+          'Show the '+g.n+' jobs individually</summary>'+
+          '<div style="overflow-x:auto"><table class="small" style="margin-top:6px">'+
+          '<thead><tr><th></th><th>Date</th><th>Product</th><th class="num">Yd</th>'+
+          '<th class="num">Labor hr</th><th class="num">Equip hr</th>'+
+          '<th class="num">Invoiced</th><th>SO</th></tr></thead><tbody>'+
+          g.jobs.slice().sort((a,b)=>String(a.ord_date||'').localeCompare(String(b.ord_date||'')))
+            .map((o,j)=>'<tr><td style="white-space:nowrap">Job '+(j+1)+'</td>'+
+              '<td style="white-space:nowrap">'+(o.ord_date?dfmt(o.ord_date):'—')+'</td>'+
+              '<td>'+esc(o.primary_product||'—')+'</td>'+
+              '<td class="num">'+(o.total_yards!=null?o.total_yards:'—')+'</td>'+
+              '<td class="num">'+(o.labor_hours!=null?o.labor_hours:'—')+'</td>'+
+              '<td class="num">'+(o.equip_hours!=null?o.equip_hours:'—')+'</td>'+
+              '<td class="num">'+money(o.invc_tot)+'</td>'+
+              '<td class="mono">'+esc(o.ord_nbr||'—')+'</td></tr>').join('')+
+          '</tbody></table></div></details>'+
+        '<button class="btn ghost sm" data-rqproj="'+i+'" style="margin-top:6px">'+
         'Requote whole project</button></div>').join('');
     box.innerHTML=''; box.appendChild(pa);
     /* Requote the WHOLE project: total volume, dominant product (by yards).
