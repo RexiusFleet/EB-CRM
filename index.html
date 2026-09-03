@@ -883,7 +883,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-03-cap2';   // shown in the header; check it after deploying
+const BUILD = '2026-09-03-cap3';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -3473,7 +3473,12 @@ window.suggestSlots = suggestSlots;
 /* Cache of what the engine needs; 30s so a save shows up on the next look. */
 let suggData = { t:0 };
 async function loadSuggData(force){
-  if(!force && Date.now()-suggData.t < 30000 && suggData.capMap) return suggData;
+  /* wantCal is part of the cache key: the first load can run before the
+     Apps Script URL or the session token exist, skipping the calendar fetch.
+     Caching that skip for 30s made a healthy calendar look unreadable. */
+  const wantCal = !!(GS.configured() && State.token);
+  if(!force && Date.now()-suggData.t < 30000 && suggData.capMap &&
+     suggData.wantCal === wantCal) return suggData;
   const today = new Date();
   const from = new Date(today); from.setDate(from.getDate()-4);   // rule 2b looks back
   const to = new Date(today); to.setDate(to.getDate()+SLOT_RULES.HORIZON_DAYS+3);
@@ -3484,8 +3489,8 @@ async function loadSuggData(force){
      every truck-titled event in the window (app-created ones excluded --
      their quotes are counted below). If the calendar cannot be read, degrade
      to app bookings only and SAY so rather than pretending. */
-  const busyP = (GS.configured() && State.token)
-    ? GS.busy(iso(from), iso(to)).catch(e=>({err: e.message||String(e)}))
+  const busyP = wantCal
+    ? GS.busy(iso(from), iso(to)).catch(e=>({err: (e && e.message) || String(e) || 'no reply'}))
     : Promise.resolve(null);
   const [rawBookings, caps, cfg, busy] = await Promise.all([
     DB.bookingsBetween(iso(from), iso(to)), DB.truckCaps(), DB.appConfig(), busyP]);
@@ -3517,7 +3522,7 @@ async function loadSuggData(force){
   });
   const capMap = new Map();
   (caps||[]).forEach(r => capMap.set(String(r.crew_id)+'|'+r.product, r));
-  suggData = { t:Date.now(), bookings, capMap,
+  suggData = { t:Date.now(), bookings, capMap, wantCal,
                mode:(cfg.capacity_mode==='wet'?'wet':'dry'),
                calSeen: calOk, calN: calOk ? busy.length : 0,
                calErr: busy && busy.err ? String(busy.err) : null };
@@ -3531,11 +3536,14 @@ function bustSuggCache(){ suggData.t = 0; }
 function calNoteHtml(d){
   if(d.calSeen) return d.calN
     ? ' · incl. '+d.calN+' calendar event'+(d.calN===1?'':'s') : '';
-  if(!GS.configured() || !State.token) return '';
-  const stale = /unknown action/i.test(d.calErr||'');
-  return ' · <span class="tag w" title="'+esc(d.calErr||'')+'">⚠ app bookings only — '+
+  // Warn only on a REAL failure. A fetch that was skipped (config or session
+  // not ready yet) retries on the next render -- it is not an unreadable
+  // calendar, and saying so with an empty tooltip cost a support round-trip.
+  if(!d.calErr) return '';
+  const stale = /unknown action/i.test(d.calErr);
+  return ' · <span class="tag w" title="'+esc(d.calErr)+'">⚠ app bookings only — '+
     (stale ? 'the calendar script is an old version (paste + New version, see Rate Card → Check)'
-           : 'calendar not readable')+'</span>';
+           : 'calendar error: '+esc(String(d.calErr).slice(0,80)))+'</span>';
 }
 
 let suggReq = 0;
@@ -4074,11 +4082,17 @@ function wire(){
      'q_account','q_so','q_pn','q_custno'].forEach(i=>$('#'+i).value='');
     State.site=null; State.savedQuoteId=null; State.scheduled=false; State.calendarLive=false;
     State.qstatus='draft'; State.prefill={customer:null,address:null}; renderCustJobs();
+    /* The QUOTE resets too -- product, volume, crew sizing back to the same
+       defaults a fresh page shows. Clear that left the calculator untouched
+       looked like a button that did nothing. */
+    if(!$('#q_product').disabled) $('#q_product').value='Hemlock';
+    $('#q_yards').value='15'; $('#q_prep').value='0.5';
+    $('#q_helpers').value='1'; $('#q_pw').value='0';
     $('#q_scheddate').value=''; $('#q_schedtime').value='';
     $('#q_scheddur').value=''; slotDurTouched=false;
     $('#q_crew').value=''; $('#q_crew2').value=''; $('#q_schedtime2').value='';
     $('#q_depth').value='2';
-    $('#schedmsg').innerHTML='';
+    $('#schedmsg').innerHTML=''; $('#savemsg').innerHTML='';
     $('#savequote').textContent='Save quote';
     renderSchedState(null); refreshCrewLoad();
     autoFill={drive:true,blow:true}; renderHistory(); recalc();
