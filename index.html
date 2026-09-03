@@ -883,7 +883,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-03-busy';   // shown in the header; check it after deploying
+const BUILD = '2026-09-03-cap';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -3374,7 +3374,8 @@ const SLOT_RULES = {
   RELOAD_MIN: 60,            // the office's 60 minutes between jobs
   JOBS_PER_DAY: 2,
   HORIZON_DAYS: 14,
-  LATEST_START_MIN: 16.5 * 60   // do not suggest starts after 4:30 PM
+  DAY_END_MIN: 17 * 60,  // hard cap: no job may run past 5:00 PM
+  ALTS_PER_TRUCK: 3      // best slot + two more options each
 };
 const toMin = t => { const p = String(t).split(':'); return (+p[0])*60 + (+p[1]||0); };
 const toHM  = m => String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
@@ -3395,9 +3396,14 @@ function jobSpan(j, crew, dateStr){
 }
 const RULE_RANK = { '1':0, '2a':1, '2b':2, '3':3 };
 
-/* Pure: (quote facts, bookings, capacities) -> best candidate per truck.
-   Exposed on window so the numbers can be checked from the console. */
-function suggestSlots(product, yards, bookings, capMap, mode, crews, fromDate){
+/* Pure: (quote facts, bookings, capacities) -> ranked candidates per truck.
+   durMin is this quote's expected slot length: a slot only counts if the WHOLE
+   job is done by DAY_END_MIN (the office's 5 PM cap) -- a 3-hour job cannot
+   start at 4. Exposed on window so the numbers can be checked from the
+   console. Returns {crew, best, alts, cap, hasCap} -- alts are the next-best
+   distinct days, so a rep who dislikes the top pick has two more to tap. */
+function suggestSlots(product, yards, bookings, capMap, mode, crews, fromDate, durMin){
+  durMin = durMin > 0 ? durMin : 120;
   const results = [];
   for(const crew of crews){
     const capRow = capMap.get(String(crew.id)+'|'+product);
@@ -3406,7 +3412,7 @@ function suggestSlots(product, yards, bookings, capMap, mode, crews, fromDate){
     const onDay = ds => mine.filter(b => b.scheduled_date===ds)
       .map(j => Object.assign({}, j, jobSpan(j, crew, ds)))
       .sort((a,b) => a.start-b.start);
-    let best = null;
+    const cands = [];
     for(let i=0; i<SLOT_RULES.HORIZON_DAYS; i++){
       const d = new Date(fromDate+'T00:00:00'); d.setDate(d.getDate()+i);
       const dow = d.getDay();
@@ -3440,11 +3446,14 @@ function suggestSlots(product, yards, bookings, capMap, mode, crews, fromDate){
               why:'first job the morning after a '+product+' day — the truck is already dialed in' }
           : { rule:'3', date:ds, min:t, why:'first open slot' };
       }
-      if(!cand || cand.min > SLOT_RULES.LATEST_START_MIN) continue;
-      if(!best || RULE_RANK[cand.rule] < RULE_RANK[best.rule]) best = cand;
-      if(best && best.rule==='1') break;         // nothing beats sharing the load
+      // The 5 PM cap: the job must END inside the working day, not just start.
+      if(!cand || cand.min + durMin > SLOT_RULES.DAY_END_MIN) continue;
+      cands.push(cand);
     }
-    results.push({ crew, best, cap, hasCap: !!capRow });
+    cands.sort((a,b) => RULE_RANK[a.rule]-RULE_RANK[b.rule] ||
+      a.date.localeCompare(b.date) || a.min-b.min);
+    const alts = cands.slice(0, SLOT_RULES.ALTS_PER_TRUCK);
+    results.push({ crew, best: alts[0]||null, alts, cap, hasCap: !!capRow });
   }
   return results;
 }
@@ -3543,6 +3552,9 @@ async function renderSuggestions(){
       const eq = parseFloat($('#o_eqhr').textContent)||0;
       const jobsOn=(c,ds)=>d.bookings.filter(b=>String(b.crew_id)===String(c.id)&&
         b.scheduled_date===ds).length;
+      /* The 5 PM cap applies to plans too: a plan is offered only if its
+         longest slot, started at that day's first start, is done by 5. */
+      const fits=(startHM,hrs)=> toMin(startHM)+Math.round(hrs*60) <= SLOT_RULES.DAY_END_MIN;
       const plans=[];
       for(let i=0;i<SLOT_RULES.HORIZON_DAYS;i++){
         const day=new Date(tomorrow); day.setDate(day.getDate()+i);
@@ -3551,6 +3563,7 @@ async function renderSuggestions(){
         if((CREWS||[]).length>1 && CREWS.every(c=>jobsOn(c,ds)===0)){
           const start=CREWS.map(c=>firstStartFor(c,ds)).sort().slice(-1)[0];
           const la2=Math.ceil(proj.loads/2), lb2=Math.floor(proj.loads/2);
+          if(!fits(start,(eq/proj.loads)*la2+(la2-1))) continue;
           plans.push({date:ds, time:start, crew:CREWS[0].id, crew2:CREWS[1].id,
             tag:'both trucks', cls:'g', label:'Both trucks at once',
             why:(proj.loads===2
@@ -3569,6 +3582,7 @@ async function renderSuggestions(){
           if(day.getDay()===0||day.getDay()===6) continue;
           const ds=day.toISOString().slice(0,10);
           if(jobsOn(c,ds)===0){
+            if(!fits(firstStartFor(c,ds), eq+(proj.loads-1))) continue;  // ends past 5 PM
             plans.push({date:ds, time:firstStartFor(c,ds), crew:c.id, crew2:'',
               tag:'back-to-back', cls:'w',
               label:c.name+' runs '+(proj.loads===2?'both':'all '+proj.loads)+' loads',
@@ -3606,7 +3620,8 @@ async function renderSuggestions(){
     }
 
     const res = suggestSlots(product, yards, d.bookings, d.capMap, d.mode,
-                             CREWS||[], tomorrow.toISOString().slice(0,10));
+                             CREWS||[], tomorrow.toISOString().slice(0,10),
+                             Math.round((slotDuration()||2)*60));
     const ranked = res.filter(r=>r.best).sort((a,b)=>
       RULE_RANK[a.best.rule]-RULE_RANK[b.best.rule] ||
       a.best.date.localeCompare(b.best.date) || a.best.min-b.best.min);
@@ -3622,17 +3637,22 @@ async function renderSuggestions(){
     }
     html += res.map(r=>{
       if(!r.best) return '<div class="small muted" style="padding:2px 0">'+esc(r.crew.name)+
-        ' — no open slot in the next '+SLOT_RULES.HORIZON_DAYS+' days</div>';
-      const b = r.best;
+        ' — no slot that finishes by 5 PM in the next '+SLOT_RULES.HORIZON_DAYS+' days</div>';
+      const mk = (b, star, alt) => {
+        const cls = b.rule==='1' ? 'g' : (b.rule==='3' ? '' : 'w');
+        return '<button class="btn ghost sm suggslot" data-date="'+b.date+'" data-crew="'+r.crew.id+
+          '" data-time="'+toHM(b.min)+'" style="display:block;text-align:left;margin:3px 0;'+
+          (alt ? 'width:calc(100% - 18px);margin-left:18px;opacity:.9' : 'width:100%')+'">'+
+          (star?'★ ':'')+'<b>'+esc(alt ? dfmt(b.date) : r.crew.name)+'</b> · '+
+          (alt ? '' : esc(dfmt(b.date))+' · ')+fmtMin(b.min)+
+          ' <span class="tag '+cls+'">'+(b.rule==='1'?'share load':b.rule==='3'?'open':'same product')+'</span>'+
+          '<br><span class="small muted">'+esc(b.why)+
+          (!alt && !r.hasCap ? ' · no capacity on file for '+esc(product)+' — share-a-load off' : '')+
+          '</span></button>';
+      };
       const star = String(r.crew.id)===String(bestKey);
-      const cls = b.rule==='1' ? 'g' : (b.rule==='3' ? '' : 'w');
-      return '<button class="btn ghost sm suggslot" data-date="'+b.date+'" data-crew="'+r.crew.id+
-        '" data-time="'+toHM(b.min)+'" style="display:block;width:100%;text-align:left;margin:3px 0">'+
-        (star?'★ ':'')+'<b>'+esc(r.crew.name)+'</b> · '+esc(dfmt(b.date))+' · '+fmtMin(b.min)+
-        ' <span class="tag '+cls+'">'+(b.rule==='1'?'share load':b.rule==='3'?'open':'same product')+'</span>'+
-        '<br><span class="small muted">'+esc(b.why)+
-        (!r.hasCap ? ' · no capacity on file for '+esc(product)+' — share-a-load off' : '')+
-        '</span></button>';
+      return mk(r.best, star, false) +
+        (r.alts||[]).slice(1).map(b=>mk(b, false, true)).join('');
     }).join('');
     box.innerHTML = html;
     box.querySelectorAll('.suggslot').forEach(btn=>{
@@ -3817,6 +3837,22 @@ async function saveQuote(status){
   if((status==='sent'||status==='won') && !($('#q_scheddate').value && $('#q_crew').value)){
     msg((status==='sent'?'A hold':'Scheduling')+' needs a slot — pick a date and a truck first.', true);
     return;
+  }
+  /* The office's hard cap: no job runs past 5 PM. Checked on both slots of a
+     split booking. Refused with the arithmetic, so the fix is obvious. */
+  if(status==='sent'||status==='won'){
+    const overFive = (timeVal, hrs, label) => {
+      if(!timeVal || !(hrs>0)) return false;
+      const endMin = toMin(timeVal) + Math.round(hrs*60);
+      if(endMin <= SLOT_RULES.DAY_END_MIN) return false;
+      msg(label+' would run '+fmtMin(toMin(timeVal))+' → '+fmtMin(endMin)+
+        ' — past the 5:00 PM cap. Start earlier or shorten the slot.', true);
+      return true;
+    };
+    if(overFive($('#q_schedtime').value, slotDuration(), 'This job')) return;
+    if($('#q_crew2').value &&
+       overFive($('#q_schedtime2').value || $('#q_schedtime').value,
+                slotDuration2() || slotDuration(), 'Load 2')) return;
   }
   const addr=$('#q_address').value.trim();
   const ctx=estimateCtx();
