@@ -214,6 +214,14 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
      full line of their own. */
   .row>*{flex:1 1 45% !important;max-width:none !important}
   .row>[style*="flex:2"]{flex:1 1 100% !important}
+  /* A long label ("Duration (hr) · from the estimate") wraps to two lines and
+     pushes its box below its neighbour's. Bottom-anchor every field so the
+     inputs in a row always sit on one line, whatever their labels do. */
+  .row>*{display:flex;flex-direction:column;justify-content:flex-end}
+  /* Native date/time pickers render 2px taller than our pinned selects; on
+     phones pin everything to one 44px control height (thumb-sized anyway). */
+  input[type=text],input[type=number],input[type=email],input[type=password],
+  input[type=date],input[type=time],select{min-height:44px}
   input[type=text],input[type=number],input[type=email],input[type=password],input[type=date],input[type=time],select,textarea{font-size:16px}
   .btn{min-height:44px}
   .btn.sm{min-height:38px;padding:7px 12px}
@@ -875,7 +883,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-02-mobile';   // shown in the header; check it after deploying
+const BUILD = '2026-09-03-products';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1241,7 +1249,7 @@ const DemoDB = {
   },
   async truckCaps(){
     // Same numbers as sql/17_truck_capacity.sql -- the placement-truck sheet.
-    const base=[['BeautiBark',32,23],['Hemlock',23,18],['UltraKote',25,18],
+    const base=[['BeautiBark',32,23],['Hemlock',23,18],
       ['DecoBark Nuggets',37.5,28],['Fresh Sawdust',37.5,30],['Alder Sawdust',37.5,30],
       ['Flower-n-Garden',15,11],['Primary Planting Soil',23,15],['Turf Start',15,11],
       ['Garden Compost',23,11],['GVO Compost',23,11],['GVO w/Worm Castings',23,11],
