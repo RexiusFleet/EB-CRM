@@ -464,6 +464,31 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           <div class="small muted" style="margin-top:6px">If this asks for permission,
             your Google account needs at least read access to the truck calendar — ask
             an admin to share it (<i>See all event details</i> is enough).</div>
+
+          <!-- Blockouts: holidays, PTO, shop days. One click writes a real
+               calendar event (stamped as a block) that the slot suggestions,
+               capacity notes and crew calendars all respect. -->
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-2)">
+            <div class="small" style="font-weight:600;margin-bottom:6px">Block out time
+              <span class="muted" style="font-weight:400">· holidays, PTO, shop days —
+              suggestions steer around these</span></div>
+            <div class="row">
+              <div><label class="f">Date</label><input type="date" id="bl_date"></div>
+              <div><label class="f">Truck</label><select id="bl_crew">
+                <option value="*">All trucks</option></select></div>
+              <div><label class="f">From <span class="small muted">blank = all day</span></label>
+                <input type="time" id="bl_from" step="900"></div>
+              <div><label class="f">To</label><input type="time" id="bl_to" step="900"></div>
+            </div>
+            <div class="row" style="margin-top:8px">
+              <div style="flex:2"><label class="f">Reason</label>
+                <input type="text" id="bl_reason" placeholder="Labor Day, PTO Shane, boom repair…"></div>
+              <div style="max-width:140px;align-self:flex-end">
+                <button class="btn ghost" id="bl_add" style="width:100%">Block</button></div>
+            </div>
+            <div id="bl_msg"></div>
+            <div id="bl_list" class="small" style="margin-top:8px"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -883,7 +908,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-03-cap3';   // shown in the header; check it after deploying
+const BUILD = '2026-09-04-blocks';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1573,6 +1598,8 @@ const GS = {
   /* Truck-occupying events straight off the calendar (manual office bookings
      included) -- what the suggestion engine merges with app bookings. */
   busy(from,to){ return this.call('busy', {from,to}).then(r=>r.events||[]); },
+  block(a){ return this.call('block', a); },
+  unblock(id){ return this.call('unblock', {id}); },
 };
 
 
@@ -2838,7 +2865,7 @@ async function runCalCheck(){
   /* The single most common failure in this whole system: the code was edited
      but the deployment was not. The script reports its version so that state
      is visible instead of mysterious. */
-  const SCRIPT_WANT = '2026-09-03-busy';
+  const SCRIPT_WANT = '2026-09-04-blocks';
   if(ping.version === SCRIPT_WANT){
     rows.push(line(true,'Script version', ping.version));
   }else{
@@ -3121,6 +3148,10 @@ async function loadCrews(){
   const sel2=$('#q_crew2');
   if(sel2) sel2.innerHTML = '<option value="">— same truck —</option>' +
     CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('');
+  const selB=$('#bl_crew');
+  if(selB) selB.innerHTML = '<option value="*">All trucks</option>' +
+    CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('');
+  renderBlockList();
   // Crews share one master calendar now, so "no calendar for this crew" is not
   // a meaningful per-crew state any more; the availability panel reports the
   // single calendar's configuration instead.
@@ -3511,22 +3542,63 @@ async function loadSuggData(force){
      cases. An all-day truck event blocks that truck's whole day. */
   const calOk = busy && !busy.err && Array.isArray(busy);
   if(calOk) busy.forEach((e,i)=>{
-    bookings.push({ id:'cal'+i, fromCalendar:true,
+    /* A whole-fleet blockout (crew '*') occupies EVERY truck. */
+    const crewIds = String(e.crew)==='*' ? (CREWS||[]).map(c=>String(c.id))
+                                         : [String(e.crew)];
+    crewIds.forEach(cid=>bookings.push({ id:'cal'+i, fromCalendar:true,
+      block: !!e.block,
       product:e.product||null, yards:Number(e.yards)||0,
       customer_name:e.summary||'calendar event',
-      status: e.hold?'sent':'won', crew_id:String(e.crew),
+      status: e.hold?'sent':'won', crew_id:cid,
       scheduled_date:e.date,
       scheduled_time: e.allDay ? SLOT_RULES.FIRST_START : e.time,
       scheduled_hours: e.allDay ? 10 : e.hours,
-      equip_hours: e.allDay ? 10 : e.hours });
+      equip_hours: e.allDay ? 10 : e.hours }));
   });
   const capMap = new Map();
   (caps||[]).forEach(r => capMap.set(String(r.crew_id)+'|'+r.product, r));
   suggData = { t:Date.now(), bookings, capMap, wantCal,
                mode:(cfg.capacity_mode==='wet'?'wet':'dry'),
                calSeen: calOk, calN: calOk ? busy.length : 0,
+               blocks: calOk ? busy.filter(e=>e.block) : [],
                calErr: busy && busy.err ? String(busy.err) : null };
+  try{ renderBlockList(); }catch(e){}
   return suggData;
+}
+
+/* Upcoming blockouts under the calendar embed, each with a one-tap remove.
+   The list is the calendar's own truth (via the busy feed), so a block made
+   in Google directly (all-day "CLOSED — …") shows here too. */
+function renderBlockList(){
+  const box=$('#bl_list'); if(!box) return;
+  const blocks=(suggData.blocks||[]).slice()
+    .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  if(!blocks.length){ box.innerHTML='<span class="muted">No blockouts ahead.</span>'; return; }
+  const crewName=id=> id==='*' ? 'All trucks'
+    : ((CREWS||[]).find(c=>String(c.id)===String(id))||{}).name || ('crew '+id);
+  box.innerHTML = blocks.map(b=>
+    '<div class="kv"><span class="k">🚫 '+esc(dfmt(b.date))+
+    (b.allDay?'':' · '+esc(b.time||''))+' · <b>'+esc(crewName(String(b.crew)))+'</b>'+
+    ' <span class="muted">'+esc(String(b.summary||'').replace(/^🚫\s*/,'').slice(0,60))+'</span></span>'+
+    (b.id?'<button class="btn ghost sm" data-unblock="'+esc(b.id)+'">✕ Remove</button>':'')+
+    '</div>').join('');
+  box.querySelectorAll('[data-unblock]').forEach(btn=>{
+    btn.onclick=async()=>{
+      btn.disabled=true;
+      try{
+        await GS.unblock(btn.dataset.unblock);
+        blMsg('Blockout removed.', false);
+        bustSuggCache(); await loadSuggData(true);
+        renderSuggestionsDebounced(); refreshCrewLoad();
+      }catch(e){ blMsg(e.message, true); btn.disabled=false; }
+    };
+  });
+}
+let blMsgTimer=null;
+function blMsg(t,bad){
+  $('#bl_msg').innerHTML='<div class="note '+(bad?'bad':'ok')+'" style="margin-top:8px">'+esc(t)+'</div>';
+  clearTimeout(blMsgTimer);
+  blMsgTimer=setTimeout(()=>{$('#bl_msg').innerHTML='';}, 5000);
 }
 function bustSuggCache(){ suggData.t = 0; }
 
@@ -4096,6 +4168,22 @@ function wire(){
     $('#savequote').textContent='Save quote';
     renderSchedState(null); refreshCrewLoad();
     autoFill={drive:true,blow:true}; renderHistory(); recalc();
+  };
+  $('#bl_add').onclick=async()=>{
+    const date=$('#bl_date').value;
+    if(!date){ blMsg('Pick a date to block.', true); return; }
+    if(!GS.configured()){ blMsg('Blockouts need the calendar script — set up scheduling first (Rate Card → Check).', true); return; }
+    const btn=$('#bl_add'); btn.disabled=true;
+    try{
+      const r = await GS.block({ crewId: $('#bl_crew').value, date,
+        from: $('#bl_from').value || null, to: $('#bl_to').value || null,
+        reason: $('#bl_reason').value.trim() });
+      blMsg('Blocked — "'+(r.summary||'')+'" is on the calendar; suggestions now steer around it.', false);
+      $('#bl_reason').value=''; $('#bl_from').value=''; $('#bl_to').value='';
+      bustSuggCache(); await loadSuggData(true);
+      renderSuggestionsDebounced(); refreshCrewLoad();
+    }catch(e){ blMsg(e.message, true); }
+    btn.disabled=false;
   };
   $('#authbtn').onclick=async()=>{
     if(State.user){ SB.signOut(); renderAuth(); location.reload(); return; }
