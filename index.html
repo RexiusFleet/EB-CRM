@@ -57,7 +57,12 @@ nav.tabs button[aria-current="true"]{background:var(--accent-soft);color:var(--a
 main{max-width:1400px;margin:0 auto;padding:20px 18px 80px}
 
 /* ---------- primitives ---------- */
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);min-width:0}
+/* Grid and flex children default to min-width:auto, so ONE wide table (the
+   customer-jobs list, the data-status table) silently widens its card, the
+   grid, and finally the page -- which is why phones got a sideways scroll.
+   Forcing min-width:0 lets the .scroll wrappers actually do their clipping. */
+.grid>*,.qgrid>*{min-width:0}
 .card>h3{padding:13px 16px;border-bottom:1px solid var(--line-2);font-size:13px;text-transform:uppercase;
   letter-spacing:.06em;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
 .card>.body{padding:16px}
@@ -70,12 +75,12 @@ main{max-width:1400px;margin:0 auto;padding:20px 18px 80px}
 .btn.sm{padding:5px 10px;font-size:13px;border-radius:6px}
 .btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
 label.f{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;letter-spacing:.02em}
-input[type=text],input[type=number],input[type=email],input[type=password],select,textarea{
+input[type=text],input[type=number],input[type=email],input[type=password],input[type=date],input[type=time],select,textarea{
   width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2)}
 /* A <select> defaults to line-height:normal while an <input> inherits 1.5, so
    side by side the dropdown sits ~4px shorter. Pin both to the same height so
    Product and Yards line up in every browser. */
-input[type=text],input[type=number],input[type=email],input[type=password],select{
+input[type=text],input[type=number],input[type=email],input[type=password],input[type=date],input[type=time],select{
   min-height:42px;line-height:1.5}
 /* Safari ignores the height pin on native selects; drawing our own chevron
    makes Product render exactly like Yards in every browser. */
@@ -186,6 +191,38 @@ dialog{border:0;border-radius:14px;padding:0;background:var(--panel);color:var(-
 dialog::backdrop{background:rgba(10,14,9,.55)}
 .dlg{padding:22px}
 .dlg h2{font-size:18px;margin-bottom:4px}
+
+/* ---------- phones ----------
+   A rep pulling this up in a driveway gets: a header that scrolls away
+   (screen is scarcer than the shortcut), one-line swipeable tabs, two form
+   fields per row instead of four slivers, thumb-sized buttons, and inputs at
+   16px so iOS stops zooming into every field it focuses. Tables scroll
+   inside their own cards -- the page itself never scrolls sideways. */
+@media(max-width:640px){
+  header.top{position:static;padding:10px 12px;gap:10px}
+  nav.tabs{order:3;flex:0 0 100%;flex-wrap:nowrap;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;scrollbar-width:none}
+  nav.tabs::-webkit-scrollbar{display:none}
+  nav.tabs button{white-space:nowrap;padding:10px 13px}
+  .userbox #whoami{display:none}      /* the mode pill + Sign out say enough */
+  main{padding:12px 10px 90px}
+  .card>.body{padding:13px 12px}
+  .row{gap:10px}
+  /* Fields carry inline flex/max-width tuned for desktop; !important is the
+     only way CSS can outrank an inline style. Two fields per line, and the
+     wide ones (customer, address, email, product -- inline flex:2) take a
+     full line of their own. */
+  .row>*{flex:1 1 45% !important;max-width:none !important}
+  .row>[style*="flex:2"]{flex:1 1 100% !important}
+  input[type=text],input[type=number],input[type=email],input[type=password],input[type=date],input[type=time],select,textarea{font-size:16px}
+  .btn{min-height:44px}
+  .btn.sm{min-height:38px;padding:7px 12px}
+  .saverow{gap:8px;padding:10px 0 calc(6px + env(safe-area-inset-bottom))}
+  .saverow .btn{flex:1 1 auto}
+  #calembedbody iframe{height:440px !important}
+  dialog{width:calc(100vw - 20px)}
+  .dlg{padding:16px}
+}
 </style>
 </head>
 <body>
@@ -838,7 +875,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-02-projjobs';   // shown in the header; check it after deploying
+const BUILD = '2026-09-02-mobile';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1768,6 +1805,9 @@ function renderAuth(){
 
 function show(v){
   $$('#tabs button').forEach(b=>b.setAttribute('aria-current', String(b.dataset.view===v)));
+  // The tab bar scrolls sideways on phones -- keep the active tab in sight.
+  const cur=$('#tabs button[aria-current="true"]');
+  if(cur && cur.scrollIntoView) try{ cur.scrollIntoView({block:'nearest',inline:'nearest'}); }catch(e){}
   ['quote','quotes','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quotes') renderQuotesList();
   if(v==='dash')   renderDash();
