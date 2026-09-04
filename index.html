@@ -373,6 +373,10 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                 <span class="v" id="o_perload">—</span></div>
             </div>
 
+            <!-- What Lane Forest publishes for the comparable product at this
+                 volume — the rep sees the competitive picture on every quote. -->
+            <div id="compbox"></div>
+
             <div class="row" style="align-items:flex-end">
               <div><label class="f">Bid amount</label><input type="number" id="q_bid" step="1" class="mono num"></div>
               <div style="align-self:center" id="statusnow"></div>
@@ -908,7 +912,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-04-blocks';   // shown in the header; check it after deploying
+const BUILD = '2026-09-04-comp';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2004,6 +2008,79 @@ function basisLabel(b){
   return '<span class="tag '+m[1]+'" style="margin-right:6px">'+esc(m[0])+'</span>';
 }
 
+
+/* ==================== competitor price check (Lane Forest) ================
+   Their PUBLISHED Blown-in-Place prices (shop.laneforest.com, local delivery
+   area), shown beside every quote so the rep knows the competitive picture
+   before the customer quotes it back at them. Data: the office's scrape of
+   2026-08-26 (372 priced tiers) plus the ingredient-verified product match
+   list -- pairings follow the corrected battlecard (Flower-n-Garden is quoted
+   against Garden Rich; Turf Start vs Lawn Base is NOT a price tie; DecoBark
+   nuggets run double their size). Their shop sells fixed quantity tiers, so
+   the comparison uses the smallest tier at or above the quoted yards -- what
+   the customer could actually order -- and extrapolates per-yard past their
+   top tier. Refresh: re-scrape and regenerate LF_PRICES (both companies
+   revise annually in spring). */
+const LF_PRICES = {retrieved:'2026-08-26', source:'shop.laneforest.com',
+  products: {"Bark O Mulch":[[0.5,432],[1.0,432],[1.5,468],[2.0,468],[3.0,501],[4.0,529],[5.0,559],[6.0,578],[7.5,626],[11.25,789],[15.0,959],[18.75,1122],[22.5,1256],[26.25,1412],[30.0,1528],[33.75,1663],[37.5,1733]],"Blended Mint Compost":[[0.5,460],[1.0,460],[1.5,512],[2.0,512],[3.0,561],[4.0,598],[5.0,645],[6.0,668],[7.5,737],[11.25,947],[15.0,1087],[18.75,1299],[22.5,1447]],"Cedar Shavings":[[0.5,422],[1.0,422],[1.5,451],[2.0,451],[3.0,475],[4.0,498],[5.0,517],[6.0,540],[7.5,550],[11.25,580],[15.0,645],[18.75,700],[22.5,739],[26.25,791],[30.0,843],[33.75,892],[37.5,923]],"Color Rich - Dark Brown":[[0.5,452],[1.0,452],[1.5,523],[2.0,523],[3.0,578],[4.0,624],[5.0,673],[6.0,703],[7.5,781],[11.25,1001],[15.0,1278],[22.5,1760],[26.25,2038],[30.0,2357],[33.75,2621],[37.5,2907]],"Color Rich - Red":[[0.5,452],[1.0,452],[1.5,523],[2.0,523],[3.0,578],[4.0,624],[5.0,673],[6.0,703],[7.5,781],[11.25,1001],[15.0,1278],[18.75,1529],[22.5,1760],[26.25,2038],[30.0,2357],[33.75,2621],[37.5,2907]],"Fir Bark":[[0.5,435],[1.0,435],[1.5,463],[2.0,463],[3.0,495],[4.0,515],[5.0,545],[6.0,562],[7.5,614],[11.25,766],[15.0,924],[18.75,1069],[22.5,1179],[26.25,1322],[30.0,1422],[33.75,1542],[37.5,1650]],"Fir Shavings":[[1.0,422],[1.5,451],[2.0,451],[3.0,475],[4.0,498],[5.0,517],[6.0,540],[7.5,550],[11.25,580],[15.0,645],[18.75,700],[22.5,739],[26.25,791],[30.0,843],[33.75,892],[37.5,923]],"Fresh Bark Dust":[[0.5,542],[1.0,542],[1.5,468],[2.0,468],[3.0,501],[4.0,529],[5.0,559],[6.0,578],[7.5,626],[11.25,789],[15.0,959],[18.75,1122],[22.5,1256],[26.25,1412],[30.0,1528],[33.75,1663],[37.5,1733]],"Fresh Sawdust":[[0.5,425],[1.0,425],[1.5,451],[2.0,451],[3.0,481],[4.0,506],[5.0,530],[6.0,551],[7.5,568],[11.25,606],[15.0,694],[18.75,752],[26.25,895],[30.0,960],[33.75,1037],[37.5,1075]],"Frugal Pro":[[0.5,504],[1.0,504],[1.5,524],[2.0,524],[3.0,554],[4.0,589],[5.0,624],[6.0,652],[7.5,717],[11.25,897]],"Garden Compost":[[0.5,447],[1.0,447],[1.5,477],[2.0,477],[3.0,513],[4.0,539],[5.0,572],[6.0,583],[7.5,639],[11.25,792],[15.0,875],[18.75,1030],[22.5,1200]],"Garden Rich":[[0.5,524],[1.0,524],[1.5,537],[2.0,537],[3.0,580],[4.0,623],[5.0,666],[6.0,693],[7.5,777],[11.25,1001],[15.0,1264]],"Hemlock":[[0.5,448],[1.0,448],[1.5,512],[2.0,512],[3.0,560],[4.0,602],[5.0,646],[6.0,673],[7.5,744],[11.25,930],[15.0,1173],[18.75,1394],[22.5,1614],[26.25,1866],[30.0,2072],[33.75,2398],[37.5,2630]],"Lane Potting Mix":[[0.5,513],[1.0,513],[1.5,527],[2.0,527],[3.0,572],[4.0,612],[5.0,657],[6.0,688],[7.5,761],[11.25,982],[15.0,1223]],"Lawn Base":[[0.5,553],[1.0,553],[1.5,564],[2.0,564],[3.0,590],[4.0,634],[5.0,679],[6.0,711],[7.5,794],[11.25,1023],[15.0,1293]],"Natures Best":[[0.5,580],[1.0,580],[1.5,592],[2.0,592],[3.0,598],[4.0,644],[5.0,691],[6.0,727],[7.5,811],[11.25,1044],[15.0,1320]],"Old Bark Dust":[[0.5,542],[1.0,542],[1.5,468],[2.0,468],[3.0,501],[4.0,529],[5.0,559],[6.0,578],[7.5,626],[11.25,789],[15.0,959],[18.75,1122],[22.5,1256],[26.25,1412],[30.0,1528],[33.75,1663],[37.5,1733]],"Pebble Bark":[[0.5,445],[1.0,445],[1.5,486],[2.0,486],[3.0,521],[4.0,556],[5.0,590],[6.0,620],[7.5,646],[11.25,865],[15.0,1027],[18.75,1175],[22.5,1311],[26.25,1458],[30.0,1597],[33.75,1744],[37.5,1899]],"PlayAway Chips":[[0.5,441],[1.0,441],[1.5,484],[2.0,484],[3.0,523],[4.0,550],[5.0,586],[6.0,607],[7.5,666],[11.25,829],[15.0,1012],[18.75,1166],[22.5,1309],[26.25,1441],[30.0,1562],[33.75,1683],[37.5,1793]],"River Rock 3/8\" (Pea Gravel)":[[0.5,825],[1.0,825],[1.5,825],[2.0,825],[3.0,825],[4.0,825],[5.0,825],[6.0,968],[7.0,1046],[8.0,1117],[9.0,1537],[10.0,1621],[11.0,1737],[12.0,1786],[20.0,2791],[24.0,3350]],"Super Natural":[[0.5,568],[1.0,568],[1.5,592],[2.0,592],[3.0,671],[4.0,750],[5.0,828],[6.0,908],[7.5,1026],[11.25,1343],[15.0,1637]],"The Douglas Nugget":[[0.5,457],[1.0,457],[1.5,528],[2.0,528],[3.0,583],[4.0,638],[5.0,691],[6.0,718],[7.5,809],[11.25,1043],[15.0,1317],[18.75,1594],[22.5,1815],[26.25,2012],[30.0,2185],[33.75,2409],[37.5,2665]],"VeggieBoost":[[0.5,455],[1.0,455],[1.5,486],[2.0,486],[3.0,534],[4.0,569],[5.0,613],[6.0,635],[7.5,701],[11.25,900],[15.0,1033],[18.75,1234],[22.5,1375]],"Walk-On Bark":[[0.5,435],[1.0,435],[1.5,463],[2.0,463],[3.0,495],[4.0,515],[5.0,545],[6.0,562],[7.5,614],[11.25,766],[15.0,924],[18.75,1069],[22.5,1179],[26.25,1322],[30.0,1422],[33.75,1542],[37.5,1650]],"Wood Chips":[[0.5,437],[1.0,437],[1.5,464],[2.0,464],[3.0,502],[4.0,528],[5.0,563],[6.0,583],[7.5,639],[11.25,796],[15.0,971],[18.75,1120],[22.5,1256],[26.25,1384],[30.0,1499],[33.75,1616],[37.5,1722]]}};
+const LF_MATCH = {
+  'BeautiBark':            {lf:'Bark O Mulch', grade:'STRONG', note:'the true premium-fir pair'},
+  'Econo-Bark':            {lf:'Fir Bark', grade:'CLOSE', note:'their Medium Fir; Walk-On Bark prices the same'},
+  'Hemlock':               {lf:'Hemlock', grade:'STRONG', note:'closest pair in the bark line'},
+  'DecoBark Nuggets':      {lf:'The Douglas Nugget', grade:'CLOSE', note:'our nuggets run roughly double their size (1\u20132" vs 1/2\u20131")'},
+  'Fiberex':               {lf:'PlayAway Chips', grade:'STRONG', note:'both ASTM-certified playground fiber'},
+  'Fresh Sawdust':         {lf:'Fresh Sawdust', grade:'EXACT', note:'same species, same fresh state'},
+  'Alder Sawdust':         {lf:'Fresh Sawdust', grade:'LOOSE', note:'theirs is Douglas Fir, not alder'},
+  'Primary Planting Soil': {lf:'Frugal Pro', grade:'STRONG', note:'compost + loam + aged bark, both unfertilized'},
+  'Flower-n-Garden':       {lf:'Garden Rich', grade:'STRONG', note:"10 shared ingredients; their Nature's Best prints the same list for more"},
+  'Turf Start':            {lf:'Lawn Base', grade:'LOOSE', note:'sold for the same job, built differently \u2014 not a price tie'},
+  'Garden Compost':        {lf:'Garden Compost', grade:'EXACT', note:'both OMRI-listed green-waste composts'},
+  'GVO Compost':           {lf:'Garden Compost', grade:'EXACT', note:'both OMRI-listed green-waste composts'},
+  'GVO w/Worm Castings':   {lf:'VeggieBoost', grade:'CLOSE', note:'both fortified composts; theirs adds mycorrhizae'},
+  'Steer Plus':            {lf:'Blended Mint Compost', grade:'CLOSE', note:'both manure-bearing multi-feedstock composts'},
+  'GV Natural & Organic P.S.': {lf:'Super Natural', grade:'STRONG', note:'we are well over \u2014 sell the coir, guano and castings list'},
+  '3/8" round rock from RiverBend': {lf:'River Rock 3/8" (Pea Gravel)', grade:'STRONG', note:'their only rock with a published blown-in price'},
+};
+
+function renderCompetitor(p){
+  const box=$('#compbox'); if(!box) return;
+  const product=$('#q_product').value, yards=parseFloat($('#q_yards').value)||0;
+  const m = LF_MATCH[product];
+  const tiers = m && LF_PRICES.products[m.lf];
+  if(!m || !tiers || !yards || !p || !(p.targetPrice>0)){ box.innerHTML=''; return; }
+  const ours = p.bidAmount>0 ? p.bidAmount : p.targetPrice;
+  const basis = p.bidAmount>0 ? 'bid' : 'target';
+  let qty, total, est=false;
+  const tier = tiers.find(t=>t[0] >= yards-1e-9);
+  if(tier){ qty=tier[0]; total=tier[1]; }
+  else{ const top=tiers[tiers.length-1];
+        qty=yards; total=Math.round(top[1]/top[0]*yards); est=true; }
+  const perYd = total/qty;
+  const diff = ours-total, pct = Math.round(diff/total*100);
+  const gcls = m.grade==='EXACT'||m.grade==='STRONG' ? 'g' : m.grade==='CLOSE' ? 'w' : '';
+  const tierTxt = est
+    ? '\u2248 extrapolated past their published '+tiers[tiers.length-1][0]+'-yd max'
+    : (Math.abs(qty-yards)<1e-9 ? 'their '+qty+'-yd price'
+       : 'their '+qty+'-yd tier \u2014 smallest they sell at/above '+yards+' yd');
+  const cmp = Math.abs(diff) < Math.max(20, total*0.02)
+    ? '<span class="tag g">about even</span>'
+    : diff<0 ? '<span class="tag g">we are '+money(-diff)+' under ('+(-pct)+'%)</span>'
+             : '<span class="tag w">we are '+money(diff)+' over (+'+pct+'%)</span>';
+  box.innerHTML =
+    '<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;'+
+    'background:var(--panel-2);margin:4px 0 2px">'+
+    '<div class="small" style="font-weight:600">Lane Forest \u2014 published blown-in price '+
+    '<span class="tag '+gcls+'">'+esc(m.grade)+' match</span></div>'+
+    '<div class="small" style="margin-top:4px"><b>'+esc(m.lf)+'</b> \u00b7 '+
+    (est?'\u2248':'')+money(total)+' <span class="muted">('+money2(perYd)+'/yd \u00b7 '+
+    esc(tierTxt)+')</span></div>'+
+    '<div class="small" style="margin-top:4px">Our '+basis+' '+money(ours)+' \u2192 '+cmp+'</div>'+
+    (m.note?'<div class="small muted" style="margin-top:3px">'+esc(m.note)+'</div>':'')+
+    '<div class="small muted" style="margin-top:3px">Published Blown-in-Place total, local '+
+    'delivery area \u00b7 '+esc(LF_PRICES.source)+' \u00b7 retrieved '+esc(LF_PRICES.retrieved)+'</div>'+
+    '</div>';
+}
+
 function recalc(){
   setTimeout(()=>{ syncSlotDurField(); renderSlotHint(); }, 0);
   suggest();
@@ -2066,6 +2143,7 @@ function recalc(){
     }
   }
   if($('#q_bid').value==='' && p.targetPrice!=null) $('#q_bid').placeholder = Math.round(p.targetPrice);
+  renderCompetitor(p);
   /* The split carries the job facts in its titles, so a rep reading the
      bottom of the quote sees what the money is FOR without scrolling up. */
   $('#k_mrev').innerHTML='Material revenue <span class="small">'+
