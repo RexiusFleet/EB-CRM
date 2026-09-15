@@ -913,7 +913,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-15-prep';   // shown in the header; check it after deploying
+const BUILD = '2026-09-15-open';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2388,7 +2388,12 @@ async function loadSite(key, seed, opts){
     customer: (hasRecord && recCust && $('#q_customer').value.trim()===recCust) ? recCust : null,
     address:  hasRecord ? ($('#q_address').value.trim()||null) : null
   };
-  autoFill={drive:true,blow:true,prep:true};
+  /* Picking a site re-arms the estimators (drive time comes from the site's
+     city). But when a SAVED quote is being reopened, the numbers on it are
+     the rep's quoted numbers -- openQuote passes preserveHours so loading
+     the site's history panel never overwrites them. That overwrite was a
+     real field bug: open a saved quote, watch the drive time change. */
+  if(!(opts && opts.preserveHours)) autoFill={drive:true,blow:true,prep:true};
   renderHistory();
   renderCustJobs();
   recalc();
@@ -3091,7 +3096,7 @@ async function openQuote(r){
   autoFill={drive:false,blow:false,prep:false};  // these are the rep's saved numbers
   renderSchedState(r); recalc(); refreshCrewLoad();
   if(r.site_key) loadSite(r.site_key, {address1:r.address_raw,city:r.city,zip:r.zip},
-                          {keepTyped:true});
+                          {keepTyped:true, preserveHours:true});
 }
 
 /* ============================== dashboard =============================== */
