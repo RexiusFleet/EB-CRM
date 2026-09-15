@@ -277,7 +277,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                          placeholder="Click to browse, or type a new customer">
                   <div class="results hide" id="custresults"></div>
                 </div></div>
-              <div><label class="f">Phone</label><input type="text" id="q_phone"></div>
+              <div style="min-width:170px"><label class="f">Phone</label><input type="text" id="q_phone" placeholder="(541) 555-0100"></div>
               <div style="max-width:130px"><label class="f">Customer #</label>
                 <input type="text" id="q_custno" autocomplete="off" class="mono" placeholder="020105687"></div>
               <div style="flex:2"><label class="f">Email</label><input type="text" id="q_email"></div>
@@ -438,7 +438,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div class="row" style="margin-top:10px">
                 <span class="small muted" style="align-self:center"><b>Hold</b> places a grey
                   hold on this slot; <b>Schedule</b> books it as a confirmed job;
-                  <b>Save quote</b> leaves the calendar alone.</span>
+                  <b>Save/Update quote</b> saves your edits and leaves the booking exactly
+                  as it is — <b>Remove booking</b> is what takes a job off the calendar.</span>
                 <button class="btn ghost sm hide" id="btnunschedule">Remove booking</button>
               </div>
               <div id="schedmsg"></div>
@@ -912,7 +913,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-04-comp2';   // shown in the header; check it after deploying
+const BUILD = '2026-09-15-rock';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1924,6 +1925,37 @@ function projectLoads(){
   return {loads: Math.max(1, Math.ceil(yards/cap)), cap};
 }
 
+/* ---- rock eligibility -------------------------------------------------
+   Only Truck #17 can physically place rock (the placement-truck sheet's
+   footnote). The rule is DATA-driven, not hardcoded to a truck: a truck can
+   carry a rock-category product only if truck_capacity has a row for it --
+   sql/17 seeds rock rows for Truck #17 alone, so a future rock-capable truck
+   is one capacity insert, not a code change. Enforced in the suggestions,
+   the project plans, both truck dropdowns, and the save buttons. */
+function isRockProduct(product){
+  const rc=((State.ref&&State.ref.rate_card)||[]).find(r=>r.product===product);
+  return !!(rc && rc.category==='rock');
+}
+function crewCanPlace(crewId, product){
+  if(!isRockProduct(product)) return true;
+  if(!suggData.capMap) return true;           // capacities not loaded yet
+  return suggData.capMap.has(String(crewId)+'|'+product);
+}
+function updateCrewEligibility(){
+  const product=$('#q_product').value;
+  ['q_crew','q_crew2'].forEach(id=>{
+    const sel=$('#'+id); if(!sel) return;
+    [...sel.options].forEach(o=>{
+      if(!o.value) return;
+      const ok=crewCanPlace(o.value, product);
+      o.disabled=!ok;
+      const c=(CREWS||[]).find(x=>String(x.id)===String(o.value));
+      o.textContent=(c?c.name:o.value)+(ok?'':' — can’t place rock');
+    });
+    if(sel.value && !crewCanPlace(sel.value, product)) sel.value='';
+  });
+}
+
 function suggest(){
   const ctx = estimateCtx();
   if(!ctx.yards){ return; }
@@ -2152,6 +2184,7 @@ function recalc(){
   }
   if($('#q_bid').value==='' && p.targetPrice!=null) $('#q_bid').placeholder = Math.round(p.targetPrice);
   renderCompetitor(p);
+  updateCrewEligibility();
   /* The split carries the job facts in its titles, so a rep reading the
      bottom of the quote sees what the money is FOR without scrolling up. */
   $('#k_mrev').innerHTML='Material revenue <span class="small">'+
@@ -2187,16 +2220,23 @@ function renderLoadsNote(){
   if(proj.loads<2){ box.innerHTML=''; if(row){ $('#q_crew2').value=''; $('#q_schedtime2').value=''; } return; }
   const yards=parseFloat($('#q_yards').value)||0;
   const la=Math.ceil(proj.loads/2), lb=Math.floor(proj.loads/2);
+  const product=$('#q_product').value;
+  const able=(CREWS||[]).filter(c=>crewCanPlace(c.id, product));
+  const splitPossible = able.length > 1;
   box.innerHTML = '<div class="note"><b>'+proj.loads+'-load project</b> — '+yards+' yd of '+
-    esc($('#q_product').value)+' at '+proj.cap+' yd/load ('+
+    esc(product)+' at '+proj.cap+' yd/load ('+
     (suggData.mode==='wet'?'wet':'dry')+'). Drive time ×'+proj.loads+
-    '; blow time covers the full volume. Schedule it below: pick a <b>Load 2 '+
-    'truck</b> to split the loads across both trucks'+
-    (proj.loads>2 ? ' ('+la+' back-to-back on the first truck + '+lb+
-      ' on the second — the two slots get their own lengths)' :
-      ' at once, or staggered — set its start')+
-    ', or leave it blank and one truck runs all '+proj.loads+
-    ' back-to-back in one long slot.</div>';
+    '; blow time covers the full volume. '+
+    (splitPossible
+      ? 'Schedule it below: pick a <b>Load 2 truck</b> to split the loads across both trucks'+
+        (proj.loads>2 ? ' ('+la+' back-to-back on the first truck + '+lb+
+          ' on the second — the two slots get their own lengths)' :
+          ' at once, or staggered — set its start')+
+        ', or leave it blank and one truck runs all '+proj.loads+
+        ' back-to-back in one long slot.'
+      : 'Only '+esc(able.map(c=>c.name).join(' and ') || 'no truck on file')+
+        ' can place rock, so the loads run <b>back-to-back on it</b> in one long slot '+
+        '— no split across trucks.')+'</div>';
 }
 
 /* "Has this customer had work done anywhere else?" -- searched by the ERP
@@ -3729,6 +3769,10 @@ async function renderSuggestions(){
       const eq = parseFloat($('#o_eqhr').textContent)||0;
       const jobsOn=(c,ds)=>d.bookings.filter(b=>String(b.crew_id)===String(c.id)&&
         b.scheduled_date===ds).length;
+      /* Rock rides only rock-capable trucks: plans are built over the
+         ELIGIBLE fleet, so a rock project never gets a "both trucks" plan
+         when only Truck #17 can carry it. */
+      const FLEET = (CREWS||[]).filter(c=>crewCanPlace(c.id, product));
       /* Plans show when their longest slot ENDS; one past 5 PM is offered
          with a warning rather than hidden -- the rep decides. */
       const planEnd=(startHM,hrs)=> toMin(startHM)+Math.round(hrs*60);
@@ -3737,23 +3781,23 @@ async function renderSuggestions(){
         const day=new Date(tomorrow); day.setDate(day.getDate()+i);
         if(day.getDay()===0||day.getDay()===6) continue;
         const ds=day.toISOString().slice(0,10);
-        if((CREWS||[]).length>1 && CREWS.every(c=>jobsOn(c,ds)===0)){
-          const start=CREWS.map(c=>firstStartFor(c,ds)).sort().slice(-1)[0];
+        if(FLEET.length>1 && FLEET.every(c=>jobsOn(c,ds)===0)){
+          const start=FLEET.map(c=>firstStartFor(c,ds)).sort().slice(-1)[0];
           const la2=Math.ceil(proj.loads/2), lb2=Math.floor(proj.loads/2);
-          plans.push({date:ds, time:start, crew:CREWS[0].id, crew2:CREWS[1].id,
+          plans.push({date:ds, time:start, crew:FLEET[0].id, crew2:FLEET[1].id,
             end:planEnd(start,(eq/proj.loads)*la2+(la2-1)),
             tag:'both trucks', cls:'g', label:'Both trucks at once',
             why:(proj.loads===2
-              ? CREWS.map(c=>c.name).join(' + ')+' each bring a load — on site together, ~'+
+              ? FLEET.map(c=>c.name).join(' + ')+' each bring a load — on site together, ~'+
                 (Math.round(eq/proj.loads*4)/4)+' hr each.'
-              : CREWS[0].name+' runs '+la2+' loads back-to-back, '+CREWS[1].name+' brings '+
+              : FLEET[0].name+' runs '+la2+' loads back-to-back, '+FLEET[1].name+' brings '+
                 lb2+' — done together in ~'+
                 (Math.round(((eq/proj.loads)*la2+(la2-1))*4)/4)+' hr.')+
               ' Stagger it by editing the Load 2 start after picking.'});
           break;
         }
       }
-      for(const c of (CREWS||[])){
+      for(const c of FLEET){
         for(let i=0;i<SLOT_RULES.HORIZON_DAYS;i++){
           const day=new Date(tomorrow); day.setDate(day.getDate()+i);
           if(day.getDay()===0||day.getDay()===6) continue;
@@ -3783,6 +3827,11 @@ async function renderSuggestions(){
         '<br><span class="small muted">'+esc(pl.why)+'</span></button>').join('')
         : '<div class="small muted">No day in the next '+SLOT_RULES.HORIZON_DAYS+
           ' days has room for a '+proj.loads+'-load project.</div>';
+      if(FLEET.length < (CREWS||[]).length)
+        html += '<div class="small muted" style="margin-top:2px">'+
+          esc((CREWS||[]).filter(c=>FLEET.indexOf(c)<0).map(c=>c.name).join(' and '))+
+          ' can’t place rock — this project rides '+
+          esc(FLEET.map(c=>c.name).join(' and ') || 'no truck on file')+' only.</div>';
       box.innerHTML = html;
       box.querySelectorAll('.suggslot').forEach(btn=>{
         btn.onclick = ()=>{
@@ -3801,7 +3850,8 @@ async function renderSuggestions(){
     const res = suggestSlots(product, yards, d.bookings, d.capMap, d.mode,
                              CREWS||[], tomorrow.toISOString().slice(0,10),
                              Math.round((slotDuration()||2)*60));
-    const ranked = res.filter(r=>r.best).sort((a,b)=>
+    const rock = isRockProduct(product);
+    const ranked = res.filter(r=>r.best && !(rock && !r.hasCap)).sort((a,b)=>
       (a.best.late?1:0)-(b.best.late?1:0) ||
       RULE_RANK[a.best.rule]-RULE_RANK[b.best.rule] ||
       a.best.date.localeCompare(b.best.date) || a.best.min-b.best.min);
@@ -3816,6 +3866,10 @@ async function renderSuggestions(){
       return;
     }
     html += res.map(r=>{
+      /* A truck with no rock capacity cannot take a rock job at all --
+         named, so the panel explains itself rather than just omitting it. */
+      if(rock && !r.hasCap) return '<div class="small muted" style="padding:2px 0">'+
+        esc(r.crew.name)+' — can’t place rock</div>';
       if(!r.best) return '<div class="small muted" style="padding:2px 0">'+esc(r.crew.name)+
         ' — no open slot in the next '+SLOT_RULES.HORIZON_DAYS+' days</div>';
       const mk = (b, star, alt) => {
@@ -3994,10 +4048,17 @@ async function doUnschedule(){
   $('#btnunschedule').disabled=true;
   try{
     const r = await GS.remove(State.savedQuoteId);
-    State.scheduled = false;
-    renderSchedState((r&&r.quote)||{});
-    $('#schedmsg').innerHTML='<div class="note ok" style="margin-top:10px">Booking removed.</div>';
-    refreshCrewLoad();
+    /* Off the calendar = back to the Saved pile. Since Save/Update preserves
+       status, THIS is the one path that returns a held or booked quote to a
+       plain saved draft -- deliberate, explicit, and labeled. */
+    let q = (r&&r.quote)||{};
+    try{ q = await DB.saveQuote({status:'draft'}, State.savedQuoteId) || q; }catch(e){}
+    State.qstatus='draft'; State.scheduled=false;
+    renderStatusNow();
+    renderSchedState(q);
+    $('#schedmsg').innerHTML='<div class="note ok" style="margin-top:10px">Booking removed — '+
+      'the quote is back in the Saved pile. Hold or Schedule puts it on the calendar again.</div>';
+    refreshCrewLoad(); bustSuggCache();
   }catch(e){ $('#schedmsg').innerHTML='<div class="note bad" style="margin-top:10px">'+
       esc(e.message)+'</div>'; }
   finally{ $('#btnunschedule').disabled=false; }
@@ -4005,20 +4066,39 @@ async function doUnschedule(){
 
 /* ================================ save ================================== */
 /* One function, four verbs. The buttons pass the status they mean:
-     Save quote -> 'draft'  saved pile only; any hold/booking comes OFF
-     Hold       -> 'sent'   grey HOLD on the calendar (needs date + truck)
-     Schedule   -> 'won'    confirmed booking          (needs date + truck)
-     Mark lost  -> 'lost'   saved as lost; event removed
-   Every verb also saves the form, so updating a held job is one click of Hold
-   -- there is no separate "update the calendar" step to forget. */
+     Save/Update -> the quote's CURRENT status ('draft' for a new one).
+                    Saves the form; a held or booked quote stays on the
+                    calendar and its event is refreshed with the edits.
+     Hold        -> 'sent'   grey HOLD on the calendar (needs date + truck)
+     Schedule    -> 'won'    confirmed booking          (needs date + truck)
+     Mark lost   -> 'lost'   saved as lost; event removed
+   Taking a booking off without losing the quote = the Remove booking button
+   (which also returns the quote to the Saved pile). Every verb saves the
+   form, so there is no separate "update the calendar" step to forget. */
 async function saveQuote(status){
-  status = status || State.qstatus || 'draft';
+  const wasStatus = State.qstatus || 'draft';   // what the quote WAS, for messaging
+  status = status || wasStatus;
   const p = State.lastPrice; if(!p) return;
   const rc = currentRate();
   if(rc && rc.needs_cost){ msg('Set a cost for '+rc.product+' first.', true); return; }
   if((status==='sent'||status==='won') && !($('#q_scheddate').value && $('#q_crew').value)){
     msg((status==='sent'?'A hold':'Scheduling')+' needs a slot — pick a date and a truck first.', true);
     return;
+  }
+  /* Rock physically rides only rock-capable trucks. This one is a hard stop,
+     not a warning -- a booking the truck cannot perform helps nobody. */
+  if(status==='sent'||status==='won'){
+    const prod=$('#q_product').value;
+    const badId=[$('#q_crew').value, $('#q_crew2').value]
+      .find(id=>id && !crewCanPlace(id, prod));
+    if(badId){
+      const c=(CREWS||[]).find(x=>String(x.id)===String(badId));
+      const able=(CREWS||[]).filter(x=>crewCanPlace(x.id, prod)).map(x=>x.name).join(' or ');
+      msg((c?c.name:'That truck')+' can’t place rock. '+
+        (able?'Book this on '+able+' instead.'
+             :'No truck has a rock capacity row for '+prod+' — check truck_capacity.'), true);
+      return;
+    }
   }
   /* Past-5-PM booking: allowed -- the rep may know the job warrants a long
      day -- but never silent. The warning rides the save confirmation, with
@@ -4109,9 +4189,14 @@ async function saveQuote(status){
           const r = await syncBooking(saved.id, wantCrew, wantDate);
           if(r && r.quote) saved = r.quote;
           State.scheduled = !r.removed;
+          /* "Booked" when the status just BECAME won (a hold turned solid, a
+             fresh Schedule); "updated" when a rep re-saved an already-booked
+             quote -- the words must match what actually happened. */
           sync = status==='won'
-               ? ' Booked on the calendar as a confirmed job.'
-               : (wasLive ? ' Calendar hold updated.'
+               ? (wasLive && wasStatus==='won'
+                   ? ' Calendar booking updated — the event carries your edits.'
+                   : ' Booked on the calendar as a confirmed job.')
+               : (wasLive ? ' Calendar hold updated — the event carries your edits.'
                           : ' Placed on the calendar as a grey HOLD.');
           /* The script reports how many loads IT counted. A mismatch means the
              event body is lying about the job -- stale deployment or a failed
@@ -4218,7 +4303,14 @@ function wire(){
     if(old && now!==old) confirmPrefillEdit('address','address', old, proceed);
     else proceed();
   });
-  $('#savequote').onclick=()=>saveQuote('draft');
+  /* Save/Update quote PRESERVES the quote's current status. It used to force
+     'draft', which silently pulled a booked job off the calendar when a rep
+     reopened it just to add the SO/PN and pressed Update -- the label said
+     "update", the verb underneath said "unbook". Now: updating a held or
+     scheduled quote saves the fields AND refreshes its calendar event (the
+     new numbers land on the event body); the only ways off the calendar are
+     the explicit Remove booking button and Mark lost. */
+  $('#savequote').onclick=()=>saveQuote(State.qstatus||'draft');
   $('#holdquote').onclick=()=>saveQuote('sent');
   $('#schedquote').onclick=()=>saveQuote('won');
   $('#lostquote').onclick=()=>saveQuote('lost');
