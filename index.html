@@ -346,7 +346,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                 <div class="range hide" id="blowrange"><i class="band"></i><i class="mark"></i></div>
               </div>
               <div class="row">
-                <div><label class="f">Prep hr</label><input type="number" id="q_prep" step="0.25" value="0.5" class="mono"></div>
+                <div><label class="f">Prep hr <span id="prephint" style="font-weight:400"></span></label><input type="number" id="q_prep" step="0.25" value="0.5" class="mono"></div>
                 <div><label class="f">Helpers</label><input type="number" id="q_helpers" step="1" min="0" value="1" class="mono"></div>
                 <div><label class="f">Prevailing wage</label>
                   <select id="q_pw"><option value="0">No</option><option value="1">Yes</option></select></div>
@@ -913,7 +913,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-15-rock';   // shown in the header; check it after deploying
+const BUILD = '2026-09-15-prep';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1907,7 +1907,7 @@ function estimateCtx(){
   };
 }
 
-let autoFill = {drive:true, blow:true};   // stop overwriting once the rep types
+let autoFill = {drive:true, blow:true, prep:true};   // stop overwriting once the rep types
 
 /* How many truckloads is this quote? ceil(yards / capacity), using the picked
    truck's capacity for the product -- or the LARGEST active truck's when none
@@ -1967,6 +1967,13 @@ function suggest(){
   const proj = projectLoads();
   if(autoFill.drive) $('#q_drive').value = Math.round(d.hours*proj.loads*100)/100;
   if(autoFill.blow)  $('#q_blow').value  = b.hours;
+  /* Loading (prep) time scales with the loads: every truckload is loaded at
+     the yard, so the quote carries 0.5 hr MORE per additional load -- 0.5,
+     1.0, 1.5... A typed number wins from then on, same as drive and blow. */
+  if(autoFill.prep) $('#q_prep').value = Math.round(0.5*proj.loads*100)/100;
+  { const ph=$('#prephint');
+    if(ph) ph.textContent = !autoFill.prep ? '(overridden)'
+      : (proj.loads>1 ? '0.5 \u00d7 '+proj.loads+' loads' : ''); }
 
   /* Coverage check: 1 yd³ = 27 ft³, so yards × 324 ÷ depth-in-inches = sq ft.
      Reads as a sanity check against the measured area. */
@@ -2309,7 +2316,7 @@ function requoteFrom(product, yards){
     if(opt) sel.value=opt.value;
   }
   if(yards!=null && yards!=='') $('#q_yards').value=yards;
-  autoFill={drive:true,blow:true};
+  autoFill={drive:true,blow:true,prep:true};
   recalc();
   msg('Repopulated from the '+(product||'previous')+' job — check the hours and bid.', false);
   $('#q_yards').scrollIntoView({block:'center',behavior:'smooth'});
@@ -2381,7 +2388,7 @@ async function loadSite(key, seed, opts){
     customer: (hasRecord && recCust && $('#q_customer').value.trim()===recCust) ? recCust : null,
     address:  hasRecord ? ($('#q_address').value.trim()||null) : null
   };
-  autoFill={drive:true,blow:true};
+  autoFill={drive:true,blow:true,prep:true};
   renderHistory();
   renderCustJobs();
   recalc();
@@ -3081,7 +3088,7 @@ async function openQuote(r){
   $('#q_schedtime2').value = r.scheduled_time2 ? String(r.scheduled_time2).slice(0,5) : '';
   $('#schedmsg').innerHTML = '';
   $('#savequote').textContent = 'Update quote';
-  autoFill={drive:false,blow:false};        // these are the rep's saved numbers
+  autoFill={drive:false,blow:false,prep:false};  // these are the rep's saved numbers
   renderSchedState(r); recalc(); refreshCrewLoad();
   if(r.site_key) loadSite(r.site_key, {address1:r.address_raw,city:r.city,zip:r.zip},
                           {keepTyped:true});
@@ -4261,8 +4268,9 @@ function wire(){
   $('#refreshcounts').onclick=e=>{ e.stopPropagation(); renderDataStatus(); };
   $('#calcheck').onclick=e=>{ e.stopPropagation(); runCalCheck(); };
   $$('#tabs button').forEach(b=>b.onclick=()=>show(b.dataset.view));
-  ['q_product','q_yards','q_prep','q_helpers','q_pw'].forEach(id=>$('#'+id).addEventListener('input',()=>{
-    if(id==='q_product'||id==='q_yards'){ autoFill={drive:autoFill.drive,blow:true}; }
+  $('#q_prep').addEventListener('input',()=>{ autoFill.prep=false; recalc(); });
+  ['q_product','q_yards','q_helpers','q_pw'].forEach(id=>$('#'+id).addEventListener('input',()=>{
+    if(id==='q_product'||id==='q_yards'){ autoFill={drive:autoFill.drive,blow:true,prep:autoFill.prep}; }
     recalc();
   }));
   $('#q_depth').addEventListener('change', recalc);
@@ -4323,7 +4331,7 @@ function wire(){
       .forEach(i=>$('#'+i).value='');
     State.site=null;
     State.prefill={customer:null,address:null};
-    autoFill={drive:true,blow:true};      // drive time was the old site's city
+    autoFill={drive:true,blow:true,prep:autoFill.prep}; // drive was the old site's city; prep is load-count math, unaffected by the site
     renderHistory(); renderCustJobs(); recalc();
     $('#sitebanner').innerHTML='';
   };
@@ -4345,7 +4353,7 @@ function wire(){
     $('#schedmsg').innerHTML=''; $('#savemsg').innerHTML='';
     $('#savequote').textContent='Save quote';
     renderSchedState(null); refreshCrewLoad();
-    autoFill={drive:true,blow:true}; renderHistory(); recalc();
+    autoFill={drive:true,blow:true,prep:true}; renderHistory(); recalc();
   };
   $('#bl_add').onclick=async()=>{
     const date=$('#bl_date').value;
