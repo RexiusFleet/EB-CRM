@@ -916,7 +916,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-16-spill';   // shown in the header; check it after deploying
+const BUILD = '2026-09-16-spill2';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -4222,8 +4222,13 @@ async function saveQuote(status){
      start. If even TWO slots cannot hold the loads by 6 PM, the booking is
      refused with the arithmetic -- that project needs a third day, which is
      one Requote away. */
-  let layout = null;
+  let layout = null, layoutNote = '';
   if((status==='sent'||status==='won') && $('#q_schedtime').value){
+    /* The layout math needs the truck capacities. A rep who reopens a quote
+       and presses Hold immediately used to beat the capacity fetch -- the
+       project read as one load and the old (pre-cutoff) shape was rebooked
+       untouched. Wait for the data; it is cached and cheap. */
+    try{ await loadSuggData(); }catch(e){}
     const sc = splitCounts();
     if(sc.L > 1){
       const eq = parseFloat($('#o_eqhr').textContent)||0;
@@ -4239,15 +4244,27 @@ async function saveQuote(status){
         if($('#q_scheddate2')) $('#q_scheddate2').value = date2;
         $('#q_schedtime2').value = time2;
       }
-      const durA = slotDuration(), durB = slotDuration2();
-      const endA = toMin($('#q_schedtime').value) + Math.round((durA||0)*60);
+      let durA = slotDuration();
+      let endA = toMin($('#q_schedtime').value) + Math.round((durA||0)*60);
+      if(endA > SLOT_RULES.MULTI_END_MIN + 1 && slotDurTouched){
+        /* The duration on the quote predates the 6 PM rule (a reopened
+           May-3-style booking): it is a stale layout, not a rep's choice.
+           Re-lay it out rather than refusing or rebooking the monster. */
+        slotDurTouched = false; syncSlotDurField();
+        durA = slotDuration();
+        endA = toMin($('#q_schedtime').value) + Math.round((durA||0)*60);
+        layoutNote = ' Re-laid out under the 6 PM cutoff'+
+          (sc.kB>0 ? ': '+sc.kA+' load'+(sc.kA>1?'s':'')+' day 1, '+sc.kB+
+            ' on '+dfmt(($('#q_scheddate2')||{}).value || $('#q_scheddate').value)+'.' : '.');
+      }
       if(endA > SLOT_RULES.MULTI_END_MIN + 1){
         msg('Slot 1 would run past the 6:00 PM cutoff ('+fmtMin(endA)+'). Start earlier — '+
           'the app spills loads that don\u2019t fit to the next day automatically.', true);
         return;
       }
       if(crew2 && sc.kB > 0){
-        const t2 = time2 || $('#q_schedtime').value;
+        const durB = slotDuration2();
+        const t2 = $('#q_schedtime2').value || $('#q_schedtime').value;
         const endB = toMin(t2) + Math.round((durB||0)*60);
         if(endB > SLOT_RULES.MULTI_END_MIN + 1){
           msg('Even split over two days, load '+(sc.kA+1)+'–'+sc.L+' would run past 6:00 PM '+
@@ -4402,7 +4419,7 @@ async function saveQuote(status){
     bustSuggCache(); renderSuggestionsDebounced(); renderCapNoteDebounced();
     const verb = status==='won' ? 'Scheduled.' : status==='sent' ? 'On hold.'
                : status==='lost' ? 'Marked lost.' : (wasNew?'Saved.':'Updated.');
-    msg(verb+(DB.mode==='demo'&&!sync?' (demo mode — this browser only)':'')+sync+lateNote, false);
+    msg(verb+(DB.mode==='demo'&&!sync?' (demo mode — this browser only)':'')+sync+layoutNote+lateNote, false);
     $('#savequote').textContent = 'Update quote';
     if(State.site && State.site.key===q.site_key){
       State.site.quotes.unshift({quote_date:new Date().toISOString().slice(0,10),product:q.product,yards:q.yards,
