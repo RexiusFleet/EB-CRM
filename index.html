@@ -916,7 +916,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-16-spill3';   // shown in the header; check it after deploying
+const BUILD = '2026-09-16-slots';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1479,12 +1479,18 @@ const LiveDB = {
     const base='quotes?select=id,product,yards,customer_name,status,crew_id,'+
       'scheduled_date,scheduled_time,scheduled_hours,equip_hours,crew2_id,scheduled_time2';
     try{
+      const r = await SB.rest(base+',scheduled_date2,scheduled_hours2,slots'+tail);
+      this.hasDate2 = true; this.hasSlots = true;
+      return r;
+    }catch(e0){}
+    try{
+      // sql/26 not run yet: date2 without slots.
       const r = await SB.rest(base+',scheduled_date2,scheduled_hours2'+tail);
-      this.hasDate2 = true;
+      this.hasDate2 = true; this.hasSlots = false;
       return r;
     }catch(e){
-      // sql/25 not run yet: fall back to the pre-spillover column set.
-      this.hasDate2 = false;
+      // sql/25 not run yet either: the pre-spillover column set.
+      this.hasDate2 = false; this.hasSlots = false;
       return SB.rest(base+tail);
     }
   },
@@ -1603,15 +1609,16 @@ const GS = {
 
   ping(){ return this.call('ping', {}, 25000); },
   eventsOn(date){ return this.call('list', {date}).then(r=>r.events||[]); },
-  sync(quoteId, crewId, date, time, hours){
+  sync(quoteId, crewId, date, time, hours, retire){
     // appUrl: the calendar event body links back to this quote in THIS app --
     // whatever address the rep is actually using, no configuration to go stale.
     const appUrl = location.origin && location.origin !== 'null'
       ? location.origin + location.pathname : null;
     return this.call('sync', {quoteId, crewId, date, time: time||null, hours: hours||null,
-                              appUrl});
+                              appUrl, retire: retire&&retire.length ? retire : null});
   },
-  remove(quoteId){ return this.call('remove', {quoteId}); },
+  remove(quoteId, retire){ return this.call('remove', {quoteId,
+    retire: retire&&retire.length ? retire : null}); },
   /* Truck-occupying events straight off the calendar (manual office bookings
      included) -- what the suggestion engine merges with app bookings. */
   busy(from,to){ return this.call('busy', {from,to}).then(r=>r.events||[]); },
@@ -3020,7 +3027,7 @@ async function runCalCheck(){
   /* The single most common failure in this whole system: the code was edited
      but the deployment was not. The script reports its version so that state
      is visible instead of mysterious. */
-  const SCRIPT_WANT = '2026-09-16-spill';
+  const SCRIPT_WANT = '2026-09-16-slots';
   if(ping.version === SCRIPT_WANT){
     rows.push(line(true,'Script version', ping.version));
   }else{
@@ -3100,6 +3107,7 @@ async function openQuote(r){
   $('#q_depth').value = r.depth_in ? String(r.depth_in) : '2';
 
   State.savedQuoteId = r.id;
+  State.openedSlots = Array.isArray(r.slots) ? r.slots : null;
   State.scheduled = !!(r.scheduled_date && r.crew_id);
   $('#q_scheddate').value = r.scheduled_date || '';
   $('#q_schedtime').value = r.scheduled_time ? String(r.scheduled_time).slice(0,5) : '';
@@ -3109,7 +3117,12 @@ async function openQuote(r){
   $('#q_crew2').value = r.crew2_id ? String(r.crew2_id) : '';
   $('#q_scheddate2').value = r.scheduled_date2 || '';
   $('#q_schedtime2').value = r.scheduled_time2 ? String(r.scheduled_time2).slice(0,5) : '';
-  $('#schedmsg').innerHTML = '';
+  $('#schedmsg').innerHTML = (Array.isArray(r.slots) && r.slots.length>2)
+    ? '<div class="note" style="margin-top:8px">Laid out over '+r.slots.length+' days: '+
+      r.slots.map(sl=>esc(dfmt(sl.date)+' (load'+((sl.to>sl.from)?'s '+sl.from+'–'+sl.to
+        :' '+sl.from)+')')).join(', ')+
+      '. Re-saving re-lays it out from the day-1 date.</div>'
+    : '';
   $('#savequote').textContent = 'Update quote';
   autoFill={drive:false,blow:false,prep:false};  // these are the rep's saved numbers
   renderSchedState(r); recalc(); refreshCrewLoad();
@@ -3468,6 +3481,36 @@ function splitCounts(){
   const kA = fitLoads(L, eq, t1);
   return {L, kA, kB:L-kA, spill:kA<L};
 }
+/* The FULL multi-day layout for a project on one truck: day 1 takes what
+   fits by 6 PM from the chosen start, every following working day takes what
+   fits from that truck's first start, until all loads are placed. One
+   calendar event per day. (A same-day two-truck split is handled separately
+   by splitCounts -- this runs when Load 2 is blank or the same truck.) */
+function layoutDays(){
+  const proj = projectLoads(); const L = proj.loads;
+  const d1 = $('#q_scheddate').value;
+  if(L<2 || !d1) return null;
+  const eq = parseFloat($('#o_eqhr').textContent)||0;
+  if(!(eq>0)) return null;
+  const crewId = $('#q_crew').value;
+  const c = (CREWS||[]).find(x=>String(x.id)===String(crewId));
+  const t1 = $('#q_schedtime').value || (c?firstStartFor(c,d1):SLOT_RULES.FIRST_START);
+  const per = eq/L;
+  const dur = k => Math.min(14, Math.max(0.5, Math.round((per*k+(k-1))*4)/4));
+  const days=[{date:d1, time:t1, loads:fitLoads(L, eq, t1)}];
+  let placed = days[0].loads, ds = d1, guard = 0;
+  while(placed < L && ++guard < 12){
+    ds = nextWorkingDay(ds);
+    const fs = c ? firstStartFor(c, ds) : SLOT_RULES.FIRST_START;
+    const k = Math.min(L-placed, fitLoads(L, eq, fs));
+    days.push({date:ds, time:fs, loads:k});
+    placed += k;
+  }
+  let from=1;
+  days.forEach(d=>{ d.from=from; d.to=from+d.loads-1; d.hours=dur(d.loads); from=d.to+1; });
+  return {L, days, crewId};
+}
+
 function slotDuration(){
   const typed = parseFloat($('#q_scheddur').value);
   if(slotDurTouched && typed > 0) return Math.min(14, Math.max(0.5, typed));
@@ -3714,7 +3757,15 @@ async function loadSuggData(force){
        (per the office 2026-09-16) -- the engine skips rows flagged hold, and
        the capacity note + save confirmation WARN about them instead. */
     b.hold = (b.status==='sent');
-    if(b.crew2_id){
+    if(Array.isArray(b.slots) && b.slots.length){
+      /* An N-day layout: one engine entry per day, yards pro-rated by loads. */
+      const Lb = b.slots.reduce((n,sl)=>n+((sl.to-sl.from+1)||1),0) || b.slots.length;
+      b.slots.forEach(sl=>bookings.push(Object.assign({}, b, {
+        yards: (Number(b.yards)||0) * ((sl.to-sl.from+1)||1) / Lb,
+        crew_id: sl.crew_id || b.crew_id, crew2_id: null,
+        scheduled_date: sl.date, scheduled_time: sl.time,
+        scheduled_hours: sl.hours, equip_hours: sl.hours })));
+    }else if(b.crew2_id){
       const half = (Number(b.yards)||0)/2;
       bookings.push(Object.assign({}, b, {yards: half}));
       bookings.push(Object.assign({}, b, {crew_id: b.crew2_id, yards: half,
@@ -4155,15 +4206,18 @@ function renderWonHint(live){
    decides from the stored status, so what this page sends cannot make an
    unapproved quote look sold. The same event is edited across transitions, so
    approving turns its hold solid rather than creating a second entry. */
-async function syncBooking(quoteId, crewId, date){
-  return GS.sync(quoteId, crewId, date, $('#q_schedtime').value || null, slotDuration());
+async function syncBooking(quoteId, crewId, date, retire){
+  return GS.sync(quoteId, crewId, date, $('#q_schedtime').value || null, slotDuration(), retire);
 }
 
 async function doUnschedule(){
   if(!State.savedQuoteId) return;
   $('#btnunschedule').disabled=true;
   try{
-    const r = await GS.remove(State.savedQuoteId);
+    const r = await GS.remove(State.savedQuoteId,
+      (Array.isArray(State.openedSlots)?State.openedSlots:[])
+        .map(sl=>sl&&sl.event_id).filter(Boolean));
+    State.openedSlots = null;
     /* Off the calendar = back to the Saved pile. Since Save/Update preserves
        status, THIS is the one path that returns a held or booked quote to a
        plain saved draft -- deliberate, explicit, and labeled. */
@@ -4268,27 +4322,50 @@ async function saveQuote(status){
         slotDurTouched = false; syncSlotDurField();
         durA = slotDuration();
         endA = toMin($('#q_schedtime').value) + Math.round((durA||0)*60);
-        layoutNote += ' Re-laid out under the 6 PM cutoff'+
-          (sc.kB>0 ? ': '+sc.kA+' load'+(sc.kA>1?'s':'')+' day 1, '+sc.kB+
-            ' on '+dfmt(($('#q_scheddate2')||{}).value || $('#q_scheddate').value)+'.' : '.');
+        layoutNote += ' Re-laid out under the 6 PM cutoff.';
       }
       if(endA > SLOT_RULES.MULTI_END_MIN + 1){
         msg('Slot 1 would run past the 6:00 PM cutoff ('+fmtMin(endA)+'). Start earlier — '+
           'the app spills loads that don\u2019t fit to the next day automatically.', true);
         return;
       }
-      if(crew2 && sc.kB > 0){
+      const twoTruckSameDay = crew2 && crew2!==crew1 &&
+        (!date2 || date2===$('#q_scheddate').value);
+      if(twoTruckSameDay && sc.kB > 0){
         const durB = slotDuration2();
         const t2 = $('#q_schedtime2').value || $('#q_schedtime').value;
         const endB = toMin(t2) + Math.round((durB||0)*60);
         if(endB > SLOT_RULES.MULTI_END_MIN + 1){
-          msg('Even split over two days, load '+(sc.kA+1)+'–'+sc.L+' would run past 6:00 PM '+
-            '('+fmtMin(endB)+'). This project needs a third day — book '+
-            'part of the volume now and Requote the rest as its own quote.', true);
+          msg('Split across both trucks, load '+(sc.kA+1)+'–'+sc.L+' would still run past '+
+            '6:00 PM ('+fmtMin(endB)+'). Clear the Load 2 truck and the app will spread '+
+            'the loads across as many days as it takes instead.', true);
           return;
         }
       }
-      layout = {sc, crew2, date2, time2};
+      /* Bigger than two days? Lay the whole thing out: one event per working
+         day, each day taking what finishes by 6 PM. */
+      if(!twoTruckSameDay){
+        const ld = layoutDays();
+        if(ld && ld.days.length > 2){
+          if(DB.hasSlots===false){
+            msg('This project needs '+ld.days.length+' days under the 6 PM cutoff, which '+
+              'needs the multi-day upgrade — run sql/26_slots.sql in Supabase first.', true);
+            return;
+          }
+          layout = {sc, nday:ld};
+          layoutNote = ' Laid out over '+ld.days.length+' days under the 6 PM cutoff: '+
+            ld.days.map(dd=>dfmt(dd.date)+' (load'+(dd.loads>1?'s':'')+' '+dd.from+
+              (dd.to>dd.from?'–'+dd.to:'')+')').join(', ')+'.';
+          /* Mirror slot 1 + 2 into the legacy fields so lists and the engine
+             keep reading this booking. */
+          $('#q_schedtime').value = ld.days[0].time;
+          $('#q_crew2').value = ld.crewId;
+          if($('#q_scheddate2')) $('#q_scheddate2').value = ld.days[1].date;
+          $('#q_schedtime2').value = ld.days[1].time;
+          slotDurTouched = false; syncSlotDurField();
+        }
+      }
+      if(!layout) layout = {sc, crew2, date2, time2};
     }
   }
   /* Past-5-PM booking (single jobs): allowed -- the rep may know the job
@@ -4367,8 +4444,33 @@ async function saveQuote(status){
     scheduled_time2: (projectLoads().loads>1 && $('#q_crew2').value)
       ? ($('#q_schedtime2').value || $('#q_schedtime').value || null) : null,
     scheduled_hours2: (projectLoads().loads>1 && $('#q_crew2').value &&
-      $('#q_scheddate').value && $('#q_schedtime').value) ? slotDuration2() : null
+      $('#q_scheddate').value && $('#q_schedtime').value) ? slotDuration2() : null,
+    /* N-day layouts (3+ days): the full day list. The script books one event
+       per entry and writes the event ids back into this JSON. Null clears a
+       previous layout when the booking shrinks back to 1-2 slots. */
+    slots: (layout && layout.nday)
+      ? layout.nday.days.map((dd,i)=>({ crew_id: layout.nday.crewId, date: dd.date,
+          time: dd.time, hours: dd.hours, from: dd.from, to: dd.to,
+          event_id: (Array.isArray(State.openedSlots) && State.openedSlots[i] &&
+                     State.openedSlots[i].event_id) || null }))
+      : null
   };
+  /* Slot events beyond what the new layout keeps must come OFF the calendar.
+     Their ids ride the sync/remove call, because saving the row overwrites
+     the slots JSON that held them. */
+  let retire = [];
+  if(Array.isArray(State.openedSlots) && State.openedSlots.length){
+    const keep = (layout && layout.nday) ? layout.nday.days.length : 2;
+    retire = State.openedSlots.slice(keep).map(sl=>sl&&sl.event_id).filter(Boolean);
+  }
+  if(layout && layout.nday){
+    const dd0=layout.nday.days[0], dd1=layout.nday.days[1];
+    q.scheduled_time = dd0.time; q.scheduled_hours = dd0.hours;
+    q.crew2_id = layout.nday.crewId;
+    q.scheduled_date2 = dd1.date; q.scheduled_time2 = dd1.time;
+    q.scheduled_hours2 = dd1.hours;
+  }
+  if(q.slots===null && DB.hasSlots===false) delete q.slots;
   /* sql/25 adds scheduled_date2; a database that has not run it yet must
      still save (bookingsBetween's fallback records which world we are in). */
   if(q.scheduled_date2===null && DB.hasDate2===false) delete q.scheduled_date2;
@@ -4392,8 +4494,9 @@ async function saveQuote(status){
         State.scheduled = true;
       }else{
         try{
-          const r = await syncBooking(saved.id, wantCrew, wantDate);
+          const r = await syncBooking(saved.id, wantCrew, wantDate, retire);
           if(r && r.quote) saved = r.quote;
+          State.openedSlots = (saved && Array.isArray(saved.slots)) ? saved.slots : null;
           State.scheduled = !r.removed;
           /* "Booked" when the status just BECAME won (a hold turned solid, a
              fresh Schedule); "updated" when a rep re-saved an already-booked
@@ -4423,8 +4526,9 @@ async function saveQuote(status){
     }else if(wasLive && DB.mode!=='demo'){
       /* draft or lost with an event still out there: take it off. */
       try{
-        const r = await GS.remove(saved.id);
+        const r = await GS.remove(saved.id, retire);
         if(r && r.quote) saved = r.quote;
+        State.openedSlots = null;
         State.scheduled = false;
         sync = ' Taken off the calendar — Hold or Schedule puts it back.';
       }catch(e){ sync = ' Calendar not updated: '+e.message; }
@@ -4538,6 +4642,7 @@ function wire(){
     ['q_customer','q_phone','q_email','q_address','q_city','q_zip','q_notes','q_bid',
      'q_account','q_so','q_pn','q_custno'].forEach(i=>$('#'+i).value='');
     State.site=null; State.savedQuoteId=null; State.scheduled=false; State.calendarLive=false;
+    State.openedSlots=null;
     State.qstatus='draft'; State.prefill={customer:null,address:null}; renderCustJobs();
     /* The QUOTE resets too -- product, volume, crew sizing back to the same
        defaults a fresh page shows. Clear that left the calculator untouched
