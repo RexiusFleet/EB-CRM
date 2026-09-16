@@ -916,7 +916,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-16-slots';   // shown in the header; check it after deploying
+const BUILD = '2026-09-18-twotruck';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -3027,7 +3027,7 @@ async function runCalCheck(){
   /* The single most common failure in this whole system: the code was edited
      but the deployment was not. The script reports its version so that state
      is visible instead of mysterious. */
-  const SCRIPT_WANT = '2026-09-16-slots';
+  const SCRIPT_WANT = '2026-09-17-slots2';
   if(ping.version === SCRIPT_WANT){
     rows.push(line(true,'Script version', ping.version));
   }else{
@@ -3118,10 +3118,14 @@ async function openQuote(r){
   $('#q_scheddate2').value = r.scheduled_date2 || '';
   $('#q_schedtime2').value = r.scheduled_time2 ? String(r.scheduled_time2).slice(0,5) : '';
   $('#schedmsg').innerHTML = (Array.isArray(r.slots) && r.slots.length>2)
-    ? '<div class="note" style="margin-top:8px">Laid out over '+r.slots.length+' days: '+
-      r.slots.map(sl=>esc(dfmt(sl.date)+' (load'+((sl.to>sl.from)?'s '+sl.from+'–'+sl.to
-        :' '+sl.from)+')')).join(', ')+
-      '. Re-saving re-lays it out from the day-1 date.</div>'
+    ? (()=>{ const days = new Set(r.slots.map(sl=>sl.date)).size;
+        const nm = id => { const c=(CREWS||[]).find(x=>String(x.id)===String(id));
+          return c ? c.name : ('truck '+id); };
+        return '<div class="note" style="margin-top:8px">Laid out over '+days+
+        ' day'+(days>1?'s':'')+' ('+r.slots.length+' slots): '+
+        r.slots.map(sl=>esc(dfmt(sl.date)+' '+nm(sl.crew_id)+' (load'+
+          ((sl.to>sl.from)?'s '+sl.from+'–'+sl.to:' '+sl.from)+')')).join(', ')+
+        '. Re-saving re-lays it out from the day-1 date.</div>'; })()
     : '';
   $('#savequote').textContent = 'Update quote';
   autoFill={drive:false,blow:false,prep:false};  // these are the rep's saved numbers
@@ -3462,53 +3466,93 @@ function fitLoads(loads, eq, startHM){
   while(k<loads && perMin*(k+1)+k*60 <= avail+0.5) k++;
   return Math.max(1, k);
 }
-/* The load layout across the two slots, under the hard 6 PM wall:
-   - same-day split (a second TRUCK): even ceil/floor, as before;
-   - different-day spill (same or other truck, Load 2 date set or implied):
-     slot A takes every load that finishes by 6 PM, the rest go to slot B;
-   - single day, no slot B: all loads -- callers check the 6 PM fit. */
-function splitCounts(){
-  const proj = projectLoads(); const L = proj.loads;
-  if(L<2) return {L, kA:L, kB:0, spill:false};
-  const eq = parseFloat($('#o_eqhr').textContent)||0;
-  const t1 = $('#q_schedtime').value || SLOT_RULES.FIRST_START;
-  const d2el = $('#q_scheddate2');
-  const d2 = d2el ? d2el.value : '';
-  const sameDay = !d2 || d2===$('#q_scheddate').value;
-  if($('#q_crew2').value && sameDay && $('#q_crew2').value!==$('#q_crew').value){
-    const kA = Math.ceil(L/2); return {L, kA, kB:L-kA, spill:false};
-  }
-  const kA = fitLoads(L, eq, t1);
-  return {L, kA, kB:L-kA, spill:kA<L};
-}
-/* The FULL multi-day layout for a project on one truck: day 1 takes what
-   fits by 6 PM from the chosen start, every following working day takes what
-   fits from that truck's first start, until all loads are placed. One
-   calendar event per day. (A same-day two-truck split is handled separately
-   by splitCounts -- this runs when Load 2 is blank or the same truck.) */
-function layoutDays(){
+/* ============ the ONE load-layout engine (6 PM wall) ==================
+   Given the quote (loads L, equip hours, chosen day-1 start) and the chosen
+   truck(s), lay every load out: each working day, each involved truck takes
+   what finishes by 6 PM -- balanced when two trucks share a day (truck 1
+   carries the ceil) -- until all L loads are placed. Returns
+   {L, slots:[{crew_id,date,time,loads,hours,from,to}]} or null (no data).
+   Every booking shape falls out of this one function: a same-day two-truck
+   split, a next-day spill, and a big project running both trucks for days. */
+function layoutDays(opt){
   const proj = projectLoads(); const L = proj.loads;
   const d1 = $('#q_scheddate').value;
   if(L<2 || !d1) return null;
   const eq = parseFloat($('#o_eqhr').textContent)||0;
   if(!(eq>0)) return null;
-  const crewId = $('#q_crew').value;
-  const c = (CREWS||[]).find(x=>String(x.id)===String(crewId));
-  const t1 = $('#q_schedtime').value || (c?firstStartFor(c,d1):SLOT_RULES.FIRST_START);
+  const c1 = $('#q_crew').value;
+  if(!c1) return null;
+  const c2v = (opt && opt.crew2!==undefined) ? opt.crew2 : $('#q_crew2').value;
+  const crewIds = (c2v && c2v!==c1) ? [c1, c2v] : [c1];
+  const crewOf = id => (CREWS||[]).find(x=>String(x.id)===String(id));
+  const t1 = $('#q_schedtime').value ||
+    (crewOf(c1) ? firstStartFor(crewOf(c1), d1) : SLOT_RULES.FIRST_START);
   const per = eq/L;
   const dur = k => Math.min(14, Math.max(0.5, Math.round((per*k+(k-1))*4)/4));
-  const days=[{date:d1, time:t1, loads:fitLoads(L, eq, t1)}];
-  let placed = days[0].loads, ds = d1, guard = 0;
-  while(placed < L && ++guard < 12){
-    ds = nextWorkingDay(ds);
-    const fs = c ? firstStartFor(c, ds) : SLOT_RULES.FIRST_START;
-    const k = Math.min(L-placed, fitLoads(L, eq, fs));
-    days.push({date:ds, time:fs, loads:k});
-    placed += k;
+  const slots=[];
+  let remaining = L, ds = d1, day = 0, guard = 0;
+  while(remaining > 0 && ++guard < 14){
+    const remAtDay = remaining;
+    let kFirst = 0;
+    for(let t=0; t<crewIds.length && remaining>0; t++){
+      const cid = crewIds[t];
+      const cr = crewOf(cid);
+      let start;
+      if(day===0 && t===0) start = t1;
+      else if(day===0 && t===1)
+        start = $('#q_schedtime2').value ||
+                (cr ? firstStartFor(cr, ds) : SLOT_RULES.FIRST_START);
+      else start = cr ? firstStartFor(cr, ds) : SLOT_RULES.FIRST_START;
+      let k = Math.min(remaining, fitLoads(L, eq, start));
+      if(crewIds.length>1){
+        if(t===0){ k = Math.min(k, Math.ceil(remAtDay/2)); kFirst = k; }
+        else k = Math.min(k, kFirst || k);   // truck 1 carries the ceil
+      }
+      if(k<1) continue;
+      slots.push({crew_id: cid, date: ds, time: start, loads: k, hours: dur(k)});
+      remaining -= k;
+    }
+    ds = nextWorkingDay(ds); day++;
   }
   let from=1;
-  days.forEach(d=>{ d.from=from; d.to=from+d.loads-1; d.hours=dur(d.loads); from=d.to+1; });
-  return {L, days, crewId};
+  slots.forEach(sl=>{ sl.from=from; sl.to=from+sl.loads-1; from=sl.to+1; });
+  return {L, slots, crewId: c1};
+}
+
+/* Back-compat shape for the notes and duration fields: slot 1's share and
+   whether anything runs on a later day. */
+function splitCounts(){
+  const proj = projectLoads(); const L = proj.loads;
+  if(L<2) return {L, kA:L, kB:0, spill:false};
+  const ld = layoutDays();
+  if(!ld || !ld.slots.length) return {L, kA:L, kB:0, spill:false};
+  return {L, kA: ld.slots[0].loads, kB: L-ld.slots[0].loads,
+          spill: ld.slots.some(sl=>sl.date!==ld.slots[0].date)};
+}
+
+/* When a multi-day layout is running on ONE truck, would adding a second
+   truck shorten it? (Field report: a rep who cleared Load 2 on an older
+   build's advice got a one-truck 3-day booking and wanted both trucks.)
+   Returns {crew, days, curDays} for the best eligible second truck, or null
+   when there is nothing to gain. The tip only SUGGESTS — the other truck may
+   have its own jobs, so the rep stays in charge of adding it. */
+function secondTruckTip(ld){
+  ld = ld || layoutDays();
+  if(!ld || !ld.slots.length) return null;
+  const c1 = $('#q_crew').value;
+  if(ld.slots.some(sl=>String(sl.crew_id)!==String(c1))) return null; // already split
+  const curDays = new Set(ld.slots.map(sl=>sl.date)).size;
+  if(curDays < 2) return null;
+  const product = $('#q_product').value;
+  let best = null;
+  (CREWS||[]).forEach(c=>{
+    if(String(c.id)===String(c1) || !crewCanPlace(c.id, product)) return;
+    const alt = layoutDays({crew2: String(c.id)});
+    if(!alt || !alt.slots.length) return;
+    const days = new Set(alt.slots.map(sl=>sl.date)).size;
+    if(days < curDays && (!best || days < best.days)) best = {crew: c, days};
+  });
+  return best ? {crew: best.crew, days: best.days, curDays} : null;
 }
 
 function slotDuration(){
@@ -3516,20 +3560,21 @@ function slotDuration(){
   if(slotDurTouched && typed > 0) return Math.min(14, Math.max(0.5, typed));
   const eq = parseFloat($('#o_eqhr').textContent);
   if(!(eq > 0)) return null;
-  /* Multi-load: slot A carries its SHARE of the loads -- even split across
-     two trucks, or as many as finish by 6 PM when the rest spill. */
-  const sc = splitCounts();
-  let base = eq;
-  if(sc.L > 1) base = (eq/sc.L)*sc.kA + (sc.kA-1)*1;
-  return Math.min(14, Math.max(0.5, Math.round(base*4)/4));
+  /* Multi-load: slot A carries its share per the unified layout. */
+  const proj = projectLoads();
+  if(proj.loads > 1){
+    const ld = layoutDays();
+    if(ld && ld.slots.length) return ld.slots[0].hours;
+    return Math.min(14, Math.max(0.5, Math.round((eq+(proj.loads-1))*4)/4));
+  }
+  return Math.min(14, Math.max(0.5, Math.round(eq*4)/4));
 }
 /* Slot B's share (second truck, or the spill day), same shape. */
 function slotDuration2(){
-  const eq = parseFloat($('#o_eqhr').textContent);
-  const sc = splitCounts();
-  if(!(eq>0) || sc.L<2 || sc.kB<1) return null;
-  const d = (eq/sc.L)*sc.kB + (sc.kB-1)*1;
-  return Math.min(14, Math.max(0.5, Math.round(d*4)/4));
+  const proj = projectLoads();
+  if(proj.loads<2) return null;
+  const ld = layoutDays();
+  return (ld && ld.slots[1]) ? ld.slots[1].hours : null;
 }
 
 function syncSlotDurField(){
@@ -3549,6 +3594,14 @@ function renderSlotHint(){
   const f=x=>x.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
   box.textContent = f(new Date(2000,0,1,h,m))+' \u2192 '+f(end)+' ('+d+' hr)'+
     (h*60+m+Math.round(d*60) > SLOT_RULES.DAY_END_MIN ? ' \u26a0 past 5 PM' : '');
+  /* Multi-day on one truck with a second truck idle in the dropdown: surface
+     the split BEFORE the save, not only on the confirmation. */
+  if(projectLoads().loads > 1){
+    const tip = secondTruckTip();
+    if(tip) box.textContent += ' \u00b7 \u26a1 1 truck over '+tip.curDays+
+      ' days \u2014 add '+tip.crew.name+' as the Load 2 truck \u2192 '+
+      tip.days+' day'+(tip.days>1?'s':'')+' total';
+  }
 }
 
 /* Open start times as chips. A rep should be able to tap a slot rather than
@@ -4271,11 +4324,9 @@ async function saveQuote(status){
     }
   }
   /* Multi-load 6 PM WALL (hard, per the office): loads that cannot finish by
-     6 PM must spill to the next working day. If the rep left Load 2 blank,
-     the app lays the spill out itself: same truck, next working day, first
-     start. If even TWO slots cannot hold the loads by 6 PM, the booking is
-     refused with the arithmetic -- that project needs a third day, which is
-     one Requote away. */
+     6 PM spill to later working days -- layoutDays() spreads them over
+     however many days (and whichever trucks are picked) it takes. The only
+     refusal left is a start time so late that even slot 1 busts the wall. */
   let layout = null, layoutNote = '';
   if(status==='sent'||status==='won'){
     /* The layout math needs the truck capacities. A rep who reopens a quote
@@ -4297,75 +4348,63 @@ async function saveQuote(status){
         fmtMin(toMin(t0))+'.';
     }
   }
-  if((status==='sent'||status==='won') && $('#q_schedtime').value){
-    const sc = splitCounts();
-    if(sc.L > 1){
-      const eq = parseFloat($('#o_eqhr').textContent)||0;
-      const crew1 = $('#q_crew').value;
-      let crew2 = $('#q_crew2').value, date2 = ($('#q_scheddate2')||{}).value || '',
-          time2 = $('#q_schedtime2').value;
-      if(sc.spill && !crew2){
-        crew2 = crew1;                              // same truck, next morning
-        date2 = date2 || nextWorkingDay($('#q_scheddate').value);
-        const c = (CREWS||[]).find(x=>String(x.id)===String(crew1));
-        time2 = time2 || (c ? firstStartFor(c, date2) : SLOT_RULES.FIRST_START);
-        $('#q_crew2').value = crew2;
-        if($('#q_scheddate2')) $('#q_scheddate2').value = date2;
-        $('#q_schedtime2').value = time2;
-      }
-      let durA = slotDuration();
-      let endA = toMin($('#q_schedtime').value) + Math.round((durA||0)*60);
-      if(endA > SLOT_RULES.MULTI_END_MIN + 1 && slotDurTouched){
-        /* The duration on the quote predates the 6 PM rule (a reopened
-           May-3-style booking): it is a stale layout, not a rep's choice.
-           Re-lay it out rather than refusing or rebooking the monster. */
-        slotDurTouched = false; syncSlotDurField();
-        durA = slotDuration();
-        endA = toMin($('#q_schedtime').value) + Math.round((durA||0)*60);
-        layoutNote += ' Re-laid out under the 6 PM cutoff.';
-      }
-      if(endA > SLOT_RULES.MULTI_END_MIN + 1){
-        msg('Slot 1 would run past the 6:00 PM cutoff ('+fmtMin(endA)+'). Start earlier — '+
-          'the app spills loads that don\u2019t fit to the next day automatically.', true);
+  if((status==='sent'||status==='won') && $('#q_schedtime').value &&
+     projectLoads().loads > 1){
+    const ld = layoutDays();
+    if(ld && ld.slots.length){
+      const wall = SLOT_RULES.MULTI_END_MIN;
+      /* Start so late that even slot 1's share cannot finish by 6. */
+      if(toMin(ld.slots[0].time) + Math.round(ld.slots[0].hours*60) > wall + 1){
+        msg('Even the first load'+(ld.slots[0].loads>1?'s':'')+' from '+
+          fmtMin(toMin(ld.slots[0].time))+' would run past the 6:00 PM cutoff. '+
+          'Start earlier in the day.', true);
         return;
       }
-      const twoTruckSameDay = crew2 && crew2!==crew1 &&
-        (!date2 || date2===$('#q_scheddate').value);
-      if(twoTruckSameDay && sc.kB > 0){
-        const durB = slotDuration2();
-        const t2 = $('#q_schedtime2').value || $('#q_schedtime').value;
-        const endB = toMin(t2) + Math.round((durB||0)*60);
-        if(endB > SLOT_RULES.MULTI_END_MIN + 1){
-          msg('Split across both trucks, load '+(sc.kA+1)+'–'+sc.L+' would still run past '+
-            '6:00 PM ('+fmtMin(endB)+'). Clear the Load 2 truck and the app will spread '+
-            'the loads across as many days as it takes instead.', true);
+      /* A saved duration that busts the wall is a pre-cutoff relic, not a
+         rep's choice: the layout's own numbers take over. */
+      if(slotDurTouched){
+        const typedEnd = toMin(ld.slots[0].time) +
+          Math.round((parseFloat($('#q_scheddur').value)||0)*60);
+        if(typedEnd > wall + 1){
+          slotDurTouched = false;
+          layoutNote += ' Re-laid out under the 6 PM cutoff.';
+        }
+      }
+      const crewName = id => ((CREWS||[]).find(x=>String(x.id)===String(id))||{}).name || ('truck '+id);
+      const slotTxt = sl => esc(dfmt(sl.date))+' '+esc(crewName(sl.crew_id))+
+        ' load'+(sl.to>sl.from?'s '+sl.from+'–'+sl.to:' '+sl.from);
+      /* Mirror slots 1-2 into the legacy fields (every shape uses them). */
+      const s0=ld.slots[0], s1=ld.slots[1]||null;
+      $('#q_schedtime').value = s0.time;
+      $('#q_crew2').value = s1 ? s1.crew_id : '';
+      if($('#q_scheddate2'))
+        $('#q_scheddate2').value = (s1 && s1.date!==s0.date) ? s1.date : '';
+      $('#q_schedtime2').value = s1 ? s1.time : '';
+      syncSlotDurField();
+      if(ld.slots.length > 2){
+        if(DB.hasSlots===false){
+          msg('This project needs '+ld.slots.length+' slots under the 6 PM cutoff, which '+
+            'needs the multi-day upgrade — run sql/26_slots.sql in Supabase first.', true);
           return;
         }
+        layout = {nday: ld};
+        layoutNote += ' Laid out under the 6 PM cutoff over '+
+          new Set(ld.slots.map(sl=>sl.date)).size+' day(s): '+
+          ld.slots.map(slotTxt).join('; ')+'.';
+      }else{
+        layout = {twoSlot: true};
+        if(s1 && (s1.date!==s0.date))
+          layoutNote += ' '+s0.loads+' load'+(s0.loads>1?'s':'')+' day 1, '+
+            s1.loads+' on '+dfmt(s1.date)+'.';
       }
-      /* Bigger than two days? Lay the whole thing out: one event per working
-         day, each day taking what finishes by 6 PM. */
-      if(!twoTruckSameDay){
-        const ld = layoutDays();
-        if(ld && ld.days.length > 2){
-          if(DB.hasSlots===false){
-            msg('This project needs '+ld.days.length+' days under the 6 PM cutoff, which '+
-              'needs the multi-day upgrade — run sql/26_slots.sql in Supabase first.', true);
-            return;
-          }
-          layout = {sc, nday:ld};
-          layoutNote = ' Laid out over '+ld.days.length+' days under the 6 PM cutoff: '+
-            ld.days.map(dd=>dfmt(dd.date)+' (load'+(dd.loads>1?'s':'')+' '+dd.from+
-              (dd.to>dd.from?'–'+dd.to:'')+')').join(', ')+'.';
-          /* Mirror slot 1 + 2 into the legacy fields so lists and the engine
-             keep reading this booking. */
-          $('#q_schedtime').value = ld.days[0].time;
-          $('#q_crew2').value = ld.crewId;
-          if($('#q_scheddate2')) $('#q_scheddate2').value = ld.days[1].date;
-          $('#q_schedtime2').value = ld.days[1].time;
-          slotDurTouched = false; syncSlotDurField();
-        }
-      }
-      if(!layout) layout = {sc, crew2, date2, time2};
+      /* One truck grinding across days while a second truck could halve it:
+         say so on the confirmation, so "I want it on both trucks" is one
+         dropdown away instead of a support question. */
+      const tip = secondTruckTip(ld);
+      if(tip) layoutNote += ' ⚡ This runs one truck over '+tip.curDays+
+        ' days. Add '+esc(tip.crew.name)+' as the Load 2 truck and press the '+
+        'button again to split the loads across both trucks ('+tip.days+
+        ' day'+(tip.days>1?'s':'')+' total).';
     }
   }
   /* Past-5-PM booking (single jobs): allowed -- the rep may know the job
@@ -4449,8 +4488,8 @@ async function saveQuote(status){
        per entry and writes the event ids back into this JSON. Null clears a
        previous layout when the booking shrinks back to 1-2 slots. */
     slots: (layout && layout.nday)
-      ? layout.nday.days.map((dd,i)=>({ crew_id: layout.nday.crewId, date: dd.date,
-          time: dd.time, hours: dd.hours, from: dd.from, to: dd.to,
+      ? layout.nday.slots.map((sl,i)=>({ crew_id: sl.crew_id, date: sl.date,
+          time: sl.time, hours: sl.hours, from: sl.from, to: sl.to,
           event_id: (Array.isArray(State.openedSlots) && State.openedSlots[i] &&
                      State.openedSlots[i].event_id) || null }))
       : null
@@ -4460,15 +4499,16 @@ async function saveQuote(status){
      the slots JSON that held them. */
   let retire = [];
   if(Array.isArray(State.openedSlots) && State.openedSlots.length){
-    const keep = (layout && layout.nday) ? layout.nday.days.length : 2;
+    const keep = (layout && layout.nday) ? layout.nday.slots.length : 2;
     retire = State.openedSlots.slice(keep).map(sl=>sl&&sl.event_id).filter(Boolean);
   }
   if(layout && layout.nday){
-    const dd0=layout.nday.days[0], dd1=layout.nday.days[1];
-    q.scheduled_time = dd0.time; q.scheduled_hours = dd0.hours;
-    q.crew2_id = layout.nday.crewId;
-    q.scheduled_date2 = dd1.date; q.scheduled_time2 = dd1.time;
-    q.scheduled_hours2 = dd1.hours;
+    const s0=layout.nday.slots[0], s1=layout.nday.slots[1];
+    q.scheduled_time = s0.time; q.scheduled_hours = s0.hours;
+    q.crew2_id = s1.crew_id;
+    q.scheduled_date2 = (s1.date!==s0.date) ? s1.date : null;
+    q.scheduled_time2 = s1.time; q.scheduled_hours2 = s1.hours;
+    if(q.scheduled_date2===null && DB.hasDate2===false) delete q.scheduled_date2;
   }
   if(q.slots===null && DB.hasSlots===false) delete q.slots;
   /* sql/25 adds scheduled_date2; a database that has not run it yet must
