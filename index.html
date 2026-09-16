@@ -916,7 +916,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-16-spill2';   // shown in the header; check it after deploying
+const BUILD = '2026-09-16-spill3';   // shown in the header; check it after deploying
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -4223,12 +4223,27 @@ async function saveQuote(status){
      refused with the arithmetic -- that project needs a third day, which is
      one Requote away. */
   let layout = null, layoutNote = '';
-  if((status==='sent'||status==='won') && $('#q_schedtime').value){
+  if(status==='sent'||status==='won'){
     /* The layout math needs the truck capacities. A rep who reopens a quote
        and presses Hold immediately used to beat the capacity fetch -- the
        project read as one load and the old (pre-cutoff) shape was rebooked
        untouched. Wait for the data; it is cached and cheap. */
     try{ await loadSuggData(); }catch(e){}
+    /* A multi-load quote with NO start time used to book as an all-day
+       banner, sailing past the 6 PM layout entirely (field report: the May 3
+       job). Multi-load jobs are timed by definition now: default the start
+       to the truck's first start and let the layout run. */
+    if(!$('#q_schedtime').value && projectLoads().loads > 1 &&
+       $('#q_crew').value && $('#q_scheddate').value){
+      const c0=(CREWS||[]).find(x=>String(x.id)===String($('#q_crew').value));
+      const t0=c0 ? firstStartFor(c0, $('#q_scheddate').value) : SLOT_RULES.FIRST_START;
+      $('#q_schedtime').value = t0;
+      slotDurTouched=false; syncSlotDurField();
+      layoutNote = ' Multi-load jobs are timed under the 6 PM rule — start set to '+
+        fmtMin(toMin(t0))+'.';
+    }
+  }
+  if((status==='sent'||status==='won') && $('#q_schedtime').value){
     const sc = splitCounts();
     if(sc.L > 1){
       const eq = parseFloat($('#o_eqhr').textContent)||0;
@@ -4253,7 +4268,7 @@ async function saveQuote(status){
         slotDurTouched = false; syncSlotDurField();
         durA = slotDuration();
         endA = toMin($('#q_schedtime').value) + Math.round((durA||0)*60);
-        layoutNote = ' Re-laid out under the 6 PM cutoff'+
+        layoutNote += ' Re-laid out under the 6 PM cutoff'+
           (sc.kB>0 ? ': '+sc.kA+' load'+(sc.kA>1?'s':'')+' day 1, '+sc.kB+
             ' on '+dfmt(($('#q_scheddate2')||{}).value || $('#q_scheddate').value)+'.' : '.');
       }
