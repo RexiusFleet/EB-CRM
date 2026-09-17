@@ -916,7 +916,8 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-18-twotruck';   // shown in the header; check it after deploying
+const BUILD = '2026-09-19-vergate';   // shown in the header; check it after deploying
+const SCRIPT_WANT = '2026-09-19-vergate';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -3027,7 +3028,7 @@ async function runCalCheck(){
   /* The single most common failure in this whole system: the code was edited
      but the deployment was not. The script reports its version so that state
      is visible instead of mysterious. */
-  const SCRIPT_WANT = '2026-09-17-slots2';
+  /* SCRIPT_WANT is global (next to BUILD) — the booking path checks it too. */
   if(ping.version === SCRIPT_WANT){
     rows.push(line(true,'Script version', ping.version));
   }else{
@@ -3536,6 +3537,20 @@ function splitCounts(){
    Returns {crew, days, curDays} for the best eligible second truck, or null
    when there is nothing to gain. The tip only SUGGESTS — the other truck may
    have its own jobs, so the rep stays in charge of adding it. */
+/* The deployed script's version, from a ping, cached briefly. Used to gate
+   bookings that only the current script can place on the right trucks. */
+let VER_CACHE = {t:0, v:null, err:null};
+async function deployedVersion(){
+  if(Date.now() - VER_CACHE.t < 5*60*1000) return VER_CACHE;
+  try{
+    const p = await GS.ping();
+    VER_CACHE = {t: Date.now(), v: (p && p.version) || null, err: null};
+  }catch(e){
+    VER_CACHE = {t: Date.now(), v: null, err: (e && e.message) || String(e)};
+  }
+  return VER_CACHE;
+}
+
 function secondTruckTip(ld){
   ld = ld || layoutDays();
   if(!ld || !ld.slots.length) return null;
@@ -4407,6 +4422,28 @@ async function saveQuote(status){
         ' day'+(tip.days>1?'s':'')+' total).';
     }
   }
+  /* HARD GATE for 3+-slot layouts (field incident, twice): an old deployed
+     script books every slot on truck 1 — a silent same-day double-booking.
+     A warning after the fact was not enough; a layout the old scripts cannot
+     book correctly is now refused BEFORE any event is written. The version
+     comes from a ping (cached 5 min), so the gate costs one round trip. */
+  if(layout && layout.nday && DB.mode!=='demo' && GS.configured()){
+    const dv = await deployedVersion();
+    if(dv.v !== SCRIPT_WANT){
+      msg('Not booked. This '+layout.nday.slots.length+'-slot layout needs calendar '+
+        'script '+SCRIPT_WANT+', but the deployed one '+
+        (dv.v ? 'is '+dv.v : dv.err ? 'could not be checked — '+dv.err
+              : 'is older than versioning')+
+        '. An old script would book every slot on one truck. To update it: open the '+
+        'Apps Script project → paste the latest calendar-appscript.gs → Deploy → '+
+        '<b>Manage deployments</b> → ✏️ on the active deployment → Version: '+
+        '<b>New version</b> → Deploy. (💾 Save alone changes nothing live, and '+
+        '<b>New deployment</b> makes a NEW /exec URL this app does not use.) '+
+        'Rate Card → Check must show '+SCRIPT_WANT+', then press '+
+        (status==='won'?'Schedule':'Hold')+' again.', true);
+      return;
+    }
+  }
   /* Past-5-PM booking (single jobs): allowed -- the rep may know the job
      warrants a long day -- but never silent. The warning rides the save
      confirmation, with the arithmetic. */
@@ -4552,9 +4589,16 @@ async function saveQuote(status){
              capacity read -- and must be said out loud, not discovered by a
              crew with the wrong number of trips planned. */
           const localLoads = projectLoads().loads;
-          if(r && r.loads === undefined){
-            sync += ' ⚠ The deployed calendar script is an old version — its event '+
-                    'details (loads, split projects) are out of date. Rate Card → Check.';
+          if(r && r.version !== SCRIPT_WANT){
+            /* Field report: a stale deployment booked every slot of a
+               two-truck layout on truck 1 — a silent double-booking. The
+               script now echoes its version on every sync so the mismatch is
+               said HERE, on the confirmation, not only in Rate Card → Check. */
+            sync += ' ⚠ The deployed calendar script is an old version ('+
+                    (r.version || 'pre-versioning')+' — this app needs '+SCRIPT_WANT+
+                    '), so multi-truck and multi-day layouts can land on the WRONG '+
+                    'truck. Paste the latest script, Manage deployments → ✏️ → New '+
+                    'version, then re-save this booking. Rate Card → Check confirms.';
           }else if(r && Number(r.loads) !== localLoads){
             sync += ' ⚠ The calendar script counted '+r.loads+' loads; this quote is '+
                     localLoads+'. Its deployment is stale or it could not read '+
