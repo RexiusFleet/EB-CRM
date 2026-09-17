@@ -916,7 +916,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-19-vergate';   // shown in the header; check it after deploying
+const BUILD = '2026-09-19-balance';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-19-vergate';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3494,7 +3494,6 @@ function layoutDays(opt){
   let remaining = L, ds = d1, day = 0, guard = 0;
   while(remaining > 0 && ++guard < 14){
     const remAtDay = remaining;
-    let kFirst = 0;
     for(let t=0; t<crewIds.length && remaining>0; t++){
       const cid = crewIds[t];
       const cr = crewOf(cid);
@@ -3505,10 +3504,12 @@ function layoutDays(opt){
                 (cr ? firstStartFor(cr, ds) : SLOT_RULES.FIRST_START);
       else start = cr ? firstStartFor(cr, ds) : SLOT_RULES.FIRST_START;
       let k = Math.min(remaining, fitLoads(L, eq, start));
-      if(crewIds.length>1){
-        if(t===0){ k = Math.min(k, Math.ceil(remAtDay/2)); kFirst = k; }
-        else k = Math.min(k, kFirst || k);   // truck 1 carries the ceil
-      }
+      /* Balance, don't handicap: truck 1 leaves truck 2 its even share (so a
+         same-day split stays ceil/floor), but truck 2 takes whatever IT still
+         fits by 6 PM. A late-starting truck 1 (a Monday 10:00 for #17) must
+         never idle truck 2 — field report: 6 loads booked 1+1 then 2+2
+         because truck 2 was capped to truck 1's one-load day. */
+      if(crewIds.length>1 && t===0) k = Math.min(k, Math.ceil(remAtDay/2));
       if(k<1) continue;
       slots.push({crew_id: cid, date: ds, time: start, loads: k, hours: dur(k)});
       remaining -= k;
