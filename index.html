@@ -629,12 +629,13 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
 
   <!-- ========================== SAVED BIDS =========================== -->
   <section id="view-bidlist" class="hide">
-    <div class="card">
-      <h3>Saved bids <span class="muted" id="bd_count"></span>
-        <span class="muted small">· newest first · converted ones are tagged</span></h3>
-      <div class="body scroll" id="bidslist"><div class="empty">No bids yet — start one on
-        the <b>New Bid</b> tab.</div></div>
-    </div>
+    <div class="card"><h3>Saved bids <span class="muted" id="bd_count"></span></h3>
+      <div class="body">
+        <input type="text" id="bdsearch" autocomplete="off"
+               placeholder="Search by customer or address…"
+               style="max-width:420px;margin-bottom:14px">
+        <div class="scroll" id="bidslist"></div>
+      </div></div>
   </section>
 
   <section id="view-quotes" class="hide">
@@ -1076,7 +1077,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-29-menu';   // shown in the header; check it after deploying
+const BUILD = '2026-09-30-bidsearch';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4497,8 +4498,10 @@ function openBid(b){
   renderBidMeas(); renderBidPhotos();
   show('bids');
 }
+let bdSearchTerm = '';
 async function renderBidsList(){
   const box=$('#bidslist'); if(!box) return;
+  box.innerHTML='<div class="empty"><span class="spin"></span></div>';
   let bids=[];
   try{ bids = (await DB.listBids())||[]; }
   catch(e){
@@ -4506,48 +4509,83 @@ async function renderBidsList(){
       ? 'The bids table is missing — run sql/29_bids.sql in Supabase.' : e.message)+'</div>';
     return;
   }
-  $('#bd_count').textContent = bids.length ? '('+bids.length+')' : '';
+  $('#bd_count').textContent = bids.length ? '\u00b7 '+bids.length : '';
   if(!bids.length){ box.innerHTML='<div class="empty">No bids yet — start one on the '+
     '<b>New Bid</b> tab.</div>'; return; }
-  /* Date of bid, newest first — whatever order the store handed back. */
+  /* Date of bid, newest first; search matches customer/address/notes, any
+     word order — the same rule the Saved Quotes search uses. */
   bids = bids.slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
-  box.innerHTML = bids.map(b=>{
-    const t=(b.measurements||{});
-    const quoted = b.status==='quoted';
-    return '<div class="kv" style="align-items:center"><span class="k">'+
-      '<b>'+esc(dfmt(String(b.created_at||'').slice(0,10)))+'</b> — '+
-      '<b>'+esc(b.customer_name||'(no name)')+'</b> <span class="muted">'+
-      esc([b.address_raw,b.city].filter(Boolean).join(', '))+'</span><br>'+
-      '<span class="small muted">'+
-      (t.sqft?Number(t.sqft).toLocaleString()+' sq ft ≈ '+t.suggested_yards+' yd':'no measurements')+
-      ((b.photos||[]).length?' · '+(b.photos||[]).length+' 📷':'')+
-      (b.notes?' · 📋':'')+
-      (quoted?' · <span class="tag g">✓ converted to a quote</span>'
-             :' · <span class="tag w">open</span>')+
-      '</span></span>'+
-      '<span style="display:flex;gap:6px;flex:0 0 auto;flex-wrap:wrap;justify-content:flex-end">'+
-      '<button class="btn ghost sm" data-bopen="'+esc(b.id)+'">Open</button>'+
-      (quoted && b.quote_id
-        ? '<button class="btn ghost sm bid-convert" data-bquote="'+esc(b.quote_id)+'" '+
-          'style="color:var(--good);border-color:var(--good)">View quote</button>'
-        : '<button class="btn ghost sm bid-convert" data-bconv="'+esc(b.id)+'" '+
-          'style="color:var(--good);border-color:var(--good)">Convert to quote</button>')+
-      '<button class="btn ghost sm bid-convert" data-bdel="'+esc(b.id)+'" '+
-        'style="color:var(--danger)">✕</button>'+
-      '</span></div>';
-  }).join('');
-  box.querySelectorAll('[data-bopen]').forEach(btn=>btn.onclick=async()=>{
-    const b=await DB.getBid(btn.dataset.bopen); if(b) openBid(b);
-  });
-  box.querySelectorAll('[data-bconv]').forEach(btn=>btn.onclick=()=>convertBid(btn.dataset.bconv));
-  box.querySelectorAll('[data-bquote]').forEach(btn=>btn.onclick=async()=>{
-    let r=null; try{ r=await DB.getQuote(btn.dataset.bquote); }catch(e){}
-    if(r) openQuote(r);
-    else bdMsg('That quote was not found — it may have been deleted.', true);
-  });
-  box.querySelectorAll('[data-bdel]').forEach(btn=>btn.onclick=async()=>{
-    try{ await DB.delBid(btn.dataset.bdel); renderBidsList(); }catch(e){ bdMsg(e.message,true); }
-  });
+  const terms = bdSearchTerm.toLowerCase().split(/\s+/).filter(Boolean);
+  const match = b => {
+    if(!terms.length) return true;
+    const hay = ((b.customer_name||'')+' '+(b.address_raw||'')+' '+(b.city||'')+' '+
+                 (b.notes||'')).toLowerCase();
+    return terms.every(w=>hay.includes(w));
+  };
+  const shown = bids.filter(match);
+  const open = shown.filter(b=>b.status!=='quoted');
+  const quoted = shown.filter(b=>b.status==='quoted');
+
+  const section = (title, list, cls, quotedPile) => {
+    const wrap=el('div');
+    wrap.innerHTML='<div class="kv" style="border:0;padding:14px 0 6px">'+
+      '<span class="k" style="font-weight:600;color:var(--ink)">'+esc(title)+
+      ' <span class="tag '+cls+'">'+list.length+'</span></span></div>';
+    if(!list.length){
+      wrap.innerHTML+='<div class="empty small" style="padding:8px 0 14px">'+
+        (terms.length?'Nothing here matches the search.':'Nothing here.')+'</div>';
+      return wrap;
+    }
+    const t=el('table');
+    t.innerHTML='<thead><tr><th>Bid date</th><th>Customer</th><th>Address</th>'+
+      '<th class="num">Sq ft</th><th class="num">Suggests</th><th>Extras</th><th></th></tr></thead>';
+    const tb=el('tbody');
+    list.forEach(b=>{
+      const m=(b.measurements||{});
+      const tr=el('tr');
+      tr.innerHTML='<td>'+esc(dfmt(String(b.created_at||'').slice(0,10)))+'</td>'+
+        '<td>'+esc(b.customer_name||'(no name)')+'</td>'+
+        '<td>'+esc([b.address_raw,b.city].filter(Boolean).join(', '))+'</td>'+
+        '<td class="num mono">'+(m.sqft?Number(m.sqft).toLocaleString():'—')+'</td>'+
+        '<td class="num mono">'+(m.suggested_yards?m.suggested_yards+' yd':'—')+'</td>'+
+        '<td class="small muted">'+
+          ((b.photos||[]).length?(b.photos||[]).length+' 📷 ':'')+
+          (b.notes?'📋':'')+((!((b.photos||[]).length)&&!b.notes)?'—':'')+'</td>'+
+        '<td style="white-space:nowrap;text-align:right"></td>';
+      const cell=tr.lastElementChild;
+      const mk=(label,style)=>{ const btn=el('button','btn ghost sm',label);
+        if(style) btn.style.cssText=style; btn.style.marginLeft='6px';
+        cell.appendChild(btn); return btn; };
+      mk('Open').onclick=async()=>{
+        const full=await DB.getBid(b.id); if(full) openBid(full);
+      };
+      if(quotedPile && b.quote_id){
+        const vq=mk('View quote','color:var(--good);border-color:var(--good)');
+        vq.classList.add('bid-convert');
+        vq.onclick=async()=>{
+          let r=null; try{ r=await DB.getQuote(b.quote_id); }catch(e){}
+          if(r) openQuote(r);
+          else bdMsg('That quote was not found — it may have been deleted.', true);
+        };
+      }else{
+        const cv=mk('Convert to quote','color:var(--good);border-color:var(--good)');
+        cv.classList.add('bid-convert');
+        cv.onclick=()=>convertBid(b.id);
+      }
+      const dl=mk('✕','color:var(--danger)');
+      dl.classList.add('bid-convert');
+      dl.onclick=async()=>{
+        try{ await DB.delBid(b.id); renderBidsList(); }catch(e){ bdMsg(e.message,true); }
+      };
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    const sc=el('div','scroll'); sc.appendChild(t); wrap.appendChild(sc);
+    return wrap;
+  };
+  box.innerHTML='';
+  box.appendChild(section('Open — not yet quoted', open, 'w', false));
+  box.appendChild(section('Converted to quotes', quoted, 'g', true));
 }
 /* Pick a known site on the BID worksheet: contact fields fill from the
    records (same fallback order as the quote form), nothing else changes —
@@ -6098,6 +6136,10 @@ function wire(){
   /* ---- site visit wiring ---- */
   $('#histshow').onclick=()=>setHistoryCollapsed(false);
   /* ---- bids ---- */
+  $('#bdsearch').addEventListener('input', debounce(()=>{
+    bdSearchTerm = $('#bdsearch').value.trim();
+    renderBidsList();
+  }, 150));
   $('#bd_measadd').onclick=()=>{ BidSt.meas.push({label:'',l:'',w:'',sf:''}); renderBidMeas(); };
   $('#bd_depth').addEventListener('change', renderBidTotal);
   $('#bd_new').onclick=()=>{ bidReset(); bdMsg('New bid.', false); };
