@@ -338,6 +338,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
         <div class="card">
           <h3>Quote</h3>
           <div class="body grid" style="gap:14px">
+            <div id="bidref" class="hide"></div>
             <div class="row">
               <div style="flex:2"><label class="f">Product</label><select id="q_product"></select></div>
               <div><label class="f">Yards</label><input type="number" id="q_yards" min="0" step="0.5" value="15"></div>
@@ -429,7 +430,6 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               scheduled before the ERP assigns these. When they arrive, type them here and
               press <b>Hold</b> or <b>Schedule</b> again: the calendar event picks them up.
               (Typed straight into Google they'd be overwritten by the next save.)</div>
-            <div id="bidref" class="hide"></div>
             <!-- ============ SITE VISIT: measurements, notes, photos ============
                  Everything here saves WITH the quote (sql/27). Photos upload to
                  the app's own storage as they are picked; on Hold/Schedule the
@@ -575,13 +575,21 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
         <div class="body">
           <div class="row">
             <div style="flex:2"><label class="f">Customer</label>
-              <input type="text" id="bd_customer" autocomplete="off"></div>
+              <div class="addrwrap" id="bd_custwrap">
+                <input type="text" id="bd_customer" autocomplete="off"
+                       placeholder="Click to browse, or type a new customer">
+                <div class="results hide" id="bd_custresults"></div>
+              </div></div>
             <div style="min-width:170px"><label class="f">Phone</label>
               <input type="text" id="bd_phone" placeholder="(541) 555-0100"></div>
           </div>
           <div class="row" style="margin-top:8px">
             <div style="flex:2"><label class="f">Address</label>
-              <input type="text" id="bd_address" autocomplete="off"></div>
+              <div class="addrwrap" id="bd_addrwrap">
+                <input type="text" id="bd_address" autocomplete="off"
+                       placeholder="Click to browse, or type a new address">
+                <div class="results hide" id="bd_addrresults"></div>
+              </div></div>
             <div><label class="f">City</label><input type="text" id="bd_city"></div>
             <div><label class="f">ZIP</label><input type="text" id="bd_zip"></div>
           </div>
@@ -1070,7 +1078,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-27-bids';   // shown in the header; check it after deploying
+const BUILD = '2026-09-28-bidtop';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3012,6 +3020,21 @@ function initPickers(){
     heading:'Previous customers — or type a new one',
     onPick:r=>loadSite(r.site_key,{address1:r.address1,city:r.city,zip:r.zip})
   });
+  /* The BID worksheet gets the same pickers (per Taylor: never retype what
+     the system already knows) — they fill the bid's contact fields only. */
+  attachPicker({
+    input:'#bd_address', results:'#bd_addrresults', wrap:'#bd_addrwrap',
+    allowFreeText:true, limit:40,
+    heading:'Previous job sites — or type a new address',
+    onPick:r=>bidFillFromSite(r)
+  });
+  attachPicker({
+    input:'#bd_customer', results:'#bd_custresults', wrap:'#bd_custwrap',
+    allowFreeText:true, limit:40, leadWith:'customer',
+    filter:r=>!!(r.customer_name || r.all_names),
+    heading:'Previous customers — or type a new one',
+    onPick:r=>bidFillFromSite(r)
+  });
 }
 
 /* ============================ saved quotes ============================== */
@@ -4511,6 +4534,34 @@ async function renderBidsList(){
     try{ await DB.delBid(btn.dataset.bdel); renderBidsList(); }catch(e){ bdMsg(e.message,true); }
   });
 }
+/* Pick a known site on the BID worksheet: contact fields fill from the
+   records (same fallback order as the quote form), nothing else changes —
+   no history panels, no estimator arming. In the locked-down #bid portal
+   the delivered-history tables read as empty, so the fill quietly falls
+   back to the sites/customers tables — names and addresses still land. */
+async function bidFillFromSite(r){
+  $('#bd_address').value = r.address1||''; $('#bd_city').value = r.city||'';
+  $('#bd_zip').value = r.zip||'';
+  if(r.customer_name && !$('#bd_customer').value.trim())
+    $('#bd_customer').value = r.customer_name;
+  try{
+    const h = await DB.siteHistory(r.site_key);
+    const first=(h.quotes&&h.quotes[0])||null, fo=(h.orders&&h.orders[0])||null;
+    const st=h.site||null, cu=h.customer||null;
+    const pick=(...v)=>{ for(const x of v){ if(x!=null && String(x).trim()!=='') return String(x).trim(); } return ''; };
+    const addr = pick(r.address1, fo&&fo.ship_addr1, st&&st.address1, first&&first.address_raw);
+    if(addr) $('#bd_address').value = addr;
+    const city = pick(r.city, fo&&fo.ship_city, st&&st.city, first&&first.city);
+    if(city) $('#bd_city').value = city;
+    const zip = pick(r.zip, fo&&fo.ship_zip, st&&st.zip, first&&first.zip);
+    if(zip) $('#bd_zip').value = zip;
+    const nm = pick(fo&&fo.customer_name, first&&first.customer_name,
+                    cu&&cu.customer_name, st&&st.attention);
+    if(nm) $('#bd_customer').value = nm;
+    const ph = pickPhone(pick(first&&first.phone, cu&&cu.phone, st&&st.phone));
+    if(ph) $('#bd_phone').value = ph;
+  }catch(e){ /* the picked row's own fields are already in — good enough */ }
+}
 function fillBidProducts(){
   const sel=$('#bd_product'); if(!sel || sel.options.length>1) return;
   ((State.ref&&State.ref.rate_card)||[]).filter(r=>r.active!==false).forEach(r=>{
@@ -4520,6 +4571,11 @@ function fillBidProducts(){
 }
 /* Bid -> quote: fresh builder, everything relevant carried over. */
 async function convertBid(id){
+  /* Converting the bid that is OPEN in the worksheet saves the worksheet
+     first — edits made since the last Save bid must not vanish. */
+  if(BidSt.id && String(BidSt.id)===String(id)){
+    try{ await DB.saveBid(bidPayload(), BidSt.id); }catch(e){}
+  }
   let b=null; try{ b=await DB.getBid(id); }catch(e){}
   if(!b){ bdMsg('That bid was not found.', true); return; }
   $('#newquote').click();
@@ -4545,18 +4601,45 @@ async function convertBid(id){
     '. Photos and measurements carried over; the bid notes sit above the Site visit '+
     'section as your reference. Save/Hold/Schedule marks the bid quoted.', false);
 }
-/* The bid notes box on the quote form: reference for the REP. The crew's
-   event body only ever carries site_notes — never these. */
+/* The bid summary at the TOP of the Quote card (per Taylor): what the site
+   visit found — notes, footprint, photos — right where the rep starts
+   reading. Reference for the REP only; the crew's event body only ever
+   carries site_notes, never these notes. */
 function renderBidRef(){
   const box=$('#bidref'); if(!box) return;
-  if(!State.bidNotes){ box.classList.add('hide'); box.innerHTML=''; return; }
+  const t = svTotals();
+  const hasAny = State.fromBidId || State.bidNotes ||
+                 SiteVisit.photos.length || t.sqft>0;
+  if(!hasAny){ box.classList.add('hide'); box.innerHTML=''; return; }
   box.classList.remove('hide');
   box.innerHTML='<div style="border:1px dashed var(--line);border-radius:10px;'+
-    'padding:10px 12px;background:var(--panel-2);margin:4px 0 2px">'+
-    '<div class="small" style="font-weight:600">📋 Bid notes '+
-    '<span class="muted">(your reference — the crew never sees these)</span></div>'+
-    '<div class="small" style="margin-top:4px;white-space:pre-wrap">'+
-    esc(State.bidNotes)+'</div></div>';
+    'padding:10px 12px;background:var(--panel-2)">'+
+    '<div class="small" style="font-weight:600">📋 From the bid / site visit '+
+    '<span class="muted">(your reference — the crew never sees these notes)</span></div>'+
+    (t.sqft>0
+      ? '<div class="small" style="margin-top:4px"><b>'+t.sqft.toLocaleString()+
+        ' sq ft</b> × '+t.depth+'&Prime; ≈ <b>'+t.yards+' yd</b>'+
+        (SiteVisit.meas.length>1?' <span class="muted">('+SiteVisit.meas.length+
+          ' areas — details in the Site visit section below)</span>':'')+'</div>'
+      : '')+
+    (State.bidNotes
+      ? '<div class="small" style="margin-top:6px;white-space:pre-wrap">'+
+        esc(State.bidNotes)+'</div>'
+      : '')+
+    (SiteVisit.photos.length
+      ? '<div id="bidref_ph" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>'
+      : '')+
+    '</div>';
+  SiteVisit.photos.forEach(async ph=>{
+    const u = await svThumbUrl(ph);
+    if(!u) return;
+    const img=document.createElement('img');
+    img.src=u; img.alt=ph.name||'photo';
+    img.style.cssText='width:64px;height:64px;object-fit:cover;border-radius:6px;'+
+      'border:1px solid var(--line);cursor:pointer';
+    img.onclick=()=>{ try{ window.open(u,'_blank'); }catch(e){} };
+    const strip=$('#bidref_ph'); if(strip) strip.appendChild(img);
+  });
 }
 /* ======================= site visit (bid worksheet) =======================
    Measurements, site notes and photos live ON the quote (sql/27 columns).
@@ -4570,6 +4653,7 @@ function svReset(){
   SiteVisit.meas = []; SiteVisit.photos = [];
   const sn=$('#q_sitenotes'); if(sn) sn.value='';
   renderMeas(); renderPhotos();
+  try{ renderBidRef(); }catch(e){}
 }
 function svSqft(m){
   const sf=parseFloat(m.sf), l=parseFloat(m.l), w=parseFloat(m.w);
@@ -6044,7 +6128,15 @@ function wire(){
       try{ BidSt.photos.push(await svUploadPhoto(files[i])); renderBidPhotos(); }
       catch(err){ pm.textContent='⚠ '+err.message; return; }
     }
-    pm.textContent=files.length+' photo'+(files.length>1?'s':'')+' on the bid.';
+    /* A photo added to a SAVED bid records itself immediately — losing a
+       photo because "Save bid" wasn't pressed again cost a real field test. */
+    if(BidSt.id){
+      try{ await DB.patchBid(BidSt.id, {photos: bidPayload().photos}); }catch(err){}
+      pm.textContent=files.length+' photo'+(files.length>1?'s':'')+' saved on the bid.';
+    }else{
+      pm.textContent=files.length+' photo'+(files.length>1?'s':'')+
+        ' on the bid — press Save bid to keep everything.';
+    }
   });
   $('#bd_save').onclick=async()=>{
     const pl=bidPayload();
@@ -6080,7 +6172,7 @@ function wire(){
       pm.textContent='uploading '+(i+1)+' of '+files.length+'…';
       try{
         SiteVisit.photos.push(await svUploadPhoto(files[i]));
-        renderPhotos();
+        renderPhotos(); renderBidRef();
       }catch(err){ pm.textContent='⚠ '+err.message; return; }
     }
     pm.textContent=files.length+' photo'+(files.length>1?'s':'')+' uploaded — they attach to '+
