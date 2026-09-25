@@ -314,6 +314,30 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           </div>
         </div>
 
+        <!-- ============ BID / SITE VISIT PANEL (per Taylor) ============
+             Everything the walk-through found, right beside the quote form:
+             measurements (read-only — edit them on the Bids tab), the bid
+             notes (rep reference, never the crew's event), and the photo
+             pool. Tapping a photo toggles whether it attaches to THIS
+             quote's crew event; + Add photos drops new ones straight in. -->
+        <div class="card" id="bidpanel">
+          <h3>Bid / site visit <span class="muted small" id="bp_state"></span></h3>
+          <div class="body">
+            <div id="bp_meas"></div>
+            <div id="bp_notes"></div>
+            <div style="margin-top:10px">
+              <label class="f">Photos <span class="small muted">tap one to attach it to /
+                remove it from the crew's event</span></label>
+              <input type="file" id="bp_photo_in" accept="image/*" multiple style="display:none">
+              <div id="bp_photos" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px"></div>
+              <div class="row" style="margin-top:8px;align-items:center">
+                <button type="button" class="btn ghost sm" id="bp_photoadd" style="flex:0 0 auto">+ Add photos</button>
+                <span class="small muted" id="bp_photomsg" style="align-self:center"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Opening an already-booked quote collapses these two (the rep is
              managing a booking, not bidding — per Taylor, one screen). The
              button brings them back; fresh quotes always show them. -->
@@ -338,7 +362,6 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
         <div class="card">
           <h3>Quote</h3>
           <div class="body grid" style="gap:14px">
-            <div id="bidref" class="hide"></div>
             <div class="row">
               <div style="flex:2"><label class="f">Product</label><select id="q_product"></select></div>
               <div><label class="f">Yards</label><input type="number" id="q_yards" min="0" step="0.5" value="15"></div>
@@ -418,6 +441,10 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
 
             <div><label class="f">Notes</label><textarea id="q_notes" rows="2"
                  placeholder="Access, hose pull, gate code, staging…"></textarea></div>
+            <div><label class="f">Site notes for the crew
+                <span class="small muted">these print on the calendar event</span></label>
+              <textarea id="q_sitenotes" rows="2"
+                placeholder="Gate code, dogs, hose pull ~150 ft, park on the north side…"></textarea></div>
             <div class="row">
               <div><label class="f">Account #</label>
                 <input type="text" id="q_account" autocomplete="off" placeholder="02-0104761"></div>
@@ -430,37 +457,6 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               scheduled before the ERP assigns these. When they arrive, type them here and
               press <b>Hold</b> or <b>Schedule</b> again: the calendar event picks them up.
               (Typed straight into Google they'd be overwritten by the next save.)</div>
-            <!-- ============ SITE VISIT: measurements, notes, photos ============
-                 Everything here saves WITH the quote (sql/27). Photos upload to
-                 the app's own storage as they are picked; on Hold/Schedule the
-                 calendar script copies them to Google Drive and attaches them
-                 to every event of the booking, so the crew opens them straight
-                 from Google Calendar. -->
-            <div id="sitevisit" style="border-top:1px solid var(--line-2);padding-top:14px">
-              <div class="kv" style="border:0;padding:0 0 8px">
-                <span class="k" style="font-weight:600;color:var(--ink)">Site visit</span>
-                <span class="small muted">measurements, notes &amp; photos — photos ride to the crew's calendar event</span>
-              </div>
-              <div id="measrows"></div>
-              <div class="row" style="margin-top:6px;align-items:center">
-                <button type="button" class="btn ghost sm" id="measadd" style="flex:0 0 auto">+ Add area</button>
-                <div class="small" id="meastotal" style="align-self:center"></div>
-              </div>
-              <div style="margin-top:10px"><label class="f">Site notes
-                  <span class="small muted">the crew sees these on the calendar event</span></label>
-                <textarea id="q_sitenotes" rows="2"
-                  placeholder="Gate code, dogs, hose pull ~150 ft, park on the north side…"></textarea></div>
-              <div style="margin-top:10px">
-                <label class="f">Photos <span class="small muted" id="photohint">attach to the crew's event on Hold/Schedule</span></label>
-                <input type="file" id="photo_in" accept="image/*" multiple style="display:none">
-                <div class="row" style="align-items:center">
-                  <button type="button" class="btn ghost sm" id="photoadd" style="flex:0 0 auto">+ Add photos</button>
-                  <span class="small muted" id="photomsg" style="align-self:center"></span>
-                </div>
-                <div id="photolist" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px"></div>
-              </div>
-            </div>
-
             <div id="schedwrap" style="border-top:1px solid var(--line-2);padding-top:14px">
               <div class="kv" style="border:0;padding:0 0 8px">
                 <span class="k" style="font-weight:600;color:var(--ink)">Schedule</span>
@@ -1078,7 +1074,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-28-bidtop';   // shown in the header; check it after deploying
+const BUILD = '2026-09-28-bidpanel';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3387,6 +3383,11 @@ async function openQuote(r){
   renderMeas(); renderPhotos();
   State.fromBidId = r.bid_id || null;
   State.bidNotes = r.bid_notes || null;
+  if(State.fromBidId){
+    DB.getBid(State.fromBidId).then(b=>{
+      if(b && Array.isArray(b.photos)){ poolAdd(b.photos); renderBidPanel(); }
+    }).catch(()=>{});
+  }
   renderBidRef();
   autoFill={drive:false,blow:false,prep:false};  // these are the rep's saved numbers
   renderSchedState(r); recalc(); refreshCrewLoad();
@@ -4590,67 +4591,30 @@ async function convertBid(id){
   const t=(b.measurements||{});
   SiteVisit.meas=(t.areas||[]).map(a=>({label:a.label||'', l:a.l??'', w:a.w??'',
     sf:(a.l>0&&a.w>0&&Math.abs(a.l*a.w-a.sf)<1)?'':(a.sf??'')}));
-  SiteVisit.photos=Array.isArray(b.photos)?b.photos.map(x=>Object.assign({},x)):[];
-  renderMeas(); renderPhotos();
+  SiteVisit.pool=Array.isArray(b.photos)?b.photos.map(x=>Object.assign({},x)):[];
+  SiteVisit.photos=SiteVisit.pool.map(x=>Object.assign({},x));   // all attached; untick in the panel
   if(t.suggested_yards>0) $('#q_yards').value=t.suggested_yards;
   State.fromBidId=b.id; State.bidNotes=b.notes||null;
   renderBidRef();
   recalc();
   msg('Bid loaded'+(t.suggested_yards>0?' — '+t.suggested_yards+' yd suggested from '+
     Number(t.sqft||0).toLocaleString()+' sq ft at '+(t.depth_in||2)+'&Prime;':'')+
-    '. Photos and measurements carried over; the bid notes sit above the Site visit '+
-    'section as your reference. Save/Hold/Schedule marks the bid quoted.', false);
+    '. Everything from the walk-through is in the Bid / site visit panel on the left — '+
+    'tap photos there to choose which ride to the crew\u2019s event. '+
+    'Save/Hold/Schedule marks the bid quoted.', false);
 }
-/* The bid summary at the TOP of the Quote card (per Taylor): what the site
-   visit found — notes, footprint, photos — right where the rep starts
-   reading. Reference for the REP only; the crew's event body only ever
-   carries site_notes, never these notes. */
-function renderBidRef(){
-  const box=$('#bidref'); if(!box) return;
-  const t = svTotals();
-  const hasAny = State.fromBidId || State.bidNotes ||
-                 SiteVisit.photos.length || t.sqft>0;
-  if(!hasAny){ box.classList.add('hide'); box.innerHTML=''; return; }
-  box.classList.remove('hide');
-  box.innerHTML='<div style="border:1px dashed var(--line);border-radius:10px;'+
-    'padding:10px 12px;background:var(--panel-2)">'+
-    '<div class="small" style="font-weight:600">📋 From the bid / site visit '+
-    '<span class="muted">(your reference — the crew never sees these notes)</span></div>'+
-    (t.sqft>0
-      ? '<div class="small" style="margin-top:4px"><b>'+t.sqft.toLocaleString()+
-        ' sq ft</b> × '+t.depth+'&Prime; ≈ <b>'+t.yards+' yd</b>'+
-        (SiteVisit.meas.length>1?' <span class="muted">('+SiteVisit.meas.length+
-          ' areas — details in the Site visit section below)</span>':'')+'</div>'
-      : '')+
-    (State.bidNotes
-      ? '<div class="small" style="margin-top:6px;white-space:pre-wrap">'+
-        esc(State.bidNotes)+'</div>'
-      : '')+
-    (SiteVisit.photos.length
-      ? '<div id="bidref_ph" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>'
-      : '')+
-    '</div>';
-  SiteVisit.photos.forEach(async ph=>{
-    const u = await svThumbUrl(ph);
-    if(!u) return;
-    const img=document.createElement('img');
-    img.src=u; img.alt=ph.name||'photo';
-    img.style.cssText='width:64px;height:64px;object-fit:cover;border-radius:6px;'+
-      'border:1px solid var(--line);cursor:pointer';
-    img.onclick=()=>{ try{ window.open(u,'_blank'); }catch(e){} };
-    const strip=$('#bidref_ph'); if(strip) strip.appendChild(img);
-  });
-}
+function renderBidRef(){ renderBidPanel(); }
+
 /* ======================= site visit (bid worksheet) =======================
    Measurements, site notes and photos live ON the quote (sql/27 columns).
    Photos upload to Supabase Storage the moment they are picked (bucket
    site-photos, authenticated); the calendar script copies any photo without
    a drive_id into Google Drive at Hold/Schedule and attaches it to every
    event of the booking. Reps never touch Google — the script owns that. */
-const SiteVisit = { meas: [], photos: [] };
+const SiteVisit = { meas: [], photos: [], pool: [] };
 
 function svReset(){
-  SiteVisit.meas = []; SiteVisit.photos = [];
+  SiteVisit.meas = []; SiteVisit.photos = []; SiteVisit.pool = [];
   const sn=$('#q_sitenotes'); if(sn) sn.value='';
   renderMeas(); renderPhotos();
   try{ renderBidRef(); }catch(e){}
@@ -4668,52 +4632,88 @@ function svTotals(){
   const yards = sqft>0 ? Math.ceil(sqft*(depth/12)/27*2)/2 : 0;
   return {sqft: Math.round(sqft), depth, yards};
 }
-function renderMeas(){
-  const box=$('#measrows'); if(!box) return;
-  box.innerHTML = SiteVisit.meas.map((m,i)=>
-    '<div class="row" style="margin-top:6px" data-mi="'+i+'">'+
-    '<div style="flex:2"><label class="f">Area</label><input type="text" class="m_lbl" '+
-      'placeholder="Front beds" value="'+esc(m.label||'')+'"></div>'+
-    '<div><label class="f">L (ft)</label><input type="number" class="m_l num mono" '+
-      'step="0.5" min="0" value="'+(m.l??'')+'"></div>'+
-    '<div><label class="f">W (ft)</label><input type="number" class="m_w num mono" '+
-      'step="0.5" min="0" value="'+(m.w??'')+'"></div>'+
-    '<div><label class="f">Sq ft <span class="small muted">or type it</span></label>'+
-      '<input type="number" class="m_sf num mono" step="1" min="0" '+
-      'placeholder="'+((parseFloat(m.l)>0&&parseFloat(m.w)>0)?Math.round(m.l*m.w):'')+'" '+
-      'value="'+(m.sf??'')+'"></div>'+
-    '<button type="button" class="btn ghost sm m_del" style="flex:0 0 auto;align-self:end" '+
-      'title="Remove area">✕</button>'+
-    '</div>').join('');
-  box.querySelectorAll('[data-mi]').forEach(row=>{
-    const m = SiteVisit.meas[Number(row.dataset.mi)];
-    const upd = ()=>{ m.label=row.querySelector('.m_lbl').value;
-      m.l=row.querySelector('.m_l').value; m.w=row.querySelector('.m_w').value;
-      m.sf=row.querySelector('.m_sf').value;
-      row.querySelector('.m_sf').placeholder =
-        (parseFloat(m.l)>0&&parseFloat(m.w)>0)?Math.round(parseFloat(m.l)*parseFloat(m.w)):'';
-      renderMeasTotal(); };
-    row.querySelectorAll('input').forEach(inp=>inp.addEventListener('input', upd));
-    row.querySelector('.m_del').onclick=()=>{ SiteVisit.meas.splice(Number(row.dataset.mi),1);
-      renderMeas(); };
+/* -------- the Bid / site visit panel (left column) --------------------
+   One renderer for everything the panel shows. The old quote-form section
+   is gone; renderMeas/renderMeasTotal/renderPhotos/renderBidRef stay as
+   names so every existing call site still lands here. */
+function poolAdd(list){
+  (list||[]).forEach(p2=>{
+    if(!p2 || !p2.path) return;
+    const ex = SiteVisit.pool.find(x=>x.path===p2.path);
+    if(ex){ if(p2.drive_id){ ex.drive_id=p2.drive_id; ex.mime=p2.mime||ex.mime; } return; }
+    SiteVisit.pool.push(Object.assign({}, p2));
   });
-  renderMeasTotal();
 }
-function renderMeasTotal(){
-  const box=$('#meastotal'); if(!box) return;
-  const t=svTotals();
-  if(!(t.sqft>0)){ box.innerHTML = SiteVisit.meas.length
-    ? '<span class="muted">Enter lengths and widths (or square feet).</span>' : ''; return; }
-  const cur = parseFloat($('#q_yards').value)||0;
-  const applied = Math.abs(cur - t.yards) < 0.01;
-  box.innerHTML = '<b>'+t.sqft.toLocaleString()+' sq ft</b> × '+t.depth+'&Prime; ≈ '+
-    '<b>'+t.yards+' yd</b>'+
-    (applied ? ' <span class="tag g">in the quote</span>'
-             : ' <button type="button" class="btn ghost sm" id="measapply" '+
-               'style="margin-left:6px;padding:3px 10px">Use '+t.yards+' yd in the quote</button>');
-  const b=$('#measapply');
-  if(b) b.onclick=()=>{ $('#q_yards').value=t.yards; recalc(); renderMeasTotal(); };
+function renderBidPanel(){
+  if(!$('#bidpanel')) return;
+  poolAdd(SiteVisit.photos);
+  /* measurements — read-only; areas are edited on the Bids tab */
+  const mbox=$('#bp_meas'); const t=svTotals();
+  if(SiteVisit.meas.length && t.sqft>0){
+    const cur = parseFloat($('#q_yards').value)||0;
+    mbox.innerHTML = '<label class="f">Measurements</label>'+
+      SiteVisit.meas.map(m=>{
+        const sf=Math.round(svSqft(m));
+        return '<div class="kv" style="padding:3px 0"><span class="k small">'+
+          esc(m.label||'area')+
+          ((parseFloat(m.l)>0&&parseFloat(m.w)>0)?' <span class="muted">'+m.l+' × '+m.w+' ft</span>':'')+
+          '</span><span class="v mono small">'+sf.toLocaleString()+' sq ft</span></div>';
+      }).join('')+
+      '<div class="small" style="margin-top:6px"><b>'+t.sqft.toLocaleString()+
+      ' sq ft</b> × '+t.depth+'&Prime; ≈ <b>'+t.yards+' yd</b> '+
+      (Math.abs(cur-t.yards)<0.01
+        ? '<span class="tag g">in the quote</span>'
+        : '<button type="button" class="btn ghost sm" id="bp_apply" '+
+          'style="margin-left:6px;padding:3px 10px">Use '+t.yards+' yd in the quote</button>')+
+      '</div>';
+    const b=$('#bp_apply');
+    if(b) b.onclick=()=>{ $('#q_yards').value=t.yards; recalc(); renderBidPanel(); };
+  }else{
+    mbox.innerHTML = '<div class="small muted">No measurements — capture them on the '+
+      '<b>Bids</b> tab and convert, or quote the volume directly.</div>';
+  }
+  /* bid notes — REP reference; the crew's event never carries these */
+  $('#bp_notes').innerHTML = State.bidNotes
+    ? '<div style="margin-top:10px"><label class="f">Bid notes '+
+      '<span class="small muted">reference — the crew never sees these</span></label>'+
+      '<div class="small" style="white-space:pre-wrap;border:1px dashed var(--line);'+
+      'border-radius:8px;padding:8px 10px;background:var(--panel-2)">'+
+      esc(State.bidNotes)+'</div></div>'
+    : '';
+  $('#bp_state').textContent = State.fromBidId ? '· from a bid' : '';
+  /* photo pool — green ring + "✓ on event" = attached to THIS quote */
+  const pbox=$('#bp_photos');
+  pbox.innerHTML = SiteVisit.pool.length ? SiteVisit.pool.map((p2,i)=>{
+    const on = SiteVisit.photos.some(x=>x.path===p2.path);
+    return '<div data-ppi="'+i+'" style="position:relative;width:86px;height:86px;'+
+      'border-radius:8px;overflow:hidden;cursor:pointer;background:var(--panel-2);'+
+      'border:2px solid '+(on?'var(--good)':'var(--line)')+';'+(on?'':'opacity:.55;')+
+      '" title="'+esc(p2.name||'photo')+
+      (on?' — on the crew\u2019s event (tap to remove)':' — tap to attach')+'">'+
+      '<img class="pimg" alt="" style="width:100%;height:100%;object-fit:cover;display:none">'+
+      '<span class="small muted pfall" style="position:absolute;inset:0;display:flex;'+
+      'align-items:center;justify-content:center;padding:4px;text-align:center;'+
+      'overflow:hidden">'+esc((p2.name||'photo').slice(0,16))+'</span>'+
+      '<span class="small" style="position:absolute;left:3px;bottom:2px;'+
+      'background:rgba(0,0,0,.55);color:#fff;border-radius:4px;padding:0 4px">'+
+      (on?'✓ on event':'off')+'</span>'+
+      '</div>';
+  }).join('') : '<span class="small muted">No photos yet.</span>';
+  pbox.querySelectorAll('[data-ppi]').forEach(cardEl=>{
+    const p2=SiteVisit.pool[Number(cardEl.dataset.ppi)];
+    svThumbUrl(p2).then(u=>{ if(!u) return;
+      const img=cardEl.querySelector('.pimg'); img.src=u; img.style.display='block';
+      cardEl.querySelector('.pfall').style.display='none'; });
+    cardEl.onclick=()=>{
+      const i=SiteVisit.photos.findIndex(x=>x.path===p2.path);
+      if(i>=0) SiteVisit.photos.splice(i,1);
+      else SiteVisit.photos.push(Object.assign({}, p2));
+      renderBidPanel();
+    };
+  });
 }
+function renderMeas(){ renderBidPanel(); }
+function renderMeasTotal(){ renderBidPanel(); }
 
 async function svUploadPhoto(file){
   /* Phones hand over 3-12 MB photos; the crew needs "which gate", not pixels.
@@ -4755,34 +4755,7 @@ async function svThumbUrl(p){
     return p._url;
   }catch(e){ return null; }
 }
-function renderPhotos(){
-  const box=$('#photolist'); if(!box) return;
-  box.innerHTML = SiteVisit.photos.map((p,i)=>
-    '<div data-pi="'+i+'" style="position:relative;width:86px;height:86px;border-radius:8px;'+
-    'overflow:hidden;border:1px solid var(--line);background:var(--panel-2)" title="'+esc(p.name||'')+'">'+
-    '<img class="pimg" alt="" style="width:100%;height:100%;object-fit:cover;display:none">'+
-    '<span class="small muted pfall" style="position:absolute;inset:0;display:flex;'+
-      'align-items:center;justify-content:center;padding:4px;text-align:center;overflow:hidden">'+
-      esc((p.name||'photo').slice(0,18))+'</span>'+
-    (p.drive_id?'<span class="small" style="position:absolute;left:3px;bottom:2px;'+
-      'background:rgba(0,0,0,.55);color:#fff;border-radius:4px;padding:0 4px">on event</span>':'')+
-    '<button type="button" class="pdel" title="Remove photo" style="position:absolute;top:2px;'+
-      'right:2px;width:22px;height:22px;border-radius:6px;border:0;cursor:pointer;'+
-      'background:rgba(0,0,0,.55);color:#fff;line-height:1">✕</button>'+
-    '</div>').join('');
-  box.querySelectorAll('[data-pi]').forEach(card=>{
-    const i=Number(card.dataset.pi), p=SiteVisit.photos[i];
-    svThumbUrl(p).then(u=>{ if(!u) return;
-      const img=card.querySelector('.pimg'); img.src=u; img.style.display='block';
-      card.querySelector('.pfall').style.display='none'; });
-    card.querySelector('.pdel').onclick=()=>{
-      SiteVisit.photos.splice(i,1); renderPhotos();
-      /* best effort; the Drive copy (if any) stays as the job record */
-      fetch(CONFIG.SUPABASE_URL+'/storage/v1/object/site-photos/'+p.path,{method:'DELETE',
-        headers:{apikey:CONFIG.SUPABASE_ANON_KEY, Authorization:'Bearer '+State.token}}).catch(()=>{});
-    };
-  });
-}
+function renderPhotos(){ renderBidPanel(); }
 function svPayload(){
   const t=svTotals();
   return {
@@ -6156,29 +6129,29 @@ function wire(){
     }
     $('#bd_save').disabled=false;
   };
-  $('#measadd').onclick=()=>{ SiteVisit.meas.push({label:'',l:'',w:'',sf:''}); renderMeas(); };
-  $('#q_depth').addEventListener('change', renderMeasTotal);
-  $('#q_yards').addEventListener('input', renderMeasTotal);
-  $('#photoadd').onclick=()=>{
-    if(DB.mode==='demo'){ $('#photomsg').textContent='demo mode — no photo storage'; return; }
-    if(!State.token){ $('#photomsg').textContent='sign in first'; return; }
-    $('#photo_in').click();
+  $('#q_depth').addEventListener('change', renderBidPanel);
+  $('#q_yards').addEventListener('input', renderBidPanel);
+  $('#bp_photoadd').onclick=()=>{
+    if(DB.mode==='demo'){ $('#bp_photomsg').textContent='demo mode — no photo storage'; return; }
+    if(!State.token){ $('#bp_photomsg').textContent='sign in first'; return; }
+    $('#bp_photo_in').click();
   };
-  $('#photo_in').addEventListener('change', async e=>{
+  $('#bp_photo_in').addEventListener('change', async e=>{
     const files=[...(e.target.files||[])]; e.target.value='';
     if(!files.length) return;
-    const pm=$('#photomsg');
+    const pm=$('#bp_photomsg');
     for(let i=0;i<files.length;i++){
       pm.textContent='uploading '+(i+1)+' of '+files.length+'…';
       try{
-        SiteVisit.photos.push(await svUploadPhoto(files[i]));
-        renderPhotos(); renderBidRef();
+        const ph = await svUploadPhoto(files[i]);
+        poolAdd([ph]); SiteVisit.photos.push(ph);
+        renderBidPanel();
       }catch(err){ pm.textContent='⚠ '+err.message; return; }
     }
-    pm.textContent=files.length+' photo'+(files.length>1?'s':'')+' uploaded — they attach to '+
-      'the crew\u2019s event on the next Hold/Schedule.';
+    pm.textContent=files.length+' photo'+(files.length>1?'s':'')+
+      ' attached — they ride to the crew\u2019s event on the next Hold/Schedule.';
   });
-  $('#bl_add').onclick=async()=>{
+    $('#bl_add').onclick=async()=>{
     const date=$('#bl_date').value;
     if(!date){ blMsg('Pick a date to block.', true); return; }
     const backendB = await calendarBackend();
