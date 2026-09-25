@@ -1090,7 +1090,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-02-weekghosts';   // shown in the header; check it after deploying
+const BUILD = '2026-10-03-caladd';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3859,10 +3859,11 @@ async function calFetch(from, to){
   const busyP = wantCal
     ? GS.busy(from, to).catch(e=>({err:(e&&e.message)||String(e)||'no reply'}))
     : Promise.resolve(null);
-  const [raw, busy, iblocks] = await Promise.all([
+  const [raw, busy, iblocks, allBids] = await Promise.all([
     DB.bookingsBetween(from, to).catch(()=>[]),
     busyP,
-    backend==='internal' ? DB.blocks(from, to).catch(()=>[]) : Promise.resolve([])
+    backend==='internal' ? DB.blocks(from, to).catch(()=>[]) : Promise.resolve([]),
+    (DB.listBids ? DB.listBids().catch(()=>[]) : Promise.resolve([]))
   ]);
   const jobs = [];
   (raw||[]).forEach(b=>{
@@ -3896,6 +3897,17 @@ async function calFetch(from, to){
     crews.forEach(cid=>gEvents.push({gid:'b'+r.id, internal:true, block:true,
       summary:'🚫 '+(r.reason||'blocked'), crew_id:cid, date:r.date, time:t0,
       hours:(t0&&t1)?Math.max(0.5,(toMin(t1)-toMin(t0))/60):null, allDay:!t0}));
+  });
+  /* Penciled bids: an open bid with a slot draws as a dashed BID chip — a
+     pencil mark, shown but NEVER fed to the engine (see bookingsPoolFor). */
+  (allBids||[]).forEach(b=>{
+    if(!b || !b.scheduled_date || b.status==='quoted' || b.archived_at) return;
+    if(b.scheduled_date<from || b.scheduled_date>to || !b.crew_id) return;
+    gEvents.push({ gid:'bid'+b.id, bid:true, bidId:b.id,
+      summary:'BID '+(b.customer_name||'(no name)'),
+      crew_id:String(b.crew_id), date:b.scheduled_date,
+      time:b.scheduled_time?String(b.scheduled_time).slice(0,5):null,
+      hours:Number(b.scheduled_hours)||2, allDay:!b.scheduled_time });
   });
   const data = {jobs, gEvents, backend,
     calSeen: !!(busy && Array.isArray(busy)),
@@ -3933,7 +3945,7 @@ async function renderCal(){
     ? '⚠ Google overlay unavailable — showing app bookings only. '+esc(d.calErr.slice(0,90))
     : (Cal.crew ? 'Tap a job for the address, notes and photos.'
                 : (Cal.view==='week'
-                    ? 'Drag a job to move it; click empty space to book that slot.' : ''));
+                    ? 'Drag a job to move it; tap an open spot to pencil a bid or block time.' : ''));
   if(Cal.view==='week') renderCalWeek(grid, days, d);
   else renderCalMonth(grid, from, to, d);
 }
@@ -3961,6 +3973,13 @@ function tgEvent(it, crew){
   const w = 100/(it.lanes||1), left = (it.lane||0)*w;
   const pos = 'top:'+top.toFixed(1)+'px;height:'+h.toFixed(1)+'px;left:calc('+left+
     '% + 2px);width:calc('+w+'% - 4px);';
+  if(it.bid){
+    return '<div class="tgev" data-bidid="'+esc(it.bidId)+'" title="'+esc(it.summary||'')+
+      ' — penciled bid, tap for details" style="'+pos+
+      'background:color-mix(in srgb, var(--warn) 8%, transparent);cursor:pointer;'+
+      'border:2px dashed var(--warn);color:var(--warn);font-weight:600">'+
+      '<b>'+esc(fmtMin(it.s))+'</b> '+esc(String(it.summary||'').slice(0,40))+'</div>';
+  }
   if(it.google || it.internal || it.block){
     return '<div class="tgev" title="'+esc(it.summary||'')+'" style="'+pos+
       'background:'+(it.block
@@ -4053,26 +4072,18 @@ function wireTimegrid(grid){
   grid.querySelectorAll('.tgev[data-qid]:not(.app)').forEach(ch=>{
     ch.onclick = e=>{ e.stopPropagation(); openCalItem(ch.dataset.qid); };
   });
-  /* Empty grid space = "book here": the slot lands in the quote form. */
+  grid.querySelectorAll('.tgev[data-bidid]').forEach(ch=>{
+    ch.onclick = e=>{ e.stopPropagation(); if(!Cal.crew) bidCardById(ch.dataset.bidid); };
+  });
+  /* Empty grid space opens the two-action chooser (per Taylor: never the
+     quote builder): pencil a BID onto the slot, or BLOCK the time out. */
   grid.querySelectorAll('.tgcol').forEach(col=>{
     col.addEventListener('click', e=>{
       if(Cal.crew || e.target.closest('.tgev')) return;
       const rect = col.getBoundingClientRect();
       let min = TG.START + Math.round(((e.clientY-rect.top)/TG.PXH*60)/30)*30;
       min = Math.max(TG.START, Math.min(TG.END-60, min));
-      /* A SAVED quote sitting in the builder must not swallow the new slot
-         (field report: "it opens up some other existing quote") — booking
-         from free space means a NEW job. An unsaved draft in progress is the
-         rep picking a slot for it, so that is kept. */
-      if(State.savedQuoteId) $('#newquote').click();
-      $('#q_scheddate').value = col.dataset.date;
-      $('#q_crew').value = col.dataset.crew;
-      $('#q_schedtime').value = hhmm(min);
-      slotDurTouched = false; syncSlotDurField();
-      show('quote'); recalc();
-      msg('Slot picked from the calendar: '+dfmt(col.dataset.date)+' '+fmtMin(min)+' on '+
-        ((((CREWS||[]).find(c=>String(c.id)===col.dataset.crew))||{}).name||'truck')+
-        ' — build the quote, then Hold or Schedule.', false);
+      calAddCard(col.dataset.date, col.dataset.crew, hhmm(min));
     });
   });
   /* Drag to move: vertical = retime (15-min snap), across = day/truck. */
@@ -4195,6 +4206,164 @@ function setHistoryCollapsed(on){
   c.classList.toggle('hide', !!on);
   t.classList.toggle('hide', !on);
 }
+/* One blockout writer for the panel AND the calendar chooser: internal
+   backend -> the blockouts table; google backend -> the Apps Script. */
+async function createBlockout(o){
+  const backend = await calendarBackend();
+  if(backend==='google' && !GS.configured())
+    throw new Error('Blockouts need the calendar script — set up scheduling first (Rate Card → Check).');
+  if(backend==='internal'){
+    await DB.addBlock({ crew_id: o.crewId || '*', date: o.date,
+      from_time: o.from || null, to_time: o.to || null, reason: o.reason || null });
+  }else{
+    await GS.block({ crewId: o.crewId || '*', date: o.date,
+      from: o.from || null, to: o.to || null, reason: o.reason || '' });
+  }
+  bustCalCache(); bustSuggCache();
+  try{ await loadSuggData(true); }catch(e){}
+  renderSuggestionsDebounced(); refreshCrewLoad();
+  return 'Blocked — suggestions now steer around it.';
+}
+/* The Calendar tab's "add" chooser: pencil a bid here, or block the time. */
+async function calAddCard(date, crewId, time){
+  const old=$('#addcard'); if(old) old.remove();
+  const crewName=(((CREWS||[]).find(c=>String(c.id)===String(crewId)))||{}).name||'truck';
+  let bids=[];
+  try{ bids=((await DB.listBids())||[]).filter(b=>b.status!=='quoted' && !b.archived_at); }
+  catch(e){}
+  const endT=(()=>{ const m=Math.min(18*60, toMin(time)+120);
+    return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0'); })();
+  const wrap=document.createElement('div'); wrap.id='addcard';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
+    'display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);'+
+    'border-radius:12px;max-width:460px;width:100%;max-height:85vh;overflow:auto;padding:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center">'+
+    '<b>'+esc(dfmt(date))+' · '+esc(crewName)+' · '+esc(fmtMin(toMin(time)))+'</b>'+
+    '<button type="button" class="btn ghost sm" id="ac_x">✕</button></div>'+
+    '<div style="margin-top:12px;border:1px dashed var(--warn);border-radius:10px;padding:10px 12px">'+
+    '<div class="small" style="font-weight:600;color:var(--warn)">📌 Pencil a bid here</div>'+
+    '<div class="small muted" style="margin-top:2px">A pencil mark, not a booking — it never '+
+    'blocks the schedule. Convert the bid to a quote to price and confirm it.</div>'+
+    (bids.length
+      ? '<div class="row" style="margin-top:8px">'+
+        '<div style="flex:2"><label class="f">Open bid</label><select id="ac_bid">'+
+        bids.map(b=>'<option value="'+esc(b.id)+'">'+esc(b.customer_name||'(no name)')+
+          (b.address_raw?' — '+esc(b.address_raw):'')+'</option>').join('')+'</select></div>'+
+        '<div style="max-width:110px"><label class="f">Hours</label>'+
+        '<input type="number" id="ac_hours" step="0.5" min="0.5" value="2" class="mono"></div>'+
+        '</div>'+
+        '<button type="button" class="btn sm" id="ac_book" '+
+        'style="background:var(--warn);margin-top:8px">Pencil it in</button>'+
+        ' <span class="small muted" id="ac_bidmsg"></span>'
+      : '<div class="small muted" style="margin-top:6px">No open bids — start one on the '+
+        '<b>New Bid</b> tab first.</div>')+
+    '</div>'+
+    '<div style="margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px 12px">'+
+    '<div class="small" style="font-weight:600">🚫 Block out time</div>'+
+    '<div class="small muted" style="margin-top:2px">Holiday, PTO, shop day — suggestions '+
+    'steer around it.</div>'+
+    '<div class="row" style="margin-top:8px">'+
+    '<div><label class="f">Truck</label><select id="ac_crew">'+
+    '<option value="'+esc(String(crewId))+'">'+esc(crewName)+'</option>'+
+    '<option value="*">All trucks</option></select></div>'+
+    '<div style="max-width:110px"><label class="f">From</label>'+
+    '<input type="time" id="ac_from" step="900" value="'+esc(time)+'"></div>'+
+    '<div style="max-width:110px"><label class="f">To</label>'+
+    '<input type="time" id="ac_to" step="900" value="'+esc(endT)+'"></div>'+
+    '</div>'+
+    '<label class="small" style="display:block;margin-top:6px">'+
+    '<input type="checkbox" id="ac_allday"> whole day</label>'+
+    '<div class="row" style="margin-top:6px">'+
+    '<div style="flex:2"><label class="f">Reason</label>'+
+    '<input type="text" id="ac_reason" placeholder="PTO Shane, boom repair…"></div>'+
+    '<div style="max-width:110px;align-self:flex-end">'+
+    '<button type="button" class="btn ghost sm" id="ac_block" style="width:100%">Block</button></div>'+
+    '</div><div class="small muted" id="ac_blockmsg" style="margin-top:4px"></div>'+
+    '</div></div>';
+  document.body.appendChild(wrap);
+  $('#ac_x').onclick=()=>wrap.remove();
+  wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
+  const bk=$('#ac_book');
+  if(bk) bk.onclick=async()=>{
+    bk.disabled=true;
+    try{
+      await DB.patchBid($('#ac_bid').value, { scheduled_date: date,
+        scheduled_time: time, crew_id: String(crewId),
+        scheduled_hours: parseFloat($('#ac_hours').value)||2 });
+      wrap.remove();
+      bustCalCache(); renderCal();
+      calMsg('Bid penciled onto '+dfmt(date)+' '+fmtMin(toMin(time))+' on '+crewName+
+        ' — dashed means unconfirmed; convert it to a quote to book it solid.', false);
+    }catch(e){
+      $('#ac_bidmsg').textContent = /scheduled_date|crew_id|scheduled_time|scheduled_hours/i
+        .test(e.message||'')
+        ? '⚠ Run sql/31_bid_booking.sql in Supabase first.' : '⚠ '+e.message;
+      bk.disabled=false;
+    }
+  };
+  $('#ac_allday').onchange=()=>{
+    const off=$('#ac_allday').checked;
+    $('#ac_from').disabled=off; $('#ac_to').disabled=off;
+  };
+  $('#ac_block').onclick=async()=>{
+    const btn=$('#ac_block'); btn.disabled=true;
+    try{
+      const allday=$('#ac_allday').checked;
+      const m=await createBlockout({ crewId:$('#ac_crew').value, date,
+        from: allday?null:$('#ac_from').value||null,
+        to: allday?null:$('#ac_to').value||null,
+        reason:$('#ac_reason').value.trim() });
+      wrap.remove(); renderCal(); calMsg(m, false);
+    }catch(e){ $('#ac_blockmsg').textContent='⚠ '+e.message; btn.disabled=false; }
+  };
+}
+/* Tap a dashed BID chip: what it is, where it goes next. */
+async function bidCardById(id){
+  let b=null; try{ b=await DB.getBid(id); }catch(e){}
+  if(!b) return;
+  const old=$('#crewcard'); if(old) old.remove();
+  const wrap=document.createElement('div'); wrap.id='crewcard';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
+    'display:flex;align-items:center;justify-content:center;padding:16px';
+  const m=(b.measurements||{});
+  const addr=[b.address_raw,b.city,b.zip].filter(Boolean).join(', ');
+  wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);'+
+    'border-radius:12px;max-width:460px;width:100%;max-height:85vh;overflow:auto;padding:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'+
+    '<b style="font-size:18px">'+esc(b.customer_name||'(no name)')+'</b>'+
+    '<span style="display:flex;gap:6px;align-items:center">'+
+    '<span class="tag w">penciled bid</span>'+
+    '<button type="button" class="btn ghost sm" id="bc_x">✕</button></span></div>'+
+    (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" '+
+      'href="https://maps.google.com/?q='+encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
+    (m.sqft?'<div class="small" style="margin-top:6px">'+Number(m.sqft).toLocaleString()+
+      ' sq ft ≈ '+m.suggested_yards+' yd</div>':'')+
+    (b.scheduled_date?'<div class="small" style="margin-top:4px">📌 '+
+      esc(dfmt(b.scheduled_date))+
+      (b.scheduled_time?' · '+esc(fmtMin(toMin(String(b.scheduled_time).slice(0,5)))):'')+
+      ' — a pencil mark; it never blocks the schedule</div>':'')+
+    (b.notes?'<div style="margin-top:10px"><b class="small">Bid notes</b>'+
+      '<div class="small">'+esc(b.notes)+'</div></div>':'')+
+    '<div class="row" style="margin-top:14px">'+
+    '<button type="button" class="btn" id="bc_conv" style="background:var(--good)">Convert to quote</button>'+
+    '<button type="button" class="btn ghost" id="bc_open">Open bid</button>'+
+    '<button type="button" class="btn ghost" id="bc_unpin" style="color:var(--danger)">Un-pencil</button>'+
+    '</div></div>';
+  document.body.appendChild(wrap);
+  $('#bc_x').onclick=()=>wrap.remove();
+  wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
+  $('#bc_conv').onclick=()=>{ wrap.remove(); convertBid(b.id); };
+  $('#bc_open').onclick=()=>{ wrap.remove(); openBid(b); };
+  $('#bc_unpin').onclick=async()=>{
+    try{
+      await DB.patchBid(b.id, {scheduled_date:null, scheduled_time:null,
+        crew_id:null, scheduled_hours:null});
+      wrap.remove(); bustCalCache(); renderCal();
+      calMsg('Pencil mark removed — the bid stays on Saved Bids.', false);
+    }catch(e){ calMsg(e.message, true); }
+  };
+}
 async function openCalItem(qid){
   let r = null; try{ r = await DB.getQuote(qid); }catch(e){}
   if(!r) return;
@@ -4238,7 +4407,7 @@ async function bookingsPoolFor(anchor, d){
       scheduled_time:j.time, scheduled_hours:j.hours, equip_hours:j.hours,
       yards:j.yards, product:j.product, customer_name:j.customer,
       status:j.hold?'sent':'won', hold:j.hold }))
-    .concat(w.gEvents.map((g,i)=>({ id:'wk'+i, fromCalendar:true,
+    .concat(w.gEvents.filter(g=>!g.bid).map((g,i)=>({ id:'wk'+i, fromCalendar:true,
       block:!!g.block, hold:!!g.hold && !g.block,
       product:null, yards:0, customer_name:g.summary||'calendar event',
       status:g.hold?'sent':'won', crew_id:g.crew_id,
@@ -4418,7 +4587,8 @@ function renderCalMonth(grid, from, to, d){
         .sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));
       const chips = items.slice(0,3).map(it=>{
         const cr = (CREWS||[]).find(x=>String(x.id)===String(it.crew_id));
-        const col = it.block ? 'var(--danger)' : (it.google||it.internal) ? '#9aa2ad' : ((cr&&cr.color)||'#888');
+        const col = it.block ? 'var(--danger)' : it.bid ? 'var(--warn)'
+                  : (it.google||it.internal) ? '#9aa2ad' : ((cr&&cr.color)||'#888');
         const label = it.qid ? it.customer : String(it.summary||'').replace(/^🚫\s*/,'🚫');
         return '<div class="calchip" style="border-left:3px solid '+col+';'+
           ((it.hold||it.google)?'opacity:.65;':'')+'">'+
@@ -4771,7 +4941,9 @@ async function renderBidsList(){
         '<td class="num mono">'+(m.suggested_yards?m.suggested_yards+' yd':'—')+'</td>'+
         '<td class="small muted">'+
           ((b.photos||[]).length?(b.photos||[]).length+' 📷 ':'')+
-          (b.notes?'📋':'')+((!((b.photos||[]).length)&&!b.notes)?'—':'')+'</td>'+
+          (b.notes?'📋 ':'')+
+          (b.scheduled_date?'📌 '+esc(dfmt(b.scheduled_date)):'')+
+          ((!((b.photos||[]).length)&&!b.notes&&!b.scheduled_date)?'—':'')+'</td>'+
         '<td style="white-space:nowrap;text-align:right"></td>';
       const cell=tr.lastElementChild;
       const mk=(label,style)=>{ const btn=el('button','btn ghost sm',label);
@@ -4889,6 +5061,14 @@ async function convertBid(id){
   SiteVisit.pool=Array.isArray(b.photos)?b.photos.map(x=>Object.assign({},x)):[];
   SiteVisit.photos=SiteVisit.pool.map(x=>Object.assign({},x));   // all attached; untick in the panel
   if(t.suggested_yards>0) $('#q_yards').value=t.suggested_yards;
+  if(b.scheduled_date){
+    /* The pencil mark becomes the quote's proposed slot — Hold/Schedule
+       makes it real, and quoting the bid clears the dashed chip. */
+    $('#q_scheddate').value=b.scheduled_date;
+    if(b.crew_id) $('#q_crew').value=String(b.crew_id);
+    if(b.scheduled_time) $('#q_schedtime').value=String(b.scheduled_time).slice(0,5);
+    slotDurTouched=false;
+  }
   State.fromBidId=b.id; State.bidNotes=b.notes||null;
   renderBidRef();
   recalc();
@@ -6477,25 +6657,13 @@ function wire(){
     $('#bl_add').onclick=async()=>{
     const date=$('#bl_date').value;
     if(!date){ blMsg('Pick a date to block.', true); return; }
-    const backendB = await calendarBackend();
-    if(backendB==='google' && !GS.configured()){ blMsg('Blockouts need the calendar script — set up scheduling first (Rate Card → Check).', true); return; }
     const btn=$('#bl_add'); btn.disabled=true;
     try{
-      if(backendB==='internal'){
-        await DB.addBlock({ crew_id: $('#bl_crew').value || '*', date,
-          from_time: $('#bl_from').value || null, to_time: $('#bl_to').value || null,
-          reason: $('#bl_reason').value.trim() || null });
-        blMsg('Blocked on the internal calendar; suggestions now steer around it.', false);
-      }else{
-      const r = await GS.block({ crewId: $('#bl_crew').value, date,
+      const m = await createBlockout({ crewId: $('#bl_crew').value, date,
         from: $('#bl_from').value || null, to: $('#bl_to').value || null,
         reason: $('#bl_reason').value.trim() });
-      blMsg('Blocked — "'+(r.summary||'')+'" is on the calendar; suggestions now steer around it.', false);
-      }
-      bustCalCache();
+      blMsg(m, false);
       $('#bl_reason').value=''; $('#bl_from').value=''; $('#bl_to').value='';
-      bustSuggCache(); await loadSuggData(true);
-      renderSuggestionsDebounced(); refreshCrewLoad();
     }catch(e){ blMsg(e.message, true); }
     btn.disabled=false;
   };
