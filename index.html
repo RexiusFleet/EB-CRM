@@ -459,11 +459,19 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               scheduled before the ERP assigns these. When they arrive, type them here and
               press <b>Hold</b> or <b>Schedule</b> again: the calendar event picks them up.
               (Typed straight into Google they'd be overwritten by the next save.)</div>
-            <div id="schedwrap" style="border-top:1px solid var(--line-2);padding-top:14px">
-              <div class="kv" style="border:0;padding:0 0 8px">
-                <span class="k" style="font-weight:600;color:var(--ink)">Schedule</span>
-                <span class="small muted" id="schedstate"></span>
-              </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- FULL WIDTH: scheduling. The internal week grid, the engine's
+           suggested slots and the booking verbs span BOTH columns (per
+           Taylor) — the calendar gets the whole screen instead of half the
+           quote card. gridColumn 1/-1, same trick as the embed below. -->
+      <div class="card" id="schedcard" style="grid-column:1/-1">
+        <h3>Schedule <span class="small muted" id="schedstate"></span></h3>
+        <div class="body">
+            <div id="schedwrap">
               <div id="schedcal" style="margin:2px 0 10px"></div>
               <div id="suggestbox" style="margin-bottom:6px"></div>
               <div class="row">
@@ -513,7 +521,6 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <button class="btn ghost" id="lostquote" style="color:var(--danger)">Mark lost</button>
               <div id="savemsg" style="flex:1 1 100%"></div>
             </div>
-          </div>
         </div>
       </div>
 
@@ -1083,7 +1090,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-01-bidarchive';   // shown in the header; check it after deploying
+const BUILD = '2026-10-02-schedwide';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
