@@ -153,6 +153,16 @@ tr:last-child td{border-bottom:0}
 .calchip{border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin-top:4px;
   font-size:12.5px;line-height:1.35;background:var(--panel-2);overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
+.tgcol{position:relative;border-left:1px solid var(--line-2);min-width:0;cursor:copy;
+  background-image:repeating-linear-gradient(to bottom,transparent 0 47px,var(--line-2) 47px 48px)}
+.tgcol.dayfirst{border-left:2px solid var(--line)}
+.tgcol.droptgt{outline:2px dashed var(--good);outline-offset:-2px}
+.tgev{position:absolute;border-radius:6px;padding:2px 5px;font-size:11.5px;line-height:1.3;
+  overflow:hidden;border:1px solid var(--line);box-shadow:0 1px 2px rgba(0,0,0,.12);
+  color:var(--ink);user-select:none;-webkit-user-select:none}
+.tgev.app{cursor:grab;touch-action:none}
+.tgev.dragging{opacity:.8;z-index:50;box-shadow:0 8px 20px rgba(0,0,0,.35);cursor:grabbing}
+body.crewmode .tgev{font-size:13px}
 body.crewmode{font-size:17px}
 body.crewmode .calchip{font-size:15px;white-space:normal}
 .kv.total .v{font-size:19px}
@@ -571,6 +581,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             title="Read-only board for the crew — no pricing anywhere">Crew view</button>
         </div>
         <div class="small muted" id="calnote2" style="margin-top:6px"></div>
+        <div id="calmsg"></div>
         <div id="calgrid" style="margin-top:10px;overflow-x:auto"></div>
       </div></div>
   </section>
@@ -978,7 +989,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-25-caltab';   // shown in the header; check it after deploying
+const BUILD = '2026-09-25-timegrid';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3680,19 +3691,19 @@ async function calFetch(from, to){
   const jobs = [];
   (raw||[]).forEach(b=>{
     const hold = b.status==='sent';
-    const push = (crew,date,time,hours,lbl)=>{ if(date) jobs.push({qid:b.id,
+    const push = (crew,date,time,hours,lbl,si)=>{ if(date) jobs.push({qid:b.id,
       customer:b.customer_name||'', product:b.product||'', yards:Number(b.yards)||0,
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
-      hours: Number(hours)||null, hold, lbl: lbl||''}); };
+      hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
-      b.slots.forEach(sl=>push(sl.crew_id||b.crew_id, sl.date, sl.time, sl.hours,
-        (sl.to>sl.from ? 'loads '+sl.from+'–'+sl.to : 'load '+sl.from)));
+      b.slots.forEach((sl,i)=>push(sl.crew_id||b.crew_id, sl.date, sl.time, sl.hours,
+        (sl.to>sl.from ? 'loads '+sl.from+'–'+sl.to : 'load '+sl.from), i));
     }else if(b.crew2_id){
-      push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours, 'load 1');
+      push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours, 'load 1', 0);
       push(b.crew2_id, b.scheduled_date2||b.scheduled_date,
            b.scheduled_time2||b.scheduled_time,
-           b.scheduled_hours2||b.scheduled_hours, 'load 2');
-    }else push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours, '');
+           b.scheduled_hours2||b.scheduled_hours, 'load 2', 1);
+    }else push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours, '', 0);
   });
   const gEvents = [];
   if(busy && !busy.err && Array.isArray(busy)) busy.forEach((e,i)=>{
@@ -3743,53 +3754,269 @@ async function renderCal(){
     : (d.calSeen ? '· app bookings + Google overlay' : '· app bookings');
   $('#calnote2').innerHTML = d.backend==='google' && d.calErr
     ? '⚠ Google overlay unavailable — showing app bookings only. '+esc(d.calErr.slice(0,90))
-    : (Cal.crew ? 'Tap a job for the address, notes and photos.' : '');
+    : (Cal.crew ? 'Tap a job for the address, notes and photos.'
+                : (Cal.view==='week'
+                    ? 'Drag a job to move it; click empty space to book that slot.' : ''));
   if(Cal.view==='week') renderCalWeek(grid, days, d);
   else renderCalMonth(grid, from, to, d);
 }
-function calChipHtml(it, crew){
-  const t = it.time
-    ? fmtMin(toMin(it.time)) + (it.hours ? '–'+fmtMin(toMin(it.time)+Math.round(it.hours*60)) : '')
-    : 'all day';
-  if(it.google || it.internal){
-    return '<div class="calchip" title="'+esc(it.summary||'')+'" style="border-left:4px solid '+
-      (it.block ? 'var(--danger)' : '#9aa2ad')+';'+(it.block?'':'opacity:.7;')+'">'+
-      (it.block?'':'')+'<b>'+esc(t)+'</b> '+esc(String(it.summary||'').slice(0,46))+
-      (it.google?' · <span class="muted">Google</span>':'')+'</div>';
+/* ---- Google-style time grid: one column per TRUCK per day ----------------
+   6 AM – 7 PM at 48px/hour. Free time is visible white space: clicking it
+   drops that date/truck/time into the quote form (book here). App chips drag
+   — vertically to retime (15-min snap), across columns to change day or
+   truck — and the booking re-saves + re-syncs on drop. Google-only events
+   and blockouts render grey/hatched and stay put (they are not app rows). */
+const TG = { START: 6*60, END: 19*60, PXH: 48 };
+let tgDrag = null;
+function tgLanes(list){
+  const evs = list.slice().sort((a,b)=>a.s-b.s || b.e-a.e);
+  const ends = [];
+  evs.forEach(ev=>{
+    let li = ends.findIndex(t=>t <= ev.s);
+    if(li<0){ li = ends.length; ends.push(0); }
+    ends[li] = ev.e; ev.lane = li;
+  });
+  evs.forEach(ev=>{ ev.lanes = ends.length; });
+  return evs;
+}
+function tgEvent(it, crew){
+  const top = (it.s-TG.START)/60*TG.PXH, h = Math.max(24, (it.e-it.s)/60*TG.PXH - 2);
+  const w = 100/(it.lanes||1), left = (it.lane||0)*w;
+  const pos = 'top:'+top.toFixed(1)+'px;height:'+h.toFixed(1)+'px;left:calc('+left+
+    '% + 2px);width:calc('+w+'% - 4px);';
+  if(it.google || it.internal || it.block){
+    return '<div class="tgev" title="'+esc(it.summary||'')+'" style="'+pos+
+      'background:'+(it.block
+        ? 'repeating-linear-gradient(45deg,rgba(220,60,60,.16) 0 6px,transparent 6px 12px)'
+        : 'rgba(150,155,165,.16)')+
+      ';border-left:3px solid '+(it.block?'var(--danger)':'#9aa2ad')+'">'+
+      '<b>'+esc(fmtMin(it.s))+'</b> '+esc(String(it.summary||'').slice(0,64))+
+      (it.google?'<div class="muted" style="font-size:10px">Google</div>':'')+'</div>';
   }
   const col = (crew && crew.color) || '#888';
-  return '<div class="calchip" data-qid="'+esc(it.qid)+'" title="'+esc(it.customer)+'" style="border-left:4px solid '+col+
-    ';cursor:pointer;'+(it.hold?'opacity:.6;border-style:dashed;':'')+'">'+
-    (it.hold?'HOLD ':'')+'<b>'+esc(t)+'</b> '+esc(it.customer)+
-    (it.yards?' · '+Math.round(it.yards)+'yd '+esc(it.product):'')+
-    (it.lbl?' · '+esc(it.lbl):'')+'</div>';
+  const timeTxt = fmtMin(toMin(it.time))+'–'+fmtMin(toMin(it.time)+Math.round((it.hours||1)*60));
+  return '<div class="tgev app" data-qid="'+esc(it.qid)+'" data-si="'+(it.si||0)+
+    '" data-date="'+it.date+'" data-crew="'+esc(String(it.crew_id))+
+    '" data-time="'+esc(it.time)+'" data-hours="'+(it.hours||1)+
+    '" title="'+esc(it.customer)+' — drag to move" style="'+pos+
+    'background:'+col+'22;border-left:3px solid '+col+';'+
+    (it.hold?'border-style:dashed;opacity:.75;':'')+'">'+
+    '<b>'+esc(timeTxt)+'</b>'+(it.hold?' <span class="muted">HOLD</span>':'')+
+    '<br>'+esc(it.customer)+
+    (it.yards?'<div class="muted" style="font-size:10.5px">'+Math.round(it.yards)+'yd '+
+      esc(it.product)+(it.lbl?' · '+esc(it.lbl):'')+'</div>':'')+'</div>';
+}
+function tgBanner(it, crew){
+  const col = it.block ? 'var(--danger)'
+            : (it.google||it.internal) ? '#9aa2ad' : ((crew&&crew.color)||'#888');
+  const lbl = it.qid ? it.customer : String(it.summary||'');
+  return '<div class="tgev" '+(it.qid?'data-qid="'+esc(it.qid)+'" ':'')+
+    'style="position:static;display:block;margin-top:2px;background:'+
+    (it.qid ? col+'22' : 'rgba(150,155,165,.16)')+';border-left:3px solid '+col+
+    '" title="'+esc(lbl)+'">'+esc(String(lbl).slice(0,28))+'</div>';
 }
 function renderCalWeek(grid, days, d){
   const today = calFmt(new Date());
-  const crewList = CREWS||[];
-  grid.innerHTML = '<div style="display:grid;grid-template-columns:repeat(6,minmax(160px,1fr));gap:8px;min-width:960px">'+
-    days.map(date=>{
-      const items = d.jobs.filter(j=>j.date===date).concat(d.gEvents.filter(g=>g.date===date));
-      const byCrew = {}; items.forEach(it=>{ (byCrew[it.crew_id]=byCrew[it.crew_id]||[]).push(it); });
-      const secs = crewList.map(c=>{
-        const list = (byCrew[String(c.id)]||[])
-          .sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));
-        if(!list.length) return '';
-        return '<div style="margin-top:7px"><div class="small" style="font-weight:600;color:'+
-          ((c.color)||'var(--ink)')+'">'+esc(c.name)+'</div>'+
-          list.map(it=>calChipHtml(it, c)).join('')+'</div>';
-      }).join('');
-      const stray = items.filter(it=>!crewList.some(c=>String(c.id)===String(it.crew_id)));
-      const dd = new Date(date+'T00:00:00');
-      return '<div style="border:1px solid var(--line);border-radius:10px;padding:8px;min-width:0;'+
-        (date===today?'outline:2px solid var(--good);':'')+'">'+
-        '<div class="small" style="font-weight:700">'+
-        esc(dd.toLocaleDateString([], {weekday:'short'}))+' '+esc(dfmt(date))+'</div>'+
-        secs + (stray.length?'<div style="margin-top:7px">'+stray.map(it=>calChipHtml(it,null)).join('')+'</div>':'')+
-        ((!secs && !stray.length)?'<div class="small muted" style="margin-top:7px">—</div>':'')+
-        '</div>';
-    }).join('')+'</div>';
-  wireCalChips(grid);
+  const crewList = (CREWS||[]).slice();
+  const nT = Math.max(1, crewList.length);
+  const H = (TG.END-TG.START)/60*TG.PXH;
+  const brd = ti => 'border-left:'+(ti===0?'2px solid var(--line)':'1px solid var(--line-2)')+';';
+  const dayHdr = date => { const dd = new Date(date+'T00:00:00');
+    const t = dd.toLocaleDateString([], {weekday:'short'})+' '+Number(date.slice(8));
+    return date===today
+      ? '<span style="background:var(--good);color:#fff;border-radius:99px;padding:2px 9px">'+esc(t)+'</span>'
+      : esc(t); };
+  let html = '<div id="tg" style="display:grid;grid-template-columns:52px repeat('+
+    (days.length*nT)+',minmax(94px,1fr));min-width:'+(52+days.length*nT*104)+
+    'px;border:1px solid var(--line);border-radius:10px;overflow:hidden">';
+  html += '<div style="background:var(--panel-2)"></div>';
+  days.forEach(date=>{ html += '<div class="small" style="grid-column:span '+nT+
+    ';text-align:center;padding:7px 4px 3px;background:var(--panel-2);'+
+    'border-left:2px solid var(--line);font-weight:700">'+dayHdr(date)+'</div>'; });
+  html += '<div style="background:var(--panel-2)"></div>';
+  days.forEach(date=>crewList.forEach((c,ti)=>{
+    html += '<div class="small" style="text-align:center;padding:1px 2px 4px;'+
+      'background:var(--panel-2);'+brd(ti)+'color:'+(c.color||'var(--ink)')+
+      ';font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+
+      esc(c.name)+'</div>';
+  }));
+  const allDayOf = (date,cid) =>
+    d.jobs.filter(j=>j.date===date && String(j.crew_id)===String(cid) && !j.time)
+    .concat(d.gEvents.filter(g=>g.date===date && String(g.crew_id)===String(cid) && !g.time));
+  html += '<div style="background:var(--panel-2);border-bottom:1px solid var(--line)"></div>';
+  days.forEach(date=>crewList.forEach((c,ti)=>{
+    html += '<div style="min-height:5px;background:var(--panel-2);'+brd(ti)+
+      'border-bottom:1px solid var(--line);padding:0 2px 2px">'+
+      allDayOf(date,c.id).map(it=>tgBanner(it,c)).join('')+'</div>';
+  }));
+  html += '<div style="position:relative;height:'+H+'px">';
+  for(let m=TG.START+60; m<TG.END; m+=60){
+    html += '<div class="small muted" style="position:absolute;top:'+
+      (((m-TG.START)/60*TG.PXH)-8)+'px;right:4px;font-size:10.5px">'+
+      esc(fmtMin(m).replace(':00','')) + '</div>';
+  }
+  html += '</div>';
+  days.forEach(date=>crewList.forEach((c,ti)=>{
+    const timed = d.jobs.filter(j=>j.date===date && String(j.crew_id)===String(c.id) && j.time)
+      .concat(d.gEvents.filter(g=>g.date===date && String(g.crew_id)===String(c.id) && g.time))
+      .map(it=>{ const st = Math.max(TG.START, toMin(it.time));
+        const en = Math.min(TG.END, st + Math.round((it.hours||1)*60));
+        return Object.assign({}, it, {s: st, e: Math.max(en, st+30)}); });
+    tgLanes(timed);
+    html += '<div class="tgcol'+(ti===0?' dayfirst':'')+'" data-date="'+date+
+      '" data-crew="'+esc(String(c.id))+'" style="height:'+H+'px">'+
+      timed.map(it=>tgEvent(it,c)).join('')+'</div>';
+  }));
+  html += '</div>';
+  grid.innerHTML = html;
+  wireTimegrid(grid);
+}
+function wireTimegrid(grid){
+  const hhmm = m => String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+  grid.querySelectorAll('.tgev[data-qid]:not(.app)').forEach(ch=>{
+    ch.onclick = e=>{ e.stopPropagation(); openCalItem(ch.dataset.qid); };
+  });
+  /* Empty grid space = "book here": the slot lands in the quote form. */
+  grid.querySelectorAll('.tgcol').forEach(col=>{
+    col.addEventListener('click', e=>{
+      if(Cal.crew || e.target.closest('.tgev')) return;
+      const rect = col.getBoundingClientRect();
+      let min = TG.START + Math.round(((e.clientY-rect.top)/TG.PXH*60)/30)*30;
+      min = Math.max(TG.START, Math.min(TG.END-60, min));
+      $('#q_scheddate').value = col.dataset.date;
+      $('#q_crew').value = col.dataset.crew;
+      $('#q_schedtime').value = hhmm(min);
+      slotDurTouched = false; syncSlotDurField();
+      show('quote'); recalc();
+      msg('Slot picked from the calendar: '+dfmt(col.dataset.date)+' '+fmtMin(min)+' on '+
+        ((((CREWS||[]).find(c=>String(c.id)===col.dataset.crew))||{}).name||'truck')+
+        ' — build the quote, then Hold or Schedule.', false);
+    });
+  });
+  /* Drag to move: vertical = retime (15-min snap), across = day/truck. */
+  grid.querySelectorAll('.tgev.app').forEach(ch=>{
+    ch.onclick = e=>{ e.stopPropagation(); if(Cal.crew) openCalItem(ch.dataset.qid); };
+    ch.addEventListener('pointerdown', e=>{
+      if(Cal.crew || e.button) return;
+      e.preventDefault();
+      const rect = ch.getBoundingClientRect();
+      tgDrag = { ch, x0:e.clientX, y0:e.clientY, grabY:e.clientY-rect.top,
+                 moved:false, tcol:null };
+      try{ ch.setPointerCapture(e.pointerId); }catch(err){}
+    });
+    ch.addEventListener('pointermove', e=>{
+      if(!tgDrag || tgDrag.ch!==ch) return;
+      const dx = e.clientX-tgDrag.x0, dy = e.clientY-tgDrag.y0;
+      if(!tgDrag.moved && Math.hypot(dx,dy) < 6) return;
+      tgDrag.moved = true;
+      ch.classList.add('dragging');
+      ch.style.pointerEvents = 'none';
+      ch.style.transform = 'translate('+dx+'px,'+dy+'px)';
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      const col = under && under.closest ? under.closest('.tgcol') : null;
+      if(tgDrag.tcol && tgDrag.tcol!==col) tgDrag.tcol.classList.remove('droptgt');
+      tgDrag.tcol = col;
+      if(col) col.classList.add('droptgt');
+    });
+    ch.addEventListener('pointerup', async e=>{
+      if(!tgDrag || tgDrag.ch!==ch) return;
+      const dr = tgDrag; tgDrag = null;
+      ch.classList.remove('dragging'); ch.style.pointerEvents = '';
+      if(dr.tcol) dr.tcol.classList.remove('droptgt');
+      if(!dr.moved){ openCalItem(ch.dataset.qid); return; }
+      ch.style.transform = '';
+      const col = dr.tcol;
+      if(!col) return;
+      const rect = col.getBoundingClientRect();
+      let min = TG.START + Math.round(((e.clientY - rect.top - dr.grabY)/TG.PXH*60)/15)*15;
+      min = Math.max(TG.START, Math.min(TG.END-30, min));
+      const tgt = { date: col.dataset.date, crew: col.dataset.crew, time: hhmm(min) };
+      if(tgt.date===ch.dataset.date && tgt.crew===ch.dataset.crew &&
+         tgt.time===ch.dataset.time) return;
+      calMsg('Moving the job…', false);
+      try{
+        const warn = await moveBooking(ch.dataset.qid, Number(ch.dataset.si)||0, tgt,
+          parseFloat(ch.dataset.hours)||1);
+        calMsg('Moved to '+dfmt(tgt.date)+' '+fmtMin(min)+' on '+
+          ((((CREWS||[]).find(c=>String(c.id)===tgt.crew))||{}).name||'truck')+'.'+
+          (warn||''), false);
+      }catch(err){ calMsg(err.message, true); }
+      renderCal();
+    });
+    ch.addEventListener('pointercancel', ()=>{
+      if(!tgDrag || tgDrag.ch!==ch) return;
+      ch.classList.remove('dragging'); ch.style.pointerEvents=''; ch.style.transform='';
+      if(tgDrag.tcol) tgDrag.tcol.classList.remove('droptgt');
+      tgDrag = null;
+    });
+  });
+}
+/* Move one leg of a booking to a new date/time/truck and re-save it. The
+   quote row is patched first (the app's own truth), then Google is brought
+   in step through the normal sync — status preserved, event ids ride along
+   so events are PATCHED, never duplicated. */
+async function moveBooking(qid, si, tgt, hours){
+  const q = await DB.getQuote(qid);
+  if(!q) throw new Error('That quote was not found — refresh and try again.');
+  try{ await loadSuggData(); }catch(e){}
+  if(!crewCanPlace(tgt.crew, q.product)){
+    const nm = (((CREWS||[]).find(c=>String(c.id)===String(tgt.crew)))||{}).name||'That truck';
+    throw new Error(nm+' can\u2019t place '+(q.product||'this product')+' — not moved.');
+  }
+  const patch = {};
+  if(Array.isArray(q.slots) && q.slots.length > 2){
+    const slots = q.slots.map(x=>Object.assign({}, x));
+    if(!slots[si]) throw new Error('That day of the layout was not found — reopen the quote.');
+    slots[si].date = tgt.date; slots[si].time = tgt.time; slots[si].crew_id = String(tgt.crew);
+    patch.slots = slots;
+    const s0 = slots[0], s1 = slots[1];
+    patch.scheduled_date = s0.date; patch.scheduled_time = s0.time;
+    patch.scheduled_hours = s0.hours; patch.crew_id = String(s0.crew_id);
+    patch.crew2_id = String(s1.crew_id);
+    patch.scheduled_date2 = (s1.date!==s0.date) ? s1.date : null;
+    patch.scheduled_time2 = s1.time; patch.scheduled_hours2 = s1.hours;
+  }else if(q.crew2_id && si===1){
+    patch.crew2_id = String(tgt.crew);
+    patch.scheduled_date2 = (tgt.date!==q.scheduled_date) ? tgt.date : null;
+    patch.scheduled_time2 = tgt.time;
+  }else{
+    patch.scheduled_date = tgt.date; patch.scheduled_time = tgt.time;
+    patch.crew_id = String(tgt.crew);
+  }
+  if(DB.hasDate2===false) delete patch.scheduled_date2;
+  if(DB.hasSlots===false) delete patch.slots;
+  await DB.patchQuote(qid, patch);
+  let warn = '';
+  const endMin = toMin(tgt.time) + Math.round((hours||1)*60);
+  if(endMin > 18*60) warn += ' \u26a0 Ends '+fmtMin(endMin)+' — past the 6 PM cutoff.';
+  const backend = await calendarBackend();
+  if(backend==='google' && DB.mode!=='demo' && GS.configured() &&
+     (q.status==='sent' || q.status==='won')){
+    const u = Object.assign({}, q, patch);
+    try{
+      await GS.sync(qid, u.crew_id, u.scheduled_date,
+        u.scheduled_time||null, u.scheduled_hours||null, null);
+    }catch(e){
+      warn += ' \u26a0 Saved in the app, but Google was NOT updated ('+e.message+
+              ') — open the quote and press Hold/Schedule to retry.';
+    }
+  }
+  if(State.savedQuoteId===qid)
+    warn += ' (This quote is open in the builder — reopen it to pick up the move.)';
+  bustCalCache(); bustSuggCache();
+  return warn;
+}
+async function openCalItem(qid){
+  let r = null; try{ r = await DB.getQuote(qid); }catch(e){}
+  if(!r) return;
+  if(Cal.crew) crewCard(r); else openQuote(r);
+}
+let calMsgTimer = null;
+function calMsg(t, bad){
+  const b = $('#calmsg'); if(!b) return;
+  b.innerHTML = '<div class="note '+(bad?'bad':'ok')+'" style="margin-top:8px">'+esc(t)+'</div>';
+  clearTimeout(calMsgTimer);
+  calMsgTimer = setTimeout(()=>{ b.innerHTML=''; }, 7000);
 }
 function renderCalMonth(grid, from, to, d){
   const today = calFmt(new Date());
