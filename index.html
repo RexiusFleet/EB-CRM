@@ -12,20 +12,20 @@
   --bg:#f6f7f5; --panel:#ffffff; --panel-2:#fbfcfa; --ink:#1b2019; --muted:#5f6b5c;
   --line:#e0e4dd; --line-2:#eef1ec; --accent:#2f6b3c; --accent-ink:#ffffff;
   --accent-soft:#e8f1e9; --warn:#a8620f; --warn-soft:#fdf1e2; --danger:#a32f2f;
-  --danger-soft:#fbeaea; --good:#2f6b3c; --shadow:0 1px 2px rgba(20,30,18,.06),0 4px 14px rgba(20,30,18,.05);
+  --danger-soft:#fbeaea; --good:#2f6b3c; --star:#b58a00; --shadow:0 1px 2px rgba(20,30,18,.06),0 4px 14px rgba(20,30,18,.05);
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
   --line:#2a3025; --line-2:#222719; --accent:#6fbf7f; --accent-ink:#0f1410;
-  --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585;
+  --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585; --star:#e0c34d;
   --danger-soft:#2a1717; --good:#6fbf7f; --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
 }}
 :root[data-theme="dark"]{
   --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
   --line:#2a3025; --line-2:#222719; --accent:#6fbf7f; --accent-ink:#0f1410;
-  --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585;
+  --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585; --star:#e0c34d;
   --danger-soft:#2a1717; --good:#6fbf7f; --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
 }
 *{box-sizing:border-box}
@@ -1090,7 +1090,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-02-schedwide';   // shown in the header; check it after deploying
+const BUILD = '2026-10-02-weekghosts';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3848,11 +3848,12 @@ function calFmt(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2
   String(d.getDate()).padStart(2,'0'); }
 function calWeekStart(iso){ const d=new Date(iso+'T00:00:00');
   d.setDate(d.getDate()-((d.getDay()+6)%7)); return d; }
-let calCache = {key:'', t:0, data:null};
-function bustCalCache(){ calCache.key=''; }
+const calCache = new Map();   // key -> {t, data}; small LRU
+function bustCalCache(){ calCache.clear(); }
 async function calFetch(from, to){
   const key = from+'|'+to;
-  if(calCache.key===key && Date.now()-calCache.t < 60000) return calCache.data;
+  const hit = calCache.get(key);
+  if(hit && Date.now()-hit.t < 60000) return hit.data;
   const backend = await calendarBackend();
   const wantCal = backend==='google' && GS.configured() && State.token && DB.mode!=='demo';
   const busyP = wantCal
@@ -3899,7 +3900,8 @@ async function calFetch(from, to){
   const data = {jobs, gEvents, backend,
     calSeen: !!(busy && Array.isArray(busy)),
     calErr: (busy && busy.err) ? String(busy.err) : null};
-  calCache = {key, t:Date.now(), data};
+  calCache.set(key, {t:Date.now(), data});
+  while(calCache.size > 6) calCache.delete(calCache.keys().next().value);
   return data;
 }
 async function renderCal(){
@@ -4204,7 +4206,46 @@ async function openCalItem(qid){
    Suggested slots ride on top as DASHED GHOSTS (★ = best; amber = past
    5 PM) — tapping one books it exactly like the suggestion buttons; the
    picked slot shows solid as "this quote"; empty space books ad hoc. */
-const SC = { START: 6*60, END: 18.5*60, PXH: 26, off: 0 };
+const SC = { START: 6*60, END: 18.5*60, PXH: 26, off: 0, base: null };
+/* The week the rep is LOOKING AT is the week the engine plans for: paging
+   the mini calendar forward re-anchors the suggestions there (never before
+   tomorrow). SC.base freezes while paging so ‹ › steps are stable even as
+   ghosts move. */
+function schedAnchor(){
+  const t = new Date(); t.setDate(t.getDate()+1);
+  const tomorrow = calFmt(t);
+  if(SC.off > 0 && SC.base){
+    const ws = calWeekStart(SC.base); ws.setDate(ws.getDate() + SC.off*7);
+    const wk = calFmt(ws);
+    return wk > tomorrow ? wk : tomorrow;
+  }
+  return tomorrow;
+}
+/* Bookings for the engine's window. Inside loadSuggData's own range the
+   shared pool is reused; a far-off anchor fetches that stretch through
+   calFetch and maps it into the engine's booking shape (blocks block,
+   holds warn, app jobs carry product/yards for the ride-along rule). */
+async function bookingsPoolFor(anchor, d){
+  const t = new Date(); t.setDate(t.getDate() + SLOT_RULES.HORIZON_DAYS + 2);
+  if(anchor <= calFmt(new Date(Date.now()+86400000)) ||
+     anchor <= calFmt(t) && SC.off <= 0) return d.bookings;
+  const end = new Date(anchor+'T00:00:00');
+  end.setDate(end.getDate() + SLOT_RULES.HORIZON_DAYS + 2);
+  let w;
+  try{ w = await calFetch(anchor, calFmt(end)); }
+  catch(e){ return d.bookings; }
+  return w.jobs.map(j=>({ id:j.qid, crew_id:j.crew_id, scheduled_date:j.date,
+      scheduled_time:j.time, scheduled_hours:j.hours, equip_hours:j.hours,
+      yards:j.yards, product:j.product, customer_name:j.customer,
+      status:j.hold?'sent':'won', hold:j.hold }))
+    .concat(w.gEvents.map((g,i)=>({ id:'wk'+i, fromCalendar:true,
+      block:!!g.block, hold:!!g.hold && !g.block,
+      product:null, yards:0, customer_name:g.summary||'calendar event',
+      status:g.hold?'sent':'won', crew_id:g.crew_id,
+      scheduled_date:g.date,
+      scheduled_time:g.time || SLOT_RULES.FIRST_START,
+      scheduled_hours:g.hours || 10, equip_hours:g.hours || 10 })));
+}
 function renderSchedCalDebounced(){
   clearTimeout(renderSchedCalDebounced.t);
   renderSchedCalDebounced.t = setTimeout(()=>{ renderSchedCal(); }, 150);
@@ -4214,11 +4255,16 @@ async function renderSchedCal(){
   const crewList = CREWS||[];
   if(!crewList.length){ box.innerHTML=''; return; }
   /* Anchor: the picked date; else the best suggestion's week (so the
-     ghosts are on screen, not one ‹›-tap away); else today. */
-  let anchor0 = $('#q_scheddate').value;
-  if(!anchor0){ const g0=(State.schedGhosts||[])[0];
-    anchor0 = (g0 && g0.date) || calFmt(new Date()); }
-  const ws = calWeekStart(anchor0); ws.setDate(ws.getDate() + SC.off*7);
+     ghosts are on screen, not one ‹›-tap away); else today. While the rep
+     is paging (off ≠ 0) the base stays FROZEN, so each ‹ › is one week even
+     though the ghosts re-anchor to the viewed week. */
+  if(SC.off===0 || !SC.base){
+    let anchor0 = $('#q_scheddate').value;
+    if(!anchor0){ const g0=(State.schedGhosts||[])[0];
+      anchor0 = (g0 && g0.date) || calFmt(new Date()); }
+    SC.base = anchor0;
+  }
+  const ws = calWeekStart(SC.base); ws.setDate(ws.getDate() + SC.off*7);
   const days=[]; for(let i=0;i<6;i++){ const dd=new Date(ws); dd.setDate(dd.getDate()+i); days.push(calFmt(dd)); }
   const from=days[0], to=days[5];
   let d; try{ d = await calFetch(from, to); }catch(e){ box.innerHTML=''; return; }
@@ -4238,7 +4284,7 @@ async function renderSchedCal(){
       Math.max(14,((e0-s0)/60*SC.PXH-2)).toFixed(1)+'px;'; };
   let html='<div class="row" style="align-items:center;margin-bottom:4px">'+
     '<span class="small" style="font-weight:600;align-self:center">Week of '+esc(dfmt(from))+'</span>'+
-    '<span class="small muted" style="align-self:center">· dashed = suggested, tap to book · solid = taken</span>'+
+    '<span class="small muted" style="align-self:center">· <span style="color:var(--star);font-weight:700">★ yellow dash</span> = best · green dash = suggested · tap to book · solid = taken</span>'+
     '<span style="flex:1 1 auto"></span>'+
     '<button type="button" class="btn ghost sm" id="sc_prev" style="flex:0 0 auto;padding:3px 10px">‹</button>'+
     '<button type="button" class="btn ghost sm" id="sc_today" style="flex:0 0 auto;padding:3px 10px">This week</button>'+
@@ -4295,11 +4341,15 @@ async function renderSchedCal(){
       const durH = g.end!=null ? Math.max(0.5,(g.end-toMin(x.time))/60)
                                : (slotDuration()||2);
       cell+='<div class="scghost" data-gi="'+(State.schedGhosts||[]).indexOf(g)+
-        '" title="Suggested slot — tap to book it" style="position:absolute;'+
+        '" title="'+(g.star?'Best slot — tap to book it':'Suggested slot — tap to book it')+
+        '" style="position:absolute;'+
         'left:1px;right:1px;'+pos(x.time,durH)+'border:2px dashed '+
-        (g.late?'var(--warn)':'var(--good)')+';border-radius:4px;cursor:pointer;'+
-        'z-index:3;color:'+(g.late?'var(--warn)':'var(--good)')+
-        ';font-weight:700;padding:0 2px;background:transparent">'+
+        (g.star?'var(--star)':g.late?'var(--warn)':'var(--good)')+
+        ';border-radius:4px;cursor:pointer;'+
+        'z-index:'+(g.star?4:3)+';color:'+
+        (g.star?'var(--star)':g.late?'var(--warn)':'var(--good)')+
+        ';font-weight:700;padding:0 2px;background:'+
+        (g.star?'color-mix(in srgb, var(--star) 12%, transparent)':'transparent')+'">'+
         (g.star?'★ ':'')+esc(fmtMin(toMin(x.time)))+'</div>';
     });
     if(selDate===date && String(selCrew)===String(c.id) && selTime){
@@ -4314,9 +4364,9 @@ async function renderSchedCal(){
   }));
   html+='</div></div>';
   box.innerHTML=html;
-  $('#sc_prev').onclick=()=>{ SC.off--; renderSchedCal(); };
-  $('#sc_next').onclick=()=>{ SC.off++; renderSchedCal(); };
-  $('#sc_today').onclick=()=>{ SC.off=0; renderSchedCal(); };
+  $('#sc_prev').onclick=()=>{ SC.off--; renderSchedCal(); renderSuggestionsDebounced(); };
+  $('#sc_next').onclick=()=>{ SC.off++; renderSchedCal(); renderSuggestionsDebounced(); };
+  $('#sc_today').onclick=()=>{ SC.off=0; SC.base=null; renderSchedCal(); renderSuggestionsDebounced(); };
   box.querySelectorAll('.scghost').forEach(el2=>el2.onclick=e=>{
     e.stopPropagation();
     const g=(State.schedGhosts||[])[Number(el2.dataset.gi)];
@@ -4326,8 +4376,8 @@ async function renderSchedCal(){
     $('#q_crew2').value=g.crew2?String(g.crew2):'';
     if($('#q_scheddate2')) $('#q_scheddate2').value=g.date2||'';
     $('#q_schedtime2').value=g.time2||(g.crew2?g.time:'');
-    SC.off=0; slotDurTouched=false; syncSlotDurField(); renderSlotHint();
-    refreshCrewLoad(); renderSchedCal();
+    SC.off=0; SC.base=null; slotDurTouched=false; syncSlotDurField(); renderSlotHint();
+    refreshCrewLoad(); renderSchedCal(); renderSuggestionsDebounced();
   });
   box.querySelectorAll('.sccol').forEach(col=>{
     col.onclick=e=>{
@@ -5444,7 +5494,13 @@ async function renderSuggestions(){
     /* First time the capacity data lands, re-run the calculator: the loads
        math could not know the truck capacities until now. */
     if(!renderSuggestions.primed){ renderSuggestions.primed=true; recalc(); return; }
-    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1);
+    const anchor = schedAnchor();               // tomorrow, or the viewed week
+    const anchorD = new Date(anchor+'T00:00:00');
+    const pool = await bookingsPoolFor(anchor, d);
+    if(my !== suggReq) return;
+    const weekNote = SC.off > 0
+      ? ' · <b>for the week of '+esc(dfmt(anchor))+'</b> (‹ This week › on the grid resets)'
+      : '';
 
     /* ---- multi-load projects get PLANS, not single slots ----
        Rule 1 (share a load) is impossible when the quote alone overflows the
@@ -5453,7 +5509,7 @@ async function renderSuggestions(){
     const proj = projectLoads();
     if(proj.loads>1 && (CREWS||[]).length){
       const eq = parseFloat($('#o_eqhr').textContent)||0;
-      const jobsOn=(c,ds)=>d.bookings.filter(b=>String(b.crew_id)===String(c.id)&&
+      const jobsOn=(c,ds)=>pool.filter(b=>String(b.crew_id)===String(c.id)&&
         b.scheduled_date===ds && !b.hold).length;
       /* Rock rides only rock-capable trucks: plans are built over the
          ELIGIBLE fleet, so a rock project never gets a "both trucks" plan
@@ -5464,9 +5520,9 @@ async function renderSuggestions(){
       const planEnd=(startHM,hrs)=> toMin(startHM)+Math.round(hrs*60);
       const plans=[];
       for(let i=0;i<SLOT_RULES.HORIZON_DAYS;i++){
-        const day=new Date(tomorrow); day.setDate(day.getDate()+i);
+        const day=new Date(anchorD); day.setDate(day.getDate()+i);
         if(day.getDay()===0||day.getDay()===6) continue;
-        const ds=day.toISOString().slice(0,10);
+        const ds=calFmt(day);
         if(FLEET.length>1 && FLEET.every(c=>jobsOn(c,ds)===0)){
           const start=FLEET.map(c=>firstStartFor(c,ds)).sort().slice(-1)[0];
           const la2=Math.ceil(proj.loads/2), lb2=Math.floor(proj.loads/2);
@@ -5485,9 +5541,9 @@ async function renderSuggestions(){
       }
       for(const c of FLEET){
         for(let i=0;i<SLOT_RULES.HORIZON_DAYS;i++){
-          const day=new Date(tomorrow); day.setDate(day.getDate()+i);
+          const day=new Date(anchorD); day.setDate(day.getDate()+i);
           if(day.getDay()===0||day.getDay()===6) continue;
-          const ds=day.toISOString().slice(0,10);
+          const ds=calFmt(day);
           if(jobsOn(c,ds)!==0) continue;
           const fs=firstStartFor(c,ds);
           const kA=fitLoads(proj.loads, eq, fs);
@@ -5525,7 +5581,7 @@ async function renderSuggestions(){
         if(plans[i].end > SLOT_RULES.MULTI_END_MIN) plans.splice(i,1);
       let html = '<div class="small" style="font-weight:600;margin-bottom:4px">Project plans '+
         '<span class="muted" style="font-weight:400">· '+proj.loads+' loads · '+
-        d.mode+' capacities'+calNoteHtml(d)+'</span></div>';
+        d.mode+' capacities'+weekNote+calNoteHtml(d)+'</span></div>';
       html += plans.length ? plans.map((pl,i)=>
         '<button class="btn ghost sm suggslot" data-date="'+pl.date+'" data-crew="'+pl.crew+
         '" data-crew2="'+pl.crew2+'" data-date2="'+(pl.date2||'')+
@@ -5564,8 +5620,8 @@ async function renderSuggestions(){
       return;
     }
 
-    const res = suggestSlots(product, yards, d.bookings, d.capMap, d.mode,
-                             CREWS||[], tomorrow.toISOString().slice(0,10),
+    const res = suggestSlots(product, yards, pool, d.capMap, d.mode,
+                             CREWS||[], anchor,
                              Math.round((slotDuration()||2)*60));
     const rock = isRockProduct(product);
     const ranked = res.filter(r=>r.best && !(rock && !r.hasCap)).sort((a,b)=>
@@ -5576,7 +5632,7 @@ async function renderSuggestions(){
     let html = '<div class="small" style="font-weight:600;margin-bottom:4px">Suggested slots '+
       '<span class="muted" style="font-weight:400">· '+d.mode+' capacities '+
       '<span title="Change on the Rate Card tab">(Rate Card tab to switch)</span>'+
-      calNoteHtml(d)+'</span></div>';
+      weekNote+calNoteHtml(d)+'</span></div>';
     if(!ranked.length){
       State.schedGhosts = [];
       box.innerHTML = html+'<div class="small muted">No open slot in the next '+
@@ -6227,7 +6283,8 @@ function wire(){
   $('#q_crew2').addEventListener('change', ()=>{ syncSlotDurField(); renderSlotHint(); refreshCrewLoad(); });
   $('#q_schedtime').addEventListener('input', ()=>{ renderSlotHint(); renderSlotChips(); renderSchedCalDebounced(); });
   $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); renderSlotChips(); renderSchedCalDebounced(); });
-  $('#q_scheddate').addEventListener('change', ()=>{ SC.off=0; renderSchedCalDebounced(); });
+  $('#q_scheddate').addEventListener('change', ()=>{ SC.off=0; SC.base=null;
+    renderSchedCalDebounced(); renderSuggestionsDebounced(); });
   $('#q_crew').addEventListener('change', renderSchedCalDebounced);
   $('#q_scheddate').addEventListener('change', renderCalEmbed);
   /* ---- internal calendar controls ---- */
