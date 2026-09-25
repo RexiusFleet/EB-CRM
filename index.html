@@ -150,6 +150,11 @@ tr:last-child td{border-bottom:0}
   box-shadow:0 -10px 12px -8px rgba(0,0,0,.45)}}
 :root[data-theme="dark"] .saverow{box-shadow:0 -10px 12px -8px rgba(0,0,0,.45)}
 .saverow .btn{flex:0 0 auto}
+.calchip{border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin-top:4px;
+  font-size:12.5px;line-height:1.35;background:var(--panel-2);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+body.crewmode{font-size:17px}
+body.crewmode .calchip{font-size:15px;white-space:normal}
 .kv.total .v{font-size:19px}
 .basis{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.4}
 .basis b{color:var(--accent);font-weight:600}
@@ -246,6 +251,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   <nav class="tabs" id="tabs">
     <button data-view="quote" aria-current="true">New Quote</button>
     <button data-view="quotes">Saved Quotes</button>
+    <button data-view="cal">Calendar</button>
     <button data-view="dash">Dashboard</button>
     <button data-view="rates">Rate Card</button>
   </nav>
@@ -404,6 +410,37 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               scheduled before the ERP assigns these. When they arrive, type them here and
               press <b>Hold</b> or <b>Schedule</b> again: the calendar event picks them up.
               (Typed straight into Google they'd be overwritten by the next save.)</div>
+            <!-- ============ SITE VISIT: measurements, notes, photos ============
+                 Everything here saves WITH the quote (sql/27). Photos upload to
+                 the app's own storage as they are picked; on Hold/Schedule the
+                 calendar script copies them to Google Drive and attaches them
+                 to every event of the booking, so the crew opens them straight
+                 from Google Calendar. -->
+            <div id="sitevisit" style="border-top:1px solid var(--line-2);padding-top:14px">
+              <div class="kv" style="border:0;padding:0 0 8px">
+                <span class="k" style="font-weight:600;color:var(--ink)">Site visit</span>
+                <span class="small muted">measurements, notes &amp; photos — photos ride to the crew's calendar event</span>
+              </div>
+              <div id="measrows"></div>
+              <div class="row" style="margin-top:6px;align-items:center">
+                <button type="button" class="btn ghost sm" id="measadd" style="flex:0 0 auto">+ Add area</button>
+                <div class="small" id="meastotal" style="align-self:center"></div>
+              </div>
+              <div style="margin-top:10px"><label class="f">Site notes
+                  <span class="small muted">the crew sees these on the calendar event</span></label>
+                <textarea id="q_sitenotes" rows="2"
+                  placeholder="Gate code, dogs, hose pull ~150 ft, park on the north side…"></textarea></div>
+              <div style="margin-top:10px">
+                <label class="f">Photos <span class="small muted" id="photohint">attach to the crew's event on Hold/Schedule</span></label>
+                <input type="file" id="photo_in" accept="image/*" multiple style="display:none">
+                <div class="row" style="align-items:center">
+                  <button type="button" class="btn ghost sm" id="photoadd" style="flex:0 0 auto">+ Add photos</button>
+                  <span class="small muted" id="photomsg" style="align-self:center"></span>
+                </div>
+                <div id="photolist" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px"></div>
+              </div>
+            </div>
+
             <div id="schedwrap" style="border-top:1px solid var(--line-2);padding-top:14px">
               <div class="kv" style="border:0;padding:0 0 8px">
                 <span class="k" style="font-weight:600;color:var(--ink)">Schedule</span>
@@ -510,6 +547,31 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                placeholder="Search by customer or address…"
                style="max-width:420px;margin-bottom:14px">
         <div class="scroll" id="quoteslist"></div>
+      </div></div>
+  </section>
+
+  <!-- ======================== INTERNAL CALENDAR ========================
+       The schedule drawn straight from the app's own database (quotes and
+       their slots), with the Google calendar overlaid while Google is still
+       the live system. Groundwork for running without Google entirely:
+       app_config calendar_backend = 'internal' flips the whole app over
+       (sql/28) — until then nothing about the rep's workflow changes. -->
+  <section id="view-cal" class="hide">
+    <div class="card"><h3>Calendar <span class="muted small" id="calsrc"></span></h3>
+      <div class="body">
+        <div class="row" style="align-items:center">
+          <button type="button" class="btn ghost sm" id="cal_prev" style="flex:0 0 auto">‹</button>
+          <button type="button" class="btn ghost sm" id="cal_today" style="flex:0 0 auto">Today</button>
+          <button type="button" class="btn ghost sm" id="cal_next" style="flex:0 0 auto">›</button>
+          <b id="cal_label" style="align-self:center;margin-left:6px"></b>
+          <span style="flex:1 1 auto"></span>
+          <button type="button" class="btn ghost sm" id="cal_week" style="flex:0 0 auto">Week</button>
+          <button type="button" class="btn ghost sm" id="cal_month" style="flex:0 0 auto">Month</button>
+          <button type="button" class="btn ghost sm" id="cal_crew" style="flex:0 0 auto"
+            title="Read-only board for the crew — no pricing anywhere">Crew view</button>
+        </div>
+        <div class="small muted" id="calnote2" style="margin-top:6px"></div>
+        <div id="calgrid" style="margin-top:10px;overflow-x:auto"></div>
       </div></div>
   </section>
 
@@ -916,8 +978,8 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-19-balance';   // shown in the header; check it after deploying
-const SCRIPT_WANT = '2026-09-19-vergate';  // the deployed script version this app needs
+const BUILD = '2026-09-25-caltab';   // shown in the header; check it after deploying
+const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -1281,6 +1343,9 @@ const DemoDB = {
       q.scheduled_date>=from && q.scheduled_date<=to &&
       (q.status==='sent'||q.status==='won'));
   },
+  async blocks(){ return []; },
+  async addBlock(){ throw new Error('Blockouts need live mode.'); },
+  async delBlock(){ return null; },
   async truckCaps(){
     // Same numbers as sql/17_truck_capacity.sql -- the placement-truck sheet.
     const base=[['BeautiBark',32,23],['Hemlock',23,18],
@@ -1477,7 +1542,7 @@ const LiveDB = {
     const tail='&scheduled_date=gte.'+encodeURIComponent(from)+
       '&scheduled_date=lte.'+encodeURIComponent(to)+
       '&status=in.(sent,won)&limit=500';
-    const base='quotes?select=id,product,yards,customer_name,status,crew_id,'+
+    const base='quotes?select=id,product,yards,customer_name,address_raw,status,crew_id,'+
       'scheduled_date,scheduled_time,scheduled_hours,equip_hours,crew2_id,scheduled_time2';
     try{
       const r = await SB.rest(base+',scheduled_date2,scheduled_hours2,slots'+tail);
@@ -1497,6 +1562,20 @@ const LiveDB = {
   },
   async truckCaps(){
     return SB.rest('truck_capacity?select=crew_id,product,dry_yards,wet_yards&limit=500');
+  },
+  /* Internal-calendar blockouts (sql/28). In google mode these are unused —
+     blockouts live as Google events; in internal mode they ARE the blocks. */
+  async blocks(from,to){
+    return SB.rest('blockouts?select=*&date=gte.'+encodeURIComponent(from)+
+      '&date=lte.'+encodeURIComponent(to)+'&order=date&limit=200');
+  },
+  async addBlock(row){
+    const r = await SB.rest('blockouts',
+      {method:'POST', headers:{Prefer:'return=representation'}, body:JSON.stringify(row)});
+    return r && r[0];
+  },
+  async delBlock(id){
+    return SB.rest('blockouts?id=eq.'+encodeURIComponent(id), {method:'DELETE'});
   },
   async setConfig(key, value){
     const r = await SB.rest('app_config?key=eq.'+encodeURIComponent(key),
@@ -1783,6 +1862,7 @@ async function loadData(){
     loadSearchIndex();
     loadCrews().then(()=>{ renderSchedState(null); refreshCrewLoad(); });
     applyQuoteLink();     // #quote=<id> from a calendar event, once data is up
+    applyCrewMode();      // #crew — read-only crew board, no pricing
   }catch(err){
     $('#boot').classList.remove('hide');
     $('#boot').innerHTML = '<div class="body"><div class="note bad">'+
@@ -1871,7 +1951,8 @@ function show(v){
   // The tab bar scrolls sideways on phones -- keep the active tab in sight.
   const cur=$('#tabs button[aria-current="true"]');
   if(cur && cur.scrollIntoView) try{ cur.scrollIntoView({block:'nearest',inline:'nearest'}); }catch(e){}
-  ['quote','quotes','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  ['quote','quotes','cal','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  if(v==='cal')    renderCal();
   if(v==='quotes') renderQuotesList();
   if(v==='dash')   renderDash();
   if(v==='rates'){ renderRates(); renderDataStatus(); }
@@ -2990,6 +3071,13 @@ async function runCalCheck(){
     btn.disabled=false; return;
   }
   GS.url = (cfg.apps_script_url || '').trim() || null;
+  try{
+    _cbCache.t = 0;   // Check must read the CURRENT flag, not a cached one
+    const be = await calendarBackend();
+    rows.push(line(true, 'Calendar backend', be==='internal'
+      ? 'internal — bookings live in the app only; Google is not consulted'
+      : 'google — events sync to Google Calendar (app_config calendar_backend)'));
+  }catch(e){}
   rows.push(line(!!GS.url,'Calendar service URL',
     GS.url ? String(GS.url).slice(0,44)+'…' : 'not set in app_config'));
   if(!GS.url){
@@ -3129,6 +3217,15 @@ async function openQuote(r){
         '. Re-saving re-lays it out from the day-1 date.</div>'; })()
     : '';
   $('#savequote').textContent = 'Update quote';
+  /* Site visit: measurements, notes and photos ride the row. */
+  $('#q_sitenotes').value = r.site_notes || '';
+  SiteVisit.meas = (r.site_measurements && Array.isArray(r.site_measurements.areas))
+    ? r.site_measurements.areas.map(a=>({label:a.label||'', l:a.l??'', w:a.w??'',
+        /* sf saved from L×W stays derived on reopen; a typed sf stays typed */
+        sf:(a.l>0 && a.w>0 && Math.abs(a.l*a.w - a.sf) < 1) ? '' : (a.sf??'')}))
+    : [];
+  SiteVisit.photos = Array.isArray(r.site_photos) ? r.site_photos.map(p=>Object.assign({},p)) : [];
+  renderMeas(); renderPhotos();
   autoFill={drive:false,blow:false,prep:false};  // these are the rep's saved numbers
   renderSchedState(r); recalc(); refreshCrewLoad();
   if(r.site_key) loadSite(r.site_key, {address1:r.address_raw,city:r.city,zip:r.zip},
@@ -3538,6 +3635,422 @@ function splitCounts(){
    Returns {crew, days, curDays} for the best eligible second truck, or null
    when there is nothing to gain. The tip only SUGGESTS — the other truck may
    have its own jobs, so the rep stays in charge of adding it. */
+/* ========================= internal calendar ============================
+   Renders the schedule from the app's OWN data: quotes (holds + bookings,
+   including N-day slots and two-truck splits) expanded one chip per
+   truck-day. While calendar_backend is 'google' (the default), the Google
+   busy feed is overlaid — manual events and blockouts show greyed with a
+   Google tag — so this board is never missing anything the crew can see.
+   With calendar_backend='internal' (sql/28), Google is not consulted at all
+   and blockouts come from the blockouts table.
+
+   Crew view (#crew in the URL, or the Crew view button): same board,
+   read-only, bigger type, and tapping a job opens a day card with the
+   address, product, site notes and photos — NO pricing anywhere. Crew
+   members sign in with their own accounts like anyone else. */
+let _cbCache = {t:0, v:'google'};
+async function calendarBackend(){
+  if(Date.now() - _cbCache.t < 60000) return _cbCache.v;
+  try{
+    const cfg = await DB.appConfig();
+    _cbCache = {t: Date.now(), v: cfg.calendar_backend==='internal' ? 'internal' : 'google'};
+  }catch(e){ _cbCache.t = Date.now(); }
+  return _cbCache.v;
+}
+const Cal = { view:'week', anchor:null, crew:false };
+function calFmt(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+
+  String(d.getDate()).padStart(2,'0'); }
+function calWeekStart(iso){ const d=new Date(iso+'T00:00:00');
+  d.setDate(d.getDate()-((d.getDay()+6)%7)); return d; }
+let calCache = {key:'', t:0, data:null};
+function bustCalCache(){ calCache.key=''; }
+async function calFetch(from, to){
+  const key = from+'|'+to;
+  if(calCache.key===key && Date.now()-calCache.t < 60000) return calCache.data;
+  const backend = await calendarBackend();
+  const wantCal = backend==='google' && GS.configured() && State.token && DB.mode!=='demo';
+  const busyP = wantCal
+    ? GS.busy(from, to).catch(e=>({err:(e&&e.message)||String(e)||'no reply'}))
+    : Promise.resolve(null);
+  const [raw, busy, iblocks] = await Promise.all([
+    DB.bookingsBetween(from, to).catch(()=>[]),
+    busyP,
+    backend==='internal' ? DB.blocks(from, to).catch(()=>[]) : Promise.resolve([])
+  ]);
+  const jobs = [];
+  (raw||[]).forEach(b=>{
+    const hold = b.status==='sent';
+    const push = (crew,date,time,hours,lbl)=>{ if(date) jobs.push({qid:b.id,
+      customer:b.customer_name||'', product:b.product||'', yards:Number(b.yards)||0,
+      crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
+      hours: Number(hours)||null, hold, lbl: lbl||''}); };
+    if(Array.isArray(b.slots) && b.slots.length){
+      b.slots.forEach(sl=>push(sl.crew_id||b.crew_id, sl.date, sl.time, sl.hours,
+        (sl.to>sl.from ? 'loads '+sl.from+'–'+sl.to : 'load '+sl.from)));
+    }else if(b.crew2_id){
+      push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours, 'load 1');
+      push(b.crew2_id, b.scheduled_date2||b.scheduled_date,
+           b.scheduled_time2||b.scheduled_time,
+           b.scheduled_hours2||b.scheduled_hours, 'load 2');
+    }else push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours, '');
+  });
+  const gEvents = [];
+  if(busy && !busy.err && Array.isArray(busy)) busy.forEach((e,i)=>{
+    const crews = String(e.crew)==='*' ? (CREWS||[]).map(c=>String(c.id)) : [String(e.crew)];
+    crews.forEach(cid=>gEvents.push({gid:'g'+i, google:true, block:!!e.block,
+      hold: !!e.hold && !e.block, summary: e.summary||'calendar event',
+      crew_id: cid, date: e.date, time: e.allDay?null:(e.time||null),
+      hours: e.allDay?null:(Number(e.hours)||null), allDay: !!e.allDay}));
+  });
+  (iblocks||[]).forEach(r=>{
+    const crews = String(r.crew_id)==='*' ? (CREWS||[]).map(c=>String(c.id)) : [String(r.crew_id)];
+    const t0 = r.from_time ? String(r.from_time).slice(0,5) : null;
+    const t1 = r.to_time ? String(r.to_time).slice(0,5) : null;
+    crews.forEach(cid=>gEvents.push({gid:'b'+r.id, internal:true, block:true,
+      summary:'🚫 '+(r.reason||'blocked'), crew_id:cid, date:r.date, time:t0,
+      hours:(t0&&t1)?Math.max(0.5,(toMin(t1)-toMin(t0))/60):null, allDay:!t0}));
+  });
+  const data = {jobs, gEvents, backend,
+    calSeen: !!(busy && Array.isArray(busy)),
+    calErr: (busy && busy.err) ? String(busy.err) : null};
+  calCache = {key, t:Date.now(), data};
+  return data;
+}
+async function renderCal(){
+  const grid = $('#calgrid'); if(!grid) return;
+  if(!Cal.anchor) Cal.anchor = calFmt(new Date());
+  ['cal_week','cal_month'].forEach(id=>{ const b=$('#'+id);
+    const on = (id==='cal_week')===(Cal.view==='week');
+    b.style.background = on ? 'var(--good)' : ''; b.style.color = on ? '#fff' : ''; });
+  let from, to, days = [];
+  if(Cal.view==='week'){
+    const ws = calWeekStart(Cal.anchor);
+    for(let i=0;i<6;i++){ const d=new Date(ws); d.setDate(d.getDate()+i); days.push(calFmt(d)); }
+    from = days[0]; to = days[5];
+    $('#cal_label').textContent = dfmt(from)+' – '+dfmt(to);
+  }else{
+    const a = new Date(Cal.anchor+'T00:00:00');
+    from = calFmt(new Date(a.getFullYear(), a.getMonth(), 1));
+    to   = calFmt(new Date(a.getFullYear(), a.getMonth()+1, 0));
+    $('#cal_label').textContent = a.toLocaleDateString([], {month:'long', year:'numeric'});
+  }
+  grid.innerHTML = '<div class="muted small">Loading…</div>';
+  let d;
+  try{ d = await calFetch(from, to); }
+  catch(e){ grid.innerHTML = '<div class="note bad">'+esc(e.message)+'</div>'; return; }
+  $('#calsrc').textContent = d.backend==='internal'
+    ? '· internal — Google not consulted'
+    : (d.calSeen ? '· app bookings + Google overlay' : '· app bookings');
+  $('#calnote2').innerHTML = d.backend==='google' && d.calErr
+    ? '⚠ Google overlay unavailable — showing app bookings only. '+esc(d.calErr.slice(0,90))
+    : (Cal.crew ? 'Tap a job for the address, notes and photos.' : '');
+  if(Cal.view==='week') renderCalWeek(grid, days, d);
+  else renderCalMonth(grid, from, to, d);
+}
+function calChipHtml(it, crew){
+  const t = it.time
+    ? fmtMin(toMin(it.time)) + (it.hours ? '–'+fmtMin(toMin(it.time)+Math.round(it.hours*60)) : '')
+    : 'all day';
+  if(it.google || it.internal){
+    return '<div class="calchip" title="'+esc(it.summary||'')+'" style="border-left:4px solid '+
+      (it.block ? 'var(--danger)' : '#9aa2ad')+';'+(it.block?'':'opacity:.7;')+'">'+
+      (it.block?'':'')+'<b>'+esc(t)+'</b> '+esc(String(it.summary||'').slice(0,46))+
+      (it.google?' · <span class="muted">Google</span>':'')+'</div>';
+  }
+  const col = (crew && crew.color) || '#888';
+  return '<div class="calchip" data-qid="'+esc(it.qid)+'" title="'+esc(it.customer)+'" style="border-left:4px solid '+col+
+    ';cursor:pointer;'+(it.hold?'opacity:.6;border-style:dashed;':'')+'">'+
+    (it.hold?'HOLD ':'')+'<b>'+esc(t)+'</b> '+esc(it.customer)+
+    (it.yards?' · '+Math.round(it.yards)+'yd '+esc(it.product):'')+
+    (it.lbl?' · '+esc(it.lbl):'')+'</div>';
+}
+function renderCalWeek(grid, days, d){
+  const today = calFmt(new Date());
+  const crewList = CREWS||[];
+  grid.innerHTML = '<div style="display:grid;grid-template-columns:repeat(6,minmax(160px,1fr));gap:8px;min-width:960px">'+
+    days.map(date=>{
+      const items = d.jobs.filter(j=>j.date===date).concat(d.gEvents.filter(g=>g.date===date));
+      const byCrew = {}; items.forEach(it=>{ (byCrew[it.crew_id]=byCrew[it.crew_id]||[]).push(it); });
+      const secs = crewList.map(c=>{
+        const list = (byCrew[String(c.id)]||[])
+          .sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));
+        if(!list.length) return '';
+        return '<div style="margin-top:7px"><div class="small" style="font-weight:600;color:'+
+          ((c.color)||'var(--ink)')+'">'+esc(c.name)+'</div>'+
+          list.map(it=>calChipHtml(it, c)).join('')+'</div>';
+      }).join('');
+      const stray = items.filter(it=>!crewList.some(c=>String(c.id)===String(it.crew_id)));
+      const dd = new Date(date+'T00:00:00');
+      return '<div style="border:1px solid var(--line);border-radius:10px;padding:8px;min-width:0;'+
+        (date===today?'outline:2px solid var(--good);':'')+'">'+
+        '<div class="small" style="font-weight:700">'+
+        esc(dd.toLocaleDateString([], {weekday:'short'}))+' '+esc(dfmt(date))+'</div>'+
+        secs + (stray.length?'<div style="margin-top:7px">'+stray.map(it=>calChipHtml(it,null)).join('')+'</div>':'')+
+        ((!secs && !stray.length)?'<div class="small muted" style="margin-top:7px">—</div>':'')+
+        '</div>';
+    }).join('')+'</div>';
+  wireCalChips(grid);
+}
+function renderCalMonth(grid, from, to, d){
+  const today = calFmt(new Date());
+  const month = from.slice(0,7);
+  const rows = []; let c = calWeekStart(from);
+  while(calFmt(c) <= to){
+    const row = [];
+    for(let i=0;i<6;i++){ row.push(calFmt(c)); c.setDate(c.getDate()+1); }
+    c.setDate(c.getDate()+1);   // Sundays are not working days
+    rows.push(row);
+  }
+  grid.innerHTML = '<div style="min-width:820px">'+rows.map(row=>
+    '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:6px">'+
+    row.map(date=>{
+      const items = d.jobs.filter(j=>j.date===date).concat(d.gEvents.filter(g=>g.date===date))
+        .sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));
+      const chips = items.slice(0,3).map(it=>{
+        const cr = (CREWS||[]).find(x=>String(x.id)===String(it.crew_id));
+        const col = it.block ? 'var(--danger)' : (it.google||it.internal) ? '#9aa2ad' : ((cr&&cr.color)||'#888');
+        const label = it.qid ? it.customer : String(it.summary||'').replace(/^🚫\s*/,'🚫');
+        return '<div class="calchip" style="border-left:3px solid '+col+';'+
+          ((it.hold||it.google)?'opacity:.65;':'')+'">'+
+          (it.time?'<b>'+esc(fmtMin(toMin(it.time)))+'</b> ':'')+esc(String(label).slice(0,22))+'</div>';
+      }).join('');
+      const dim = date.slice(0,7)!==month;
+      return '<div data-day="'+date+'" style="border:1px solid var(--line);border-radius:8px;'+
+        'padding:5px;min-height:64px;cursor:pointer;'+(dim?'opacity:.4;':'')+
+        (date===today?'outline:2px solid var(--good);':'')+'">'+
+        '<div class="small" style="font-weight:600">'+Number(date.slice(8))+'</div>'+chips+
+        (items.length>3?'<div class="small muted">+'+(items.length-3)+' more</div>':'')+
+        '</div>';
+    }).join('')+'</div>').join('')+'</div>';
+  grid.querySelectorAll('[data-day]').forEach(cell=>cell.onclick=()=>{
+    Cal.view='week'; Cal.anchor=cell.dataset.day; renderCal();
+  });
+}
+function wireCalChips(grid){
+  grid.querySelectorAll('[data-qid]').forEach(ch=>ch.onclick=async()=>{
+    let r=null; try{ r = await DB.getQuote(ch.dataset.qid); }catch(e){}
+    if(!r) return;
+    if(Cal.crew) crewCard(r); else openQuote(r);
+  });
+}
+/* The crew's day card: everything the crew needs, NOTHING about money. */
+function crewCard(r){
+  const old=$('#crewcard'); if(old) old.remove();
+  const wrap=document.createElement('div'); wrap.id='crewcard';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
+    'display:flex;align-items:center;justify-content:center;padding:16px';
+  const addr=[r.address_raw,r.city,r.zip].filter(Boolean).join(', ');
+  const loads = Array.isArray(r.slots)&&r.slots.length
+    ? r.slots.map(sl=>esc(dfmt(sl.date))+' '+(sl.time?esc(fmtMin(toMin(String(sl.time).slice(0,5)))):'')+
+        ' (load'+((sl.to>sl.from)?'s '+sl.from+'–'+sl.to:' '+sl.from)+')').join('<br>')
+    : (r.scheduled_date ? esc(dfmt(r.scheduled_date))+
+        (r.scheduled_time?' · '+esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5)))):'') : '');
+  wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;'+
+    'max-width:480px;width:100%;max-height:85vh;overflow:auto;padding:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center">'+
+    '<b style="font-size:18px">'+esc(r.customer_name||'')+'</b>'+
+    '<button type="button" class="btn ghost sm" id="crewcard_x">✕</button></div>'+
+    (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" href="https://maps.google.com/?q='+
+      encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
+    '<div style="margin-top:6px">'+esc((r.yards||0)+' yd of '+(r.product||''))+
+    (Number(r.depth_in)>0?' at '+Number(r.depth_in)+'&Prime;':'')+'</div>'+
+    (loads?'<div class="small" style="margin-top:4px">'+loads+'</div>':'')+
+    (r.site_notes?'<div style="margin-top:10px"><b class="small">Site notes</b>'+
+      '<div>'+esc(r.site_notes)+'</div></div>':'')+
+    (r.notes?'<div style="margin-top:10px"><b class="small">Notes from the quote</b>'+
+      '<div>'+esc(r.notes)+'</div></div>':'')+
+    '<div id="crewcard_ph" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>'+
+    '</div>';
+  document.body.appendChild(wrap);
+  $('#crewcard_x').onclick=()=>wrap.remove();
+  wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
+  (Array.isArray(r.site_photos)?r.site_photos:[]).forEach(async ph=>{
+    const u = await svThumbUrl(Object.assign({}, ph));
+    if(!u) return;
+    const img=document.createElement('img');
+    img.src=u; img.alt=ph.name||'site photo';
+    img.style.cssText='width:130px;height:130px;object-fit:cover;border-radius:8px;'+
+      'border:1px solid var(--line);cursor:pointer';
+    img.onclick=()=>{ try{ window.open(u,'_blank'); }catch(e){} };
+    const box=$('#crewcard_ph'); if(box) box.appendChild(img);
+  });
+}
+function enterCrewMode(){
+  Cal.crew = true;
+  document.body.classList.add('crewmode');
+  const tb=$('#tabs'); if(tb) tb.classList.add('hide');
+  const b=$('#cal_crew'); if(b) b.textContent='Exit crew view';
+  show('cal');
+}
+function exitCrewMode(){
+  if(!Cal.crew) return;
+  Cal.crew = false;
+  document.body.classList.remove('crewmode');
+  const tb=$('#tabs'); if(tb) tb.classList.remove('hide');
+  const b=$('#cal_crew'); if(b) b.textContent='Crew view';
+  renderCal();
+}
+function applyCrewMode(){
+  if(/(^|#|&)crew/.test(location.hash)) enterCrewMode(); else exitCrewMode();
+}
+
+/* ======================= site visit (bid worksheet) =======================
+   Measurements, site notes and photos live ON the quote (sql/27 columns).
+   Photos upload to Supabase Storage the moment they are picked (bucket
+   site-photos, authenticated); the calendar script copies any photo without
+   a drive_id into Google Drive at Hold/Schedule and attaches it to every
+   event of the booking. Reps never touch Google — the script owns that. */
+const SiteVisit = { meas: [], photos: [] };
+
+function svReset(){
+  SiteVisit.meas = []; SiteVisit.photos = [];
+  const sn=$('#q_sitenotes'); if(sn) sn.value='';
+  renderMeas(); renderPhotos();
+}
+function svSqft(m){
+  const sf=parseFloat(m.sf), l=parseFloat(m.l), w=parseFloat(m.w);
+  if(sf>0) return sf;
+  return (l>0 && w>0) ? l*w : 0;
+}
+function svTotals(){
+  const sqft = SiteVisit.meas.reduce((s,m)=>s+svSqft(m), 0);
+  const depth = parseFloat($('#q_depth').value)||2;
+  /* cubic yards = sqft × (in/12) ft ÷ 27, rounded UP to the half yard --
+     blown material settles; short loads are the expensive mistake. */
+  const yards = sqft>0 ? Math.ceil(sqft*(depth/12)/27*2)/2 : 0;
+  return {sqft: Math.round(sqft), depth, yards};
+}
+function renderMeas(){
+  const box=$('#measrows'); if(!box) return;
+  box.innerHTML = SiteVisit.meas.map((m,i)=>
+    '<div class="row" style="margin-top:6px" data-mi="'+i+'">'+
+    '<div style="flex:2"><label class="f">Area</label><input type="text" class="m_lbl" '+
+      'placeholder="Front beds" value="'+esc(m.label||'')+'"></div>'+
+    '<div><label class="f">L (ft)</label><input type="number" class="m_l num mono" '+
+      'step="0.5" min="0" value="'+(m.l??'')+'"></div>'+
+    '<div><label class="f">W (ft)</label><input type="number" class="m_w num mono" '+
+      'step="0.5" min="0" value="'+(m.w??'')+'"></div>'+
+    '<div><label class="f">Sq ft <span class="small muted">or type it</span></label>'+
+      '<input type="number" class="m_sf num mono" step="1" min="0" '+
+      'placeholder="'+((parseFloat(m.l)>0&&parseFloat(m.w)>0)?Math.round(m.l*m.w):'')+'" '+
+      'value="'+(m.sf??'')+'"></div>'+
+    '<button type="button" class="btn ghost sm m_del" style="flex:0 0 auto;align-self:end" '+
+      'title="Remove area">✕</button>'+
+    '</div>').join('');
+  box.querySelectorAll('[data-mi]').forEach(row=>{
+    const m = SiteVisit.meas[Number(row.dataset.mi)];
+    const upd = ()=>{ m.label=row.querySelector('.m_lbl').value;
+      m.l=row.querySelector('.m_l').value; m.w=row.querySelector('.m_w').value;
+      m.sf=row.querySelector('.m_sf').value;
+      row.querySelector('.m_sf').placeholder =
+        (parseFloat(m.l)>0&&parseFloat(m.w)>0)?Math.round(parseFloat(m.l)*parseFloat(m.w)):'';
+      renderMeasTotal(); };
+    row.querySelectorAll('input').forEach(inp=>inp.addEventListener('input', upd));
+    row.querySelector('.m_del').onclick=()=>{ SiteVisit.meas.splice(Number(row.dataset.mi),1);
+      renderMeas(); };
+  });
+  renderMeasTotal();
+}
+function renderMeasTotal(){
+  const box=$('#meastotal'); if(!box) return;
+  const t=svTotals();
+  if(!(t.sqft>0)){ box.innerHTML = SiteVisit.meas.length
+    ? '<span class="muted">Enter lengths and widths (or square feet).</span>' : ''; return; }
+  const cur = parseFloat($('#q_yards').value)||0;
+  const applied = Math.abs(cur - t.yards) < 0.01;
+  box.innerHTML = '<b>'+t.sqft.toLocaleString()+' sq ft</b> × '+t.depth+'&Prime; ≈ '+
+    '<b>'+t.yards+' yd</b>'+
+    (applied ? ' <span class="tag g">in the quote</span>'
+             : ' <button type="button" class="btn ghost sm" id="measapply" '+
+               'style="margin-left:6px;padding:3px 10px">Use '+t.yards+' yd in the quote</button>');
+  const b=$('#measapply');
+  if(b) b.onclick=()=>{ $('#q_yards').value=t.yards; recalc(); renderMeasTotal(); };
+}
+
+async function svUploadPhoto(file){
+  /* Phones hand over 3-12 MB photos; the crew needs "which gate", not pixels.
+     Downscale to ≤1600px JPEG client-side; fall back to the original bytes. */
+  let blob=file, type=file.type||'image/jpeg';
+  try{
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, 1600/Math.max(bmp.width,bmp.height));
+    if(k<1){
+      const cv=document.createElement('canvas');
+      cv.width=Math.round(bmp.width*k); cv.height=Math.round(bmp.height*k);
+      cv.getContext('2d').drawImage(bmp,0,0,cv.width,cv.height);
+      const out=await new Promise(r=>cv.toBlob(r,'image/jpeg',0.85));
+      if(out){ blob=out; type='image/jpeg'; }
+    }
+  }catch(e){ /* HEIC or odd formats: send as-is; Drive renders them */ }
+  const uid=(crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random().toString(36).slice(2));
+  const path='p/'+uid+(type==='image/jpeg'?'.jpg':'');
+  const r=await fetch(CONFIG.SUPABASE_URL+'/storage/v1/object/site-photos/'+path,{
+    method:'POST',
+    headers:{apikey:CONFIG.SUPABASE_ANON_KEY, Authorization:'Bearer '+State.token,
+             'Content-Type':type, 'x-upsert':'true'},
+    body: blob});
+  if(!r.ok){
+    let t=''; try{ t=(await r.text()).slice(0,140); }catch(e){}
+    throw new Error(/not.?found|bucket/i.test(t)
+      ? 'The site-photos bucket is missing — run sql/27_site_visit.sql in Supabase.'
+      : 'Photo upload failed: '+t);
+  }
+  return {path, name:file.name||'photo', size:blob.size, at:new Date().toISOString()};
+}
+async function svThumbUrl(p){
+  if(p._url) return p._url;
+  try{
+    const r=await fetch(CONFIG.SUPABASE_URL+'/storage/v1/object/site-photos/'+p.path,{
+      headers:{apikey:CONFIG.SUPABASE_ANON_KEY, Authorization:'Bearer '+State.token}});
+    if(!r.ok) return null;
+    p._url=URL.createObjectURL(await r.blob());
+    return p._url;
+  }catch(e){ return null; }
+}
+function renderPhotos(){
+  const box=$('#photolist'); if(!box) return;
+  box.innerHTML = SiteVisit.photos.map((p,i)=>
+    '<div data-pi="'+i+'" style="position:relative;width:86px;height:86px;border-radius:8px;'+
+    'overflow:hidden;border:1px solid var(--line);background:var(--panel-2)" title="'+esc(p.name||'')+'">'+
+    '<img class="pimg" alt="" style="width:100%;height:100%;object-fit:cover;display:none">'+
+    '<span class="small muted pfall" style="position:absolute;inset:0;display:flex;'+
+      'align-items:center;justify-content:center;padding:4px;text-align:center;overflow:hidden">'+
+      esc((p.name||'photo').slice(0,18))+'</span>'+
+    (p.drive_id?'<span class="small" style="position:absolute;left:3px;bottom:2px;'+
+      'background:rgba(0,0,0,.55);color:#fff;border-radius:4px;padding:0 4px">on event</span>':'')+
+    '<button type="button" class="pdel" title="Remove photo" style="position:absolute;top:2px;'+
+      'right:2px;width:22px;height:22px;border-radius:6px;border:0;cursor:pointer;'+
+      'background:rgba(0,0,0,.55);color:#fff;line-height:1">✕</button>'+
+    '</div>').join('');
+  box.querySelectorAll('[data-pi]').forEach(card=>{
+    const i=Number(card.dataset.pi), p=SiteVisit.photos[i];
+    svThumbUrl(p).then(u=>{ if(!u) return;
+      const img=card.querySelector('.pimg'); img.src=u; img.style.display='block';
+      card.querySelector('.pfall').style.display='none'; });
+    card.querySelector('.pdel').onclick=()=>{
+      SiteVisit.photos.splice(i,1); renderPhotos();
+      /* best effort; the Drive copy (if any) stays as the job record */
+      fetch(CONFIG.SUPABASE_URL+'/storage/v1/object/site-photos/'+p.path,{method:'DELETE',
+        headers:{apikey:CONFIG.SUPABASE_ANON_KEY, Authorization:'Bearer '+State.token}}).catch(()=>{});
+    };
+  });
+}
+function svPayload(){
+  const t=svTotals();
+  return {
+    site_notes: ($('#q_sitenotes')&&$('#q_sitenotes').value.trim())||null,
+    site_measurements: SiteVisit.meas.length
+      ? {areas: SiteVisit.meas.map(m=>({label:m.label||'', l:parseFloat(m.l)||null,
+          w:parseFloat(m.w)||null, sf:Math.round(svSqft(m))})),
+         sqft:t.sqft, depth_in:t.depth, suggested_yards:t.yards}
+      : null,
+    site_photos: SiteVisit.photos.length
+      ? SiteVisit.photos.map(p=>({path:p.path, name:p.name, size:p.size, at:p.at,
+          drive_id:p.drive_id||null, mime:p.mime||null}))
+      : null
+  };
+}
+
 /* The deployed script's version, from a ping, cached briefly. Used to gate
    bookings that only the current script can place on the right trucks. */
 let VER_CACHE = {t:0, v:null, err:null};
@@ -3799,7 +4312,8 @@ async function loadSuggData(force){
   /* wantCal is part of the cache key: the first load can run before the
      Apps Script URL or the session token exist, skipping the calendar fetch.
      Caching that skip for 30s made a healthy calendar look unreadable. */
-  const wantCal = !!(GS.configured() && State.token);
+  const backend = await calendarBackend();
+  const wantCal = backend==='google' && !!(GS.configured() && State.token);
   if(!force && Date.now()-suggData.t < 30000 && suggData.capMap &&
      suggData.wantCal === wantCal) return suggData;
   const today = new Date();
@@ -3861,12 +4375,35 @@ async function loadSuggData(force){
       scheduled_hours: e.allDay ? 10 : e.hours,
       equip_hours: e.allDay ? 10 : e.hours }));
   });
+  /* Internal mode: blockouts come from the blockouts table (sql/28) and join
+     the pool exactly like calendar blocks did, so every engine rule holds. */
+  let iblocks = [];
+  if(backend==='internal'){
+    try{ iblocks = (await DB.blocks(iso(from), iso(to))) || []; }catch(e){}
+    iblocks.forEach(r=>{
+      const crewIds = String(r.crew_id)==='*' ? (CREWS||[]).map(c=>String(c.id))
+                                              : [String(r.crew_id)];
+      const t0 = r.from_time ? String(r.from_time).slice(0,5) : null;
+      const t1 = r.to_time ? String(r.to_time).slice(0,5) : null;
+      const hrs = (t0 && t1) ? Math.max(0.5, (toMin(t1)-toMin(t0))/60) : 10;
+      crewIds.forEach(cid=>bookings.push({ id:'blk'+r.id, block:true, hold:false,
+        product:null, yards:0, customer_name:'🚫 '+(r.reason||'blocked'),
+        status:'won', crew_id:cid, scheduled_date:r.date,
+        scheduled_time: t0 || SLOT_RULES.FIRST_START,
+        scheduled_hours: hrs, equip_hours: hrs }));
+    });
+  }
   const capMap = new Map();
   (caps||[]).forEach(r => capMap.set(String(r.crew_id)+'|'+r.product, r));
-  suggData = { t:Date.now(), bookings, capMap, wantCal,
+  suggData = { t:Date.now(), bookings, capMap, wantCal, backend,
                mode:(cfg.capacity_mode==='wet'?'wet':'dry'),
                calSeen: calOk, calN: calOk ? busy.length : 0,
-               blocks: calOk ? busy.filter(e=>e.block) : [],
+               blocks: backend==='internal'
+                 ? iblocks.map(r=>({date:r.date, crew:String(r.crew_id),
+                     time:r.from_time?String(r.from_time).slice(0,5):'',
+                     allDay:!r.from_time, summary:'🚫 '+(r.reason||'blocked'),
+                     id:r.id, internal:true}))
+                 : (calOk ? busy.filter(e=>e.block) : []),
                calErr: busy && busy.err ? String(busy.err) : null };
   try{ renderBlockList(); }catch(e){}
   return suggData;
@@ -3886,13 +4423,16 @@ function renderBlockList(){
     '<div class="kv"><span class="k">🚫 '+esc(dfmt(b.date))+
     (b.allDay?'':' · '+esc(b.time||''))+' · <b>'+esc(crewName(String(b.crew)))+'</b>'+
     ' <span class="muted">'+esc(String(b.summary||'').replace(/^🚫\s*/,'').slice(0,60))+'</span></span>'+
-    (b.id?'<button class="btn ghost sm" data-unblock="'+esc(b.id)+'">✕ Remove</button>':'')+
+    (b.id?'<button class="btn ghost sm" data-unblock="'+esc(b.id)+'"'+
+      (b.internal?' data-int="1"':'')+'>✕ Remove</button>':'')+
     '</div>').join('');
   box.querySelectorAll('[data-unblock]').forEach(btn=>{
     btn.onclick=async()=>{
       btn.disabled=true;
       try{
-        await GS.unblock(btn.dataset.unblock);
+        if(btn.dataset.int==='1') await DB.delBlock(btn.dataset.unblock);
+        else await GS.unblock(btn.dataset.unblock);
+        bustCalCache();
         blMsg('Blockout removed.', false);
         bustSuggCache(); await loadSuggData(true);
         renderSuggestionsDebounced(); refreshCrewLoad();
@@ -4283,9 +4823,21 @@ async function doUnschedule(){
   if(!State.savedQuoteId) return;
   $('#btnunschedule').disabled=true;
   try{
-    const r = await GS.remove(State.savedQuoteId,
-      (Array.isArray(State.openedSlots)?State.openedSlots:[])
-        .map(sl=>sl&&sl.event_id).filter(Boolean));
+    let r = null;
+    if(DB.mode!=='demo' && (await calendarBackend())==='internal'){
+      /* No Google events to take down — clear the booking columns directly. */
+      const patch = { scheduled_date:null, crew_id:null, crew2_id:null,
+        scheduled_time:null, scheduled_hours:null, scheduled_time2:null,
+        calendar_event_id:null, calendar_id:null, calendar_event_id2:null };
+      if(DB.hasDate2!==false) patch.scheduled_date2 = null;
+      if(DB.hasSlots!==false) patch.slots = null;
+      try{ await DB.patchQuote(State.savedQuoteId, patch); }catch(e){}
+      bustCalCache();
+    }else{
+      r = await GS.remove(State.savedQuoteId,
+        (Array.isArray(State.openedSlots)?State.openedSlots:[])
+          .map(sl=>sl&&sl.event_id).filter(Boolean));
+    }
     State.openedSlots = null;
     /* Off the calendar = back to the Saved pile. Since Save/Update preserves
        status, THIS is the one path that returns a held or booked quote to a
@@ -4428,7 +4980,8 @@ async function saveQuote(status){
      A warning after the fact was not enough; a layout the old scripts cannot
      book correctly is now refused BEFORE any event is written. The version
      comes from a ping (cached 5 min), so the gate costs one round trip. */
-  if(layout && layout.nday && DB.mode!=='demo' && GS.configured()){
+  if(layout && layout.nday && DB.mode!=='demo' && GS.configured() &&
+     (await calendarBackend())==='google'){
     const dv = await deployedVersion();
     if(dv.v !== SCRIPT_WANT){
       msg('Not booked. This '+layout.nday.slots.length+'-slot layout needs calendar '+
@@ -4552,9 +5105,22 @@ async function saveQuote(status){
   /* sql/25 adds scheduled_date2; a database that has not run it yet must
      still save (bookingsBetween's fallback records which world we are in). */
   if(q.scheduled_date2===null && DB.hasDate2===false) delete q.scheduled_date2;
+  /* Site visit rides the quote row (sql/27). */
+  Object.assign(q, svPayload());
+  let svWarn = '';
   try{
     const wasNew = !State.savedQuoteId;
-    let saved = await DB.saveQuote(q, State.savedQuoteId);
+    let saved;
+    try{ saved = await DB.saveQuote(q, State.savedQuoteId); }
+    catch(e){
+      /* A database without sql/27 must still save the quote itself. */
+      if(/site_(notes|measurements|photos)/i.test(e.message||'')){
+        delete q.site_notes; delete q.site_measurements; delete q.site_photos;
+        saved = await DB.saveQuote(q, State.savedQuoteId);
+        svWarn = ' ⚠ The site-visit fields (measurements, notes, photos) were NOT saved — '+
+                 'run sql/27_site_visit.sql in Supabase first.';
+      }else throw e;
+    }
     State.savedQuoteId = saved && saved.id;
     State.qstatus = status;
     State.scheduled = !!(saved && saved.scheduled_date);
@@ -4570,6 +5136,14 @@ async function saveQuote(status){
       if(DB.mode==='demo'){
         sync = ' (demo — the booking is saved here, no real calendar)';
         State.scheduled = true;
+      }else if((await calendarBackend())==='internal'){
+        /* Internal backend: the quote row IS the booking. Nothing is sent to
+           Google — the Calendar tab renders it, the engine already reads it. */
+        sync = ' Booked on the internal calendar (Google sync is off — '+
+               'app_config calendar_backend = internal).';
+        State.scheduled = true;
+        State.openedSlots = (saved && Array.isArray(saved.slots)) ? saved.slots : null;
+        bustCalCache();
       }else{
         try{
           const r = await syncBooking(saved.id, wantCrew, wantDate, retire);
@@ -4608,7 +5182,7 @@ async function saveQuote(status){
         }catch(e){ sync = ' Calendar not updated: '+e.message; }
       }
       refreshCrewLoad();
-    }else if(wasLive && DB.mode!=='demo'){
+    }else if(wasLive && DB.mode!=='demo' && (await calendarBackend())==='google'){
       /* draft or lost with an event still out there: take it off. */
       try{
         const r = await GS.remove(saved.id, retire);
@@ -4620,10 +5194,17 @@ async function saveQuote(status){
       refreshCrewLoad();
     }
     renderSchedState(saved||{});
-    bustSuggCache(); renderSuggestionsDebounced(); renderCapNoteDebounced();
+    bustSuggCache(); bustCalCache(); renderSuggestionsDebounced(); renderCapNoteDebounced();
     const verb = status==='won' ? 'Scheduled.' : status==='sent' ? 'On hold.'
                : status==='lost' ? 'Marked lost.' : (wasNew?'Saved.':'Updated.');
-    msg(verb+(DB.mode==='demo'&&!sync?' (demo mode — this browser only)':'')+sync+layoutNote+lateNote, false);
+    /* Photos come back with drive_ids once the script has copied them to
+       Drive — keep the local list (and its thumbnails) in step. */
+    if(saved && Array.isArray(saved.site_photos)){
+      const urls = {}; SiteVisit.photos.forEach(p=>{ if(p._url) urls[p.path]=p._url; });
+      SiteVisit.photos = saved.site_photos.map(p=>Object.assign({}, p, {_url: urls[p.path]}));
+      renderPhotos();
+    }
+    msg(verb+(DB.mode==='demo'&&!sync?' (demo mode — this browser only)':'')+sync+layoutNote+lateNote+svWarn, false);
     $('#savequote').textContent = 'Update quote';
     if(State.site && State.site.key===q.site_key){
       State.site.quotes.unshift({quote_date:new Date().toISOString().slice(0,10),product:q.product,yards:q.yards,
@@ -4648,6 +5229,20 @@ function wire(){
   $('#q_schedtime').addEventListener('input', ()=>{ renderSlotHint(); renderSlotChips(); });
   $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); renderSlotChips(); });
   $('#q_scheddate').addEventListener('change', renderCalEmbed);
+  /* ---- internal calendar controls ---- */
+  const calStep = dir => {
+    const a = new Date((Cal.anchor||calFmt(new Date()))+'T00:00:00');
+    if(Cal.view==='week') a.setDate(a.getDate()+7*dir);
+    else a.setMonth(a.getMonth()+dir);
+    Cal.anchor = calFmt(a); renderCal();
+  };
+  $('#cal_prev').onclick = ()=>calStep(-1);
+  $('#cal_next').onclick = ()=>calStep(1);
+  $('#cal_today').onclick = ()=>{ Cal.anchor = calFmt(new Date()); renderCal(); };
+  $('#cal_week').onclick = ()=>{ Cal.view='week'; renderCal(); };
+  $('#cal_month').onclick = ()=>{ Cal.view='month'; renderCal(); };
+  $('#cal_crew').onclick = ()=>{ location.hash = Cal.crew ? '' : '#crew'; };
+  window.addEventListener('hashchange', applyCrewMode);
   $('#btnunschedule').onclick = doUnschedule;
   $('#qsearch').addEventListener('input', debounce(()=>{
     qsearchTerm = $('#qsearch').value.trim();
@@ -4743,18 +5338,51 @@ function wire(){
     $('#schedmsg').innerHTML=''; $('#savemsg').innerHTML='';
     $('#savequote').textContent='Save quote';
     renderSchedState(null); refreshCrewLoad();
+    svReset();
     autoFill={drive:true,blow:true,prep:true}; renderHistory(); recalc();
   };
+  /* ---- site visit wiring ---- */
+  $('#measadd').onclick=()=>{ SiteVisit.meas.push({label:'',l:'',w:'',sf:''}); renderMeas(); };
+  $('#q_depth').addEventListener('change', renderMeasTotal);
+  $('#q_yards').addEventListener('input', renderMeasTotal);
+  $('#photoadd').onclick=()=>{
+    if(DB.mode==='demo'){ $('#photomsg').textContent='demo mode — no photo storage'; return; }
+    if(!State.token){ $('#photomsg').textContent='sign in first'; return; }
+    $('#photo_in').click();
+  };
+  $('#photo_in').addEventListener('change', async e=>{
+    const files=[...(e.target.files||[])]; e.target.value='';
+    if(!files.length) return;
+    const pm=$('#photomsg');
+    for(let i=0;i<files.length;i++){
+      pm.textContent='uploading '+(i+1)+' of '+files.length+'…';
+      try{
+        SiteVisit.photos.push(await svUploadPhoto(files[i]));
+        renderPhotos();
+      }catch(err){ pm.textContent='⚠ '+err.message; return; }
+    }
+    pm.textContent=files.length+' photo'+(files.length>1?'s':'')+' uploaded — they attach to '+
+      'the crew\u2019s event on the next Hold/Schedule.';
+  });
   $('#bl_add').onclick=async()=>{
     const date=$('#bl_date').value;
     if(!date){ blMsg('Pick a date to block.', true); return; }
-    if(!GS.configured()){ blMsg('Blockouts need the calendar script — set up scheduling first (Rate Card → Check).', true); return; }
+    const backendB = await calendarBackend();
+    if(backendB==='google' && !GS.configured()){ blMsg('Blockouts need the calendar script — set up scheduling first (Rate Card → Check).', true); return; }
     const btn=$('#bl_add'); btn.disabled=true;
     try{
+      if(backendB==='internal'){
+        await DB.addBlock({ crew_id: $('#bl_crew').value || '*', date,
+          from_time: $('#bl_from').value || null, to_time: $('#bl_to').value || null,
+          reason: $('#bl_reason').value.trim() || null });
+        blMsg('Blocked on the internal calendar; suggestions now steer around it.', false);
+      }else{
       const r = await GS.block({ crewId: $('#bl_crew').value, date,
         from: $('#bl_from').value || null, to: $('#bl_to').value || null,
         reason: $('#bl_reason').value.trim() });
       blMsg('Blocked — "'+(r.summary||'')+'" is on the calendar; suggestions now steer around it.', false);
+      }
+      bustCalCache();
       $('#bl_reason').value=''; $('#bl_from').value=''; $('#bl_to').value='';
       bustSuggCache(); await loadSuggData(true);
       renderSuggestionsDebounced(); refreshCrewLoad();
