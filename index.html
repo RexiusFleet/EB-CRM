@@ -312,12 +312,19 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           </div>
         </div>
 
-        <div class="card">
+        <!-- Opening an already-booked quote collapses these two (the rep is
+             managing a booking, not bidding — per Taylor, one screen). The
+             button brings them back; fresh quotes always show them. -->
+        <div id="histtoggle" class="hide">
+          <button type="button" class="btn ghost sm" id="histshow" style="width:100%">
+            Show site &amp; customer history</button>
+        </div>
+        <div class="card" id="histcard">
           <h3>Delivered jobs at this address <span id="histcount" class="muted"></span></h3>
           <div class="body" id="history"><div class="empty">Search an address to pull its history.</div></div>
         </div>
 
-        <div class="card">
+        <div class="card" id="custjobscard">
           <h3>Other jobs for this customer <span class="muted" id="custjobssub"></span></h3>
           <div class="body scroll" id="custjobs"><div class="empty">Jobs delivered to this customer
             at other addresses show here — enter a Customer # above to search.</div></div>
@@ -989,7 +996,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-26-quotecard';   // shown in the header; check it after deploying
+const BUILD = '2026-09-26-erpcard';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3228,6 +3235,9 @@ async function openQuote(r){
         '. Re-saving re-lays it out from the day-1 date.</div>'; })()
     : '';
   $('#savequote').textContent = 'Update quote';
+  /* A booked or held quote opens for MANAGING, not bidding: the history
+     cards collapse so the whole quote fits one screen (button restores). */
+  setHistoryCollapsed(r.status==='sent' || r.status==='won');
   /* Site visit: measurements, notes and photos ride the row. */
   $('#q_sitenotes').value = r.site_notes || '';
   SiteVisit.meas = (r.site_measurements && Array.isArray(r.site_measurements.areas))
@@ -4011,6 +4021,13 @@ async function moveBooking(qid, si, tgt, hours){
   bustCalCache(); bustSuggCache();
   return warn;
 }
+function setHistoryCollapsed(on){
+  const h=$('#histcard'), c=$('#custjobscard'), t=$('#histtoggle');
+  if(!h||!c||!t) return;
+  h.classList.toggle('hide', !!on);
+  c.classList.toggle('hide', !!on);
+  t.classList.toggle('hide', !on);
+}
 async function openCalItem(qid){
   let r = null; try{ r = await DB.getQuote(qid); }catch(e){}
   if(!r) return;
@@ -4108,10 +4125,23 @@ function calCard(r, rep){
     (loads?'<div class="small" style="margin-top:4px">'+loads+'</div>':'')+
     (rep?'<div style="margin-top:8px"><b>'+
       (r.bid_amount!=null?money(r.bid_amount):(r.target_price!=null?money(r.target_price)+
-        ' <span class="small muted">(target — no bid typed)</span>':'—'))+'</b>'+
-      (r.so_no?' <span class="small muted">· SO '+esc(r.so_no)+'</span>':'')+
-      (r.project_no?' <span class="small muted">· PN '+esc(r.project_no)+'</span>':'')+
-      '</div>':'')+
+        ' <span class="small muted">(target — no bid typed)</span>':'—'))+'</b></div>'+
+      /* ERP numbers usually arrive after scheduling — typed HERE they save
+         straight to the quote and land on the calendar event, no trip
+         through the builder. */
+      '<div class="row" style="margin-top:8px">'+
+      '<div><label class="f">Customer #</label><input type="text" id="cc_acct" '+
+        'autocomplete="off" placeholder="02-0104761" value="'+esc(r.account_no||'')+'"></div>'+
+      '<div><label class="f">SO #</label><input type="text" id="cc_so" '+
+        'autocomplete="off" placeholder="0208260049" value="'+esc(r.so_no||'')+'"></div>'+
+      '<div><label class="f">PN #</label><input type="text" id="cc_pn" '+
+        'autocomplete="off" placeholder="EB20267443" value="'+esc(r.project_no||'')+'"></div>'+
+      '</div>'+
+      '<div class="row" style="margin-top:6px;align-items:center">'+
+      '<button type="button" class="btn ghost sm" id="cc_saveerp" style="flex:0 0 auto">'+
+      'Save #s</button>'+
+      '<span class="small muted" id="cc_msg" style="align-self:center"></span></div>'
+      :'')+
     (r.site_notes?'<div style="margin-top:10px"><b class="small">Site notes</b>'+
       '<div>'+esc(r.site_notes)+'</div></div>':'')+
     (r.notes?'<div style="margin-top:10px"><b class="small">Notes from the quote</b>'+
@@ -4127,6 +4157,36 @@ function calCard(r, rep){
   const cbtn=$('#crewcard_close'); if(cbtn) cbtn.onclick=()=>wrap.remove();
   const obtn=$('#crewcard_open');
   if(obtn) obtn.onclick=()=>{ wrap.remove(); openQuote(r); };
+  const sbtn=$('#cc_saveerp');
+  if(sbtn) sbtn.onclick=async()=>{
+    sbtn.disabled=true;
+    const vals={ account_no: $('#cc_acct').value.trim()||null,
+                 so_no:      $('#cc_so').value.trim()||null,
+                 project_no: $('#cc_pn').value.trim()||null };
+    try{
+      await DB.patchQuote(r.id, vals);
+      Object.assign(r, vals);
+      let m='Saved.';
+      const backend=await calendarBackend();
+      if(backend==='google' && DB.mode!=='demo' && GS.configured() &&
+         (r.status==='sent'||r.status==='won')){
+        try{
+          await GS.sync(r.id, r.crew_id, r.scheduled_date,
+            r.scheduled_time?String(r.scheduled_time).slice(0,5):null,
+            r.scheduled_hours||null, null);
+          m='Saved — the calendar event now carries them.';
+        }catch(e){ m='Saved in the app; calendar not updated: '+e.message; }
+      }
+      if(State.savedQuoteId===r.id){
+        $('#q_account').value=vals.account_no||'';
+        $('#q_so').value=vals.so_no||'';
+        $('#q_pn').value=vals.project_no||'';
+      }
+      $('#cc_msg').textContent=m;
+      bustCalCache();
+    }catch(e){ $('#cc_msg').textContent='⚠ '+e.message; }
+    sbtn.disabled=false;
+  };
   wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
   (Array.isArray(r.site_photos)?r.site_photos:[]).forEach(async ph=>{
     const u = await svThumbUrl(Object.assign({}, ph));
@@ -5602,10 +5662,12 @@ function wire(){
     $('#schedmsg').innerHTML=''; $('#savemsg').innerHTML='';
     $('#savequote').textContent='Save quote';
     renderSchedState(null); refreshCrewLoad();
+    setHistoryCollapsed(false);
     svReset();
     autoFill={drive:true,blow:true,prep:true}; renderHistory(); recalc();
   };
   /* ---- site visit wiring ---- */
+  $('#histshow').onclick=()=>setHistoryCollapsed(false);
   $('#measadd').onclick=()=>{ SiteVisit.meas.push({label:'',l:'',w:'',sf:''}); renderMeas(); };
   $('#q_depth').addEventListener('change', renderMeasTotal);
   $('#q_yards').addEventListener('input', renderMeasTotal);
