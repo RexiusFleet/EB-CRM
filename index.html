@@ -256,19 +256,12 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
 
 <header class="top">
   <div class="brand"><span class="dot">R</span> Blower Quotes</div>
-  <div class="searchwrap" id="searchwrap">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-      <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-    <input type="text" id="search" placeholder="Search or browse previous jobs…" autocomplete="off">
-    <div class="results hide" id="results"></div>
-  </div>
   <nav class="tabs" id="tabs">
-    <button data-view="quote" aria-current="true">New Quote</button>
     <button data-view="bids">New Bid</button>
-    <button data-view="quotes">Saved Quotes</button>
+    <button data-view="quote" aria-current="true">New Quote</button>
     <button data-view="bidlist">Saved Bids</button>
+    <button data-view="quotes">Saved Quotes</button>
     <button data-view="cal">Calendar</button>
-    <button data-view="dash">Dashboard</button>
     <button data-view="rates">Rate Card</button>
   </nav>
   <div class="userbox">
@@ -1083,7 +1076,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-29-bidsplit';   // shown in the header; check it after deploying
+const BUILD = '2026-09-29-menu';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2030,12 +2023,14 @@ function loadSearchIndex(){
   DB.searchIndex().then(rows=>{
     State.index = rows||[];
     Diag.end(rec,'ok',(rows||[]).length+' sites');
-    $('#search').placeholder = 'Search or browse '+(rows||[]).length.toLocaleString()+' job sites…';
+    const se=$('#search');
+    if(se) se.placeholder = 'Search or browse '+(rows||[]).length.toLocaleString()+' job sites…';
   }).catch(e=>{
     State.indexErr = e;
     Diag.end(rec, e.status ? 'HTTP '+e.status : 'failed', e.message);
     if(e && e.status===404){
-      $('#search').placeholder = 'Search address, customer, or phone… (run sql/05_search_index.sql to browse)';
+      const se2=$('#search');
+      if(se2) se2.placeholder = 'Search address, customer, or phone… (run sql/05_search_index.sql to browse)';
     }
   });
 }
@@ -3009,11 +3004,6 @@ function attachPicker(opts){
 
 let headerPicker=null, sitePicker=null, custPicker=null;
 function initPickers(){
-  headerPicker = attachPicker({
-    input:'#search', results:'#results', wrap:'#searchwrap',
-    onPick:r=>{ $('#search').value=''; show('quote');
-                loadSite(r.site_key,{address1:r.address1,city:r.city,zip:r.zip}); }
-  });
   sitePicker = attachPicker({
     input:'#q_address', results:'#addrresults', wrap:'#addrwrap',
     allowFreeText:true, limit:40,
