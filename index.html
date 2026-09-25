@@ -164,6 +164,9 @@ tr:last-child td{border-bottom:0}
 .tgev.dragging{opacity:.8;z-index:50;box-shadow:0 8px 20px rgba(0,0,0,.35);cursor:grabbing}
 body.crewmode .tgev{font-size:13px}
 body.bidmode .bid-convert{display:none}
+body.bidmode #tabs button{display:none}
+body.bidmode #tabs button[data-view="bids"],
+body.bidmode #tabs button[data-view="bidlist"]{display:inline-block}
 body.crewmode{font-size:17px}
 body.crewmode .calchip{font-size:15px;white-space:normal}
 .kv.total .v{font-size:19px}
@@ -261,8 +264,9 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   </div>
   <nav class="tabs" id="tabs">
     <button data-view="quote" aria-current="true">New Quote</button>
-    <button data-view="bids">Bids</button>
+    <button data-view="bids">New Bid</button>
     <button data-view="quotes">Saved Quotes</button>
+    <button data-view="bidlist">Saved Bids</button>
     <button data-view="cal">Calendar</button>
     <button data-view="dash">Dashboard</button>
     <button data-view="rates">Rate Card</button>
@@ -567,7 +571,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   <section id="view-bids" class="hide">
     <div class="grid" style="gap:16px">
       <div class="card">
-        <h3>Bid worksheet <span class="muted small" id="bd_state"></span></h3>
+        <h3>New bid <span class="muted small" id="bd_state"></span></h3>
         <div class="body">
           <div class="row">
             <div style="flex:2"><label class="f">Customer</label>
@@ -627,11 +631,16 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           </div>
         </div>
       </div>
-      <div class="card">
-        <h3>Saved bids <span class="muted" id="bd_count"></span></h3>
-        <div class="body scroll" id="bidslist"><div class="empty">No bids yet — the worksheet
-          on the left starts one.</div></div>
-      </div>
+    </div>
+  </section>
+
+  <!-- ========================== SAVED BIDS =========================== -->
+  <section id="view-bidlist" class="hide">
+    <div class="card">
+      <h3>Saved bids <span class="muted" id="bd_count"></span>
+        <span class="muted small">· newest first · converted ones are tagged</span></h3>
+      <div class="body scroll" id="bidslist"><div class="empty">No bids yet — start one on
+        the <b>New Bid</b> tab.</div></div>
     </div>
   </section>
 
@@ -1074,7 +1083,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-28-bidpanel';   // shown in the header; check it after deploying
+const BUILD = '2026-09-29-bidsplit';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2087,8 +2096,11 @@ function show(v){
   // The tab bar scrolls sideways on phones -- keep the active tab in sight.
   const cur=$('#tabs button[aria-current="true"]');
   if(cur && cur.scrollIntoView) try{ cur.scrollIntoView({block:'nearest',inline:'nearest'}); }catch(e){}
-  ['quote','bids','quotes','cal','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
-  if(v==='bids')   renderBidsList();
+  /* The bid portal never leaves its two views, whatever asks. */
+  if(typeof BidPortal!=='undefined' && BidPortal && v!=='bids' && v!=='bidlist') v='bids';
+  ['quote','bids','bidlist','quotes','cal','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  if(v==='bids')   fillBidProducts();
+  if(v==='bidlist') renderBidsList();
   if(v==='cal')    renderCal();
   if(v==='quotes') renderQuotesList();
   if(v==='dash')   renderDash();
@@ -4359,15 +4371,13 @@ function exitCrewMode(){
 let BidPortal = false;
 function enterBidMode(){
   BidPortal = true;
-  document.body.classList.add('bidmode');
-  const tb=$('#tabs'); if(tb) tb.classList.add('hide');
+  document.body.classList.add('bidmode');   // CSS leaves only the two bid tabs
   show('bids');
 }
 function exitBidMode(){
   if(!BidPortal) return;
   BidPortal = false;
   document.body.classList.remove('bidmode');
-  const tb=$('#tabs'); if(tb && !Cal.crew) tb.classList.remove('hide');
 }
 function applyCrewMode(){
   if(/(^|#|&)crew/.test(location.hash)){ exitBidMode(); enterCrewMode(); }
@@ -4499,7 +4509,6 @@ function openBid(b){
 }
 async function renderBidsList(){
   const box=$('#bidslist'); if(!box) return;
-  fillBidProducts();
   let bids=[];
   try{ bids = (await DB.listBids())||[]; }
   catch(e){
@@ -4508,21 +4517,31 @@ async function renderBidsList(){
     return;
   }
   $('#bd_count').textContent = bids.length ? '('+bids.length+')' : '';
-  if(!bids.length){ box.innerHTML='<div class="empty">No bids yet — the worksheet on the left starts one.</div>'; return; }
+  if(!bids.length){ box.innerHTML='<div class="empty">No bids yet — start one on the '+
+    '<b>New Bid</b> tab.</div>'; return; }
+  /* Date of bid, newest first — whatever order the store handed back. */
+  bids = bids.slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
   box.innerHTML = bids.map(b=>{
     const t=(b.measurements||{});
+    const quoted = b.status==='quoted';
     return '<div class="kv" style="align-items:center"><span class="k">'+
+      '<b>'+esc(dfmt(String(b.created_at||'').slice(0,10)))+'</b> — '+
       '<b>'+esc(b.customer_name||'(no name)')+'</b> <span class="muted">'+
       esc([b.address_raw,b.city].filter(Boolean).join(', '))+'</span><br>'+
-      '<span class="small muted">'+esc(dfmt(String(b.created_at||'').slice(0,10)))+
-      (t.sqft?' · '+Number(t.sqft).toLocaleString()+' sq ft ≈ '+t.suggested_yards+' yd':'')+
+      '<span class="small muted">'+
+      (t.sqft?Number(t.sqft).toLocaleString()+' sq ft ≈ '+t.suggested_yards+' yd':'no measurements')+
       ((b.photos||[]).length?' · '+(b.photos||[]).length+' 📷':'')+
-      (b.status==='quoted'?' · <span class="tag g">quoted</span>':' · <span class="tag w">open</span>')+
+      (b.notes?' · 📋':'')+
+      (quoted?' · <span class="tag g">✓ converted to a quote</span>'
+             :' · <span class="tag w">open</span>')+
       '</span></span>'+
-      '<span style="display:flex;gap:6px;flex:0 0 auto">'+
+      '<span style="display:flex;gap:6px;flex:0 0 auto;flex-wrap:wrap;justify-content:flex-end">'+
       '<button class="btn ghost sm" data-bopen="'+esc(b.id)+'">Open</button>'+
-      '<button class="btn ghost sm bid-convert" data-bconv="'+esc(b.id)+'" '+
-        'style="color:var(--good);border-color:var(--good)">Convert to quote</button>'+
+      (quoted && b.quote_id
+        ? '<button class="btn ghost sm bid-convert" data-bquote="'+esc(b.quote_id)+'" '+
+          'style="color:var(--good);border-color:var(--good)">View quote</button>'
+        : '<button class="btn ghost sm bid-convert" data-bconv="'+esc(b.id)+'" '+
+          'style="color:var(--good);border-color:var(--good)">Convert to quote</button>')+
       '<button class="btn ghost sm bid-convert" data-bdel="'+esc(b.id)+'" '+
         'style="color:var(--danger)">✕</button>'+
       '</span></div>';
@@ -4531,6 +4550,11 @@ async function renderBidsList(){
     const b=await DB.getBid(btn.dataset.bopen); if(b) openBid(b);
   });
   box.querySelectorAll('[data-bconv]').forEach(btn=>btn.onclick=()=>convertBid(btn.dataset.bconv));
+  box.querySelectorAll('[data-bquote]').forEach(btn=>btn.onclick=async()=>{
+    let r=null; try{ r=await DB.getQuote(btn.dataset.bquote); }catch(e){}
+    if(r) openQuote(r);
+    else bdMsg('That quote was not found — it may have been deleted.', true);
+  });
   box.querySelectorAll('[data-bdel]').forEach(btn=>btn.onclick=async()=>{
     try{ await DB.delBid(btn.dataset.bdel); renderBidsList(); }catch(e){ bdMsg(e.message,true); }
   });
@@ -6120,9 +6144,8 @@ function wire(){
       const saved=await DB.saveBid(pl, BidSt.id);
       BidSt.id=saved&&saved.id||BidSt.id;
       $('#bd_state').textContent='· editing a saved bid';
-      bdMsg('Bid saved.'+(pl.measurements?' Suggests '+pl.measurements.suggested_yards+
-        ' yd when it becomes a quote.':''), false);
-      renderBidsList();
+      bdMsg('Bid saved — it is on the Saved Bids tab.'+(pl.measurements?' Suggests '+
+        pl.measurements.suggested_yards+' yd when it becomes a quote.':''), false);
     }catch(e){
       bdMsg(/bids/.test(e.message||'')
         ? 'The bids table is missing — run sql/29_bids.sql in Supabase.' : e.message, true);
