@@ -457,8 +457,18 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             </div>
             <div class="small muted" style="margin-top:-6px">Optional — most jobs are
               scheduled before the ERP assigns these. When they arrive, type them here and
-              press <b>Hold</b> or <b>Schedule</b> again: the calendar event picks them up.
-              (Typed straight into Google they'd be overwritten by the next save.)</div>
+              press <b>Save quote</b>: a booked job's calendar event picks them up.</div>
+            <!-- The QUOTE's own verbs (per Taylor): edit any part of a saved
+                 quote and save just that — booking lives in the Schedule
+                 section below with its own buttons. -->
+            <div class="row" style="margin-top:10px;border-top:1px solid var(--line-2);padding-top:12px">
+              <button class="btn" id="savequote"
+                style="background:var(--accent);color:var(--accent-ink)">Save quote</button>
+              <button class="btn ghost" id="newquote" style="flex:0 0 auto">Clear</button>
+              <button class="btn ghost" id="lostquote"
+                style="color:var(--danger);flex:0 0 auto">Mark lost</button>
+              <div id="savemsg_q" style="flex:1 1 100%"></div>
+            </div>
 
           </div>
         </div>
@@ -473,7 +483,11 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
         <div class="body">
             <div id="schedwrap">
               <div id="schedcal" style="margin:2px 0 10px"></div>
+              <!-- Booked state: the slot as one read-only line + the next
+                   moves. Shown when the quote is held or scheduled. -->
+              <div id="schedbooked" class="hide"></div>
               <div id="suggestbox" style="margin-bottom:6px"></div>
+              <div id="schedpick">
               <div class="row">
                 <div><label class="f">Date</label><input type="date" id="q_scheddate"></div>
                 <div><label class="f">Truck</label><select id="q_crew"></select></div>
@@ -504,23 +518,20 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div id="schedwon" class="small muted" style="margin-top:8px"></div>
               <div class="row" style="margin-top:10px">
                 <span class="small muted" style="align-self:center"><b>Hold</b> places a grey
-                  hold on this slot; <b>Schedule</b> books it as a confirmed job;
-                  <b>Save/Update quote</b> saves your edits and leaves the booking exactly
-                  as it is — <b>Remove booking</b> is what takes a job off the calendar.</span>
+                  hold on this slot; <b>Schedule</b> books it as a confirmed job.
+                  <b>Save quote</b> (up in the Quote box) saves edits without touching
+                  the booking.</span>
                 <button class="btn ghost sm hide" id="btnunschedule">Remove booking</button>
               </div>
+              </div><!-- /schedpick -->
               <div id="schedmsg"></div>
             </div>
 
-            <div class="saverow">
-              <button class="btn ghost" id="savequote"
-                style="color:var(--good);border-color:var(--good)">Save quote</button>
+            <div class="saverow" id="schedverbs">
               <button class="btn" id="holdquote" style="background:#6b7280">Hold</button>
               <button class="btn" id="schedquote" style="background:var(--good)">Schedule</button>
-              <button class="btn ghost" id="newquote">Clear</button>
-              <button class="btn ghost" id="lostquote" style="color:var(--danger)">Mark lost</button>
-              <div id="savemsg" style="flex:1 1 100%"></div>
             </div>
+            <div id="savemsg"></div>
         </div>
       </div>
 
@@ -1090,7 +1101,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-03-caladd';   // shown in the header; check it after deploying
+const BUILD = '2026-10-04-bookflow';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3413,6 +3424,7 @@ async function openQuote(r){
   }
   renderBidRef();
   autoFill={drive:false,blow:false,prep:false};  // these are the rep's saved numbers
+  SchedUI.forcePick=false; updateSchedMode();
   renderSchedState(r); recalc(); refreshCrewLoad();
   if(r.site_key) loadSite(r.site_key, {address1:r.address_raw,city:r.city,zip:r.zip},
                           {keepTyped:true, preserveHours:true});
@@ -4364,6 +4376,68 @@ async function bidCardById(id){
     }catch(e){ calMsg(e.message, true); }
   };
 }
+/* ---- schedule section modes: 'pick' (choose a slot) / 'booked' -------
+   Booked = the quote is held or scheduled: pickers, suggestions, ghosts
+   and the Hold/Schedule row hide; the slot reads as one line with the next
+   moves (Schedule when held, Re-schedule, Remove). Re-schedule flips back
+   to pick with everything live again (per Taylor). */
+const SchedUI = { mode:'pick', forcePick:false };
+function updateSchedMode(){
+  const booked = !SchedUI.forcePick && !!$('#q_scheddate').value &&
+    (State.qstatus==='sent' || State.qstatus==='won') && State.scheduled;
+  SchedUI.mode = booked ? 'booked' : 'pick';
+  const t=(id,on)=>{ const e2=$('#'+id); if(e2) e2.classList.toggle('hide', on); };
+  t('schedpick', booked);
+  t('suggestbox', booked);
+  t('schedverbs', booked);
+  t('schedbooked', !booked);
+  if(booked) renderSchedBooked();
+  renderSchedCalDebounced();
+}
+function renderSchedBooked(){
+  const box=$('#schedbooked'); if(!box) return;
+  const crewName=id=>(((CREWS||[]).find(c=>String(c.id)===String(id)))||{}).name||('truck '+id);
+  const hold = State.qstatus==='sent';
+  const line=(cr,d,t2,h,lbl)=>{
+    if(!d) return '';
+    const tm=t2?String(t2).slice(0,5):null;
+    return esc(crewName(cr))+' · '+esc(dfmt(d))+
+      (tm ? ' · '+esc(fmtMin(toMin(tm)))+
+        (h?' → '+esc(fmtMin(toMin(tm)+Math.round(h*60))):'') : ' · all day')+
+      (h?' · '+h+' hr':'')+(lbl?' <span class="muted">('+esc(lbl)+')</span>':'');
+  };
+  let lines=[];
+  if(Array.isArray(State.openedSlots) && State.openedSlots.length>2){
+    lines=State.openedSlots.map(sl=>line(sl.crew_id, sl.date, sl.time, sl.hours,
+      (sl.to>sl.from?'loads '+sl.from+'–'+sl.to:'load '+sl.from)));
+  }else{
+    lines=[line($('#q_crew').value, $('#q_scheddate').value,
+      $('#q_schedtime').value, slotDuration(), '')];
+    if($('#q_crew2').value){
+      lines.push(line($('#q_crew2').value,
+        (($('#q_scheddate2')||{}).value)||$('#q_scheddate').value,
+        $('#q_schedtime2').value||$('#q_schedtime').value,
+        slotDuration2()||slotDuration(), 'load 2'));
+    }
+  }
+  box.innerHTML='<div style="border:1px solid '+(hold?'var(--line)':'var(--good)')+
+    ';border-radius:10px;padding:10px 12px;background:var(--panel-2);margin-bottom:8px">'+
+    '<div class="small" style="font-weight:600">'+
+    (hold?'<span class="tag w">ON HOLD</span>':'<span class="tag g">Scheduled</span>')+
+    ' 📅 '+lines.filter(Boolean).join('<br>&nbsp;&nbsp;&nbsp;&nbsp;')+'</div>'+
+    '<div class="row" style="margin-top:10px">'+
+    (hold?'<button type="button" class="btn" id="sb_sched" style="background:var(--good);flex:0 0 auto">Schedule</button>':'')+
+    '<button type="button" class="btn ghost" id="sb_resched" style="flex:0 0 auto">Re-schedule</button>'+
+    '<button type="button" class="btn ghost" id="sb_remove" style="color:var(--danger);flex:0 0 auto">Remove booking</button>'+
+    '</div></div>';
+  const sb=$('#sb_sched'); if(sb) sb.onclick=()=>saveQuote('won');
+  $('#sb_resched').onclick=()=>{
+    SchedUI.forcePick=true; updateSchedMode();
+    bustSuggCache(); renderSuggestionsDebounced();
+    msg('Pick a new slot — suggestions are live again; Hold or Schedule re-books it.', false);
+  };
+  $('#sb_remove').onclick=()=>doUnschedule();
+}
 async function openCalItem(qid){
   let r = null; try{ r = await DB.getQuote(qid); }catch(e){}
   if(!r) return;
@@ -4437,7 +4511,8 @@ async function renderSchedCal(){
   const days=[]; for(let i=0;i<6;i++){ const dd=new Date(ws); dd.setDate(dd.getDate()+i); days.push(calFmt(dd)); }
   const from=days[0], to=days[5];
   let d; try{ d = await calFetch(from, to); }catch(e){ box.innerHTML=''; return; }
-  const ghosts = (State.schedGhosts||[]).flatMap(g=>{
+  const ghosts = ((typeof SchedUI!=='undefined' && SchedUI.mode==='booked')
+    ? [] : (State.schedGhosts||[])).flatMap(g=>{
     const out=[{crew:String(g.crew), date:g.date, time:g.time, g}];
     if(g.crew2 && String(g.crew2)!==String(g.crew))
       out.push({crew:String(g.crew2), date:g.date2||g.date, time:g.time2||g.time, g});
@@ -6062,6 +6137,7 @@ async function doUnschedule(){
     let q = (r&&r.quote)||{};
     try{ q = await DB.saveQuote({status:'draft'}, State.savedQuoteId) || q; }catch(e){}
     State.qstatus='draft'; State.scheduled=false;
+    SchedUI.forcePick=false; updateSchedMode();
     renderStatusNow();
     renderSchedState(q);
     $('#schedmsg').innerHTML='<div class="note ok" style="margin-top:10px">Booking removed — '+
@@ -6427,9 +6503,10 @@ async function saveQuote(status){
       }catch(e){ sync = ' Calendar not updated: '+e.message; }
       refreshCrewLoad();
     }
+    if(status==='sent'||status==='won') SchedUI.forcePick=false;
     renderSchedState(saved||{});
     bustSuggCache(); bustCalCache(); renderSuggestionsDebounced(); renderCapNoteDebounced();
-    renderSchedCalDebounced();
+    updateSchedMode();
     const verb = status==='won' ? 'Scheduled.' : status==='sent' ? 'On hold.'
                : status==='lost' ? 'Marked lost.' : (wasNew?'Saved.':'Updated.');
     /* Photos come back with drive_ids once the script has copied them to
@@ -6450,10 +6527,14 @@ async function saveQuote(status){
   }catch(e){ msg(e.message,true); }
 }
 let msgTimer=null;
-function msg(t,bad){ $('#savemsg').innerHTML='<div class="note '+(bad?'bad':'ok')+'">'+esc(t)+'</div>';
+function msg(t,bad){
+  const h='<div class="note '+(bad?'bad':'ok')+'">'+esc(t)+'</div>';
+  $('#savemsg').innerHTML=h;
+  const q2=$('#savemsg_q'); if(q2) q2.innerHTML=h;
   // Clear the previous timer, or an older save's countdown wipes this message.
   clearTimeout(msgTimer);
-  msgTimer=setTimeout(()=>{$('#savemsg').innerHTML='';},4500); }
+  msgTimer=setTimeout(()=>{ $('#savemsg').innerHTML='';
+    const q3=$('#savemsg_q'); if(q3) q3.innerHTML=''; },4500); }
 
 /* ================================ wiring ================================ */
 function wire(){
@@ -6576,6 +6657,7 @@ function wire(){
     $('#schedmsg').innerHTML=''; $('#savemsg').innerHTML='';
     $('#savequote').textContent='Save quote';
     renderSchedState(null); refreshCrewLoad();
+    SchedUI.forcePick=false; updateSchedMode();
     setHistoryCollapsed(false);
     State.fromBidId=null; State.bidNotes=null; renderBidRef();
     svReset();
