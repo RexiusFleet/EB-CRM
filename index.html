@@ -50,6 +50,11 @@ nav.tabs{display:flex;gap:2px;flex:1;flex-wrap:wrap}
 nav.tabs button{background:none;border:0;padding:7px 12px;border-radius:7px;color:var(--muted);font-weight:550;font-size:14px}
 nav.tabs button:hover{background:var(--line-2);color:var(--ink)}
 nav.tabs button[aria-current="true"]{background:var(--accent-soft);color:var(--accent)}
+/* New Bid and New Quote pop (per Taylor) — the two "start something" buttons. */
+nav.tabs button[data-view="bids"]{color:var(--warn);background:var(--warn-soft)}
+nav.tabs button[data-view="quote"]{color:var(--accent);background:var(--accent-soft)}
+nav.tabs button[data-view="bids"][aria-current="true"]{background:var(--warn);color:#fff}
+nav.tabs button[data-view="quote"][aria-current="true"]{background:var(--accent);color:var(--accent-ink)}
 .userbox{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
 .pill{border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;background:var(--panel-2)}
 .pill.demo{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
@@ -459,6 +464,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                 <span class="k" style="font-weight:600;color:var(--ink)">Schedule</span>
                 <span class="small muted" id="schedstate"></span>
               </div>
+              <div id="schedcal" style="margin:2px 0 10px"></div>
               <div id="suggestbox" style="margin-bottom:6px"></div>
               <div class="row">
                 <div><label class="f">Date</label><input type="date" id="q_scheddate"></div>
@@ -1077,7 +1083,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-30-bidsearch';   // shown in the header; check it after deploying
+const BUILD = '2026-10-01-schedcal';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2095,6 +2101,7 @@ function show(v){
   /* The bid portal never leaves its two views, whatever asks. */
   if(typeof BidPortal!=='undefined' && BidPortal && v!=='bids' && v!=='bidlist') v='bids';
   ['quote','bids','bidlist','quotes','cal','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  if(v==='quote')  renderSchedCalDebounced();
   if(v==='bids')   fillBidProducts();
   if(v==='bidlist') renderBidsList();
   if(v==='cal')    renderCal();
@@ -4178,6 +4185,152 @@ async function openCalItem(qid){
   if(!r) return;
   calCard(r, !Cal.crew);
 }
+/* ---- the MINI internal calendar inside the quote's Schedule section ----
+   The same data as the Calendar tab (calFetch: app bookings + Google overlay
+   or internal blockouts), one compact week, one column per truck per day.
+   Suggested slots ride on top as DASHED GHOSTS (★ = best; amber = past
+   5 PM) — tapping one books it exactly like the suggestion buttons; the
+   picked slot shows solid as "this quote"; empty space books ad hoc. */
+const SC = { START: 6*60, END: 18.5*60, PXH: 26, off: 0 };
+function renderSchedCalDebounced(){
+  clearTimeout(renderSchedCalDebounced.t);
+  renderSchedCalDebounced.t = setTimeout(()=>{ renderSchedCal(); }, 150);
+}
+async function renderSchedCal(){
+  const box = $('#schedcal'); if(!box) return;
+  const crewList = CREWS||[];
+  if(!crewList.length){ box.innerHTML=''; return; }
+  /* Anchor: the picked date; else the best suggestion's week (so the
+     ghosts are on screen, not one ‹›-tap away); else today. */
+  let anchor0 = $('#q_scheddate').value;
+  if(!anchor0){ const g0=(State.schedGhosts||[])[0];
+    anchor0 = (g0 && g0.date) || calFmt(new Date()); }
+  const ws = calWeekStart(anchor0); ws.setDate(ws.getDate() + SC.off*7);
+  const days=[]; for(let i=0;i<6;i++){ const dd=new Date(ws); dd.setDate(dd.getDate()+i); days.push(calFmt(dd)); }
+  const from=days[0], to=days[5];
+  let d; try{ d = await calFetch(from, to); }catch(e){ box.innerHTML=''; return; }
+  const ghosts = (State.schedGhosts||[]).flatMap(g=>{
+    const out=[{crew:String(g.crew), date:g.date, time:g.time, g}];
+    if(g.crew2 && String(g.crew2)!==String(g.crew))
+      out.push({crew:String(g.crew2), date:g.date2||g.date, time:g.time2||g.time, g});
+    return out;
+  }).filter(x=>x.date>=from && x.date<=to && x.time);
+  const selDate=$('#q_scheddate').value, selCrew=$('#q_crew').value,
+        selTime=$('#q_schedtime').value;
+  const H=(SC.END-SC.START)/60*SC.PXH;
+  const today=calFmt(new Date());
+  const pos=(t,hrsN)=>{ const s0=Math.max(SC.START,toMin(t));
+    const e0=Math.min(SC.END, s0+Math.round((hrsN||1)*60));
+    return 'top:'+((s0-SC.START)/60*SC.PXH).toFixed(1)+'px;height:'+
+      Math.max(14,((e0-s0)/60*SC.PXH-2)).toFixed(1)+'px;'; };
+  let html='<div class="row" style="align-items:center;margin-bottom:4px">'+
+    '<span class="small" style="font-weight:600;align-self:center">Week of '+esc(dfmt(from))+'</span>'+
+    '<span class="small muted" style="align-self:center">· dashed = suggested, tap to book · solid = taken</span>'+
+    '<span style="flex:1 1 auto"></span>'+
+    '<button type="button" class="btn ghost sm" id="sc_prev" style="flex:0 0 auto;padding:3px 10px">‹</button>'+
+    '<button type="button" class="btn ghost sm" id="sc_today" style="flex:0 0 auto;padding:3px 10px">This week</button>'+
+    '<button type="button" class="btn ghost sm" id="sc_next" style="flex:0 0 auto;padding:3px 10px">›</button></div>';
+  html+='<div style="overflow-x:auto"><div style="display:grid;grid-template-columns:34px repeat('+
+    (days.length*crewList.length)+',minmax(56px,1fr));min-width:'+
+    (34+days.length*crewList.length*60)+'px;border:1px solid var(--line);'+
+    'border-radius:8px;overflow:hidden;font-size:10.5px;line-height:1.25">';
+  html+='<div style="background:var(--panel-2)"></div>';
+  days.forEach(date=>{ const dd=new Date(date+'T00:00:00');
+    html+='<div class="small" style="grid-column:span '+crewList.length+
+      ';text-align:center;padding:3px 2px;background:var(--panel-2);'+
+      'border-left:2px solid var(--line);font-weight:600;'+
+      (date===today?'color:var(--good);':'')+'">'+
+      esc(dd.toLocaleDateString([],{weekday:'short'}))+' '+Number(date.slice(8))+'</div>'; });
+  html+='<div style="background:var(--panel-2)"></div>';
+  days.forEach(()=>crewList.forEach((c,ti)=>{
+    html+='<div style="text-align:center;background:var(--panel-2);color:'+
+      ((c.color)||'inherit')+';font-weight:600;border-left:'+
+      (ti===0?'2px solid var(--line)':'1px solid var(--line-2)')+
+      ';overflow:hidden;white-space:nowrap">'+
+      esc(String(c.name).replace('Truck ',''))+'</div>'; }));
+  html+='<div style="position:relative;height:'+H+'px">';
+  for(let m=Math.ceil(SC.START/120)*120; m<SC.END; m+=120)
+    html+='<div class="muted" style="position:absolute;top:'+
+      (((m-SC.START)/60*SC.PXH)-6)+'px;right:2px;font-size:9px">'+
+      esc(fmtMin(m).replace(':00','').replace(' ','').toLowerCase())+'</div>';
+  html+='</div>';
+  days.forEach(date=>crewList.forEach((c,ti)=>{
+    const items=d.jobs.filter(j=>j.date===date&&String(j.crew_id)===String(c.id)&&j.time)
+      .concat(d.gEvents.filter(g2=>g2.date===date&&String(g2.crew_id)===String(c.id)&&g2.time));
+    const allday=d.jobs.filter(j=>j.date===date&&String(j.crew_id)===String(c.id)&&!j.time)
+      .concat(d.gEvents.filter(g2=>g2.date===date&&String(g2.crew_id)===String(c.id)&&!g2.time));
+    let cell='<div class="sccol" data-date="'+date+'" data-crew="'+esc(String(c.id))+
+      '" style="position:relative;height:'+H+'px;border-left:'+
+      (ti===0?'2px solid var(--line)':'1px solid var(--line-2)')+';cursor:copy;'+
+      'background-image:repeating-linear-gradient(to bottom,transparent 0 '+
+      (SC.PXH-1)+'px,var(--line-2) '+(SC.PXH-1)+'px '+SC.PXH+'px)">';
+    if(allday.length) cell+='<div title="'+
+      esc(allday.map(a=>a.summary||a.customer).filter(Boolean).join(', '))+
+      '" style="position:absolute;inset:0;background:repeating-linear-gradient(45deg,'+
+      'rgba(150,155,165,.15) 0 6px,transparent 6px 12px)"></div>';
+    items.forEach(it=>{
+      const col=it.block?'var(--danger)':(it.google||it.internal)?'#9aa2ad':((c.color)||'#888');
+      cell+='<div title="'+esc(it.summary||it.customer||'')+
+        '" style="position:absolute;left:1px;right:1px;'+pos(it.time,it.hours)+
+        'background:'+(it.qid?col+'2e':'rgba(150,155,165,.2)')+
+        ';border-left:2px solid '+col+';border-radius:3px;overflow:hidden;'+
+        'padding:0 2px;'+(it.hold?'opacity:.55;':'')+'">'+
+        esc(String(it.customer||it.summary||'').slice(0,12))+'</div>';
+    });
+    ghosts.filter(x=>x.date===date&&x.crew===String(c.id)).forEach(x=>{
+      const g=x.g;
+      const durH = g.end!=null ? Math.max(0.5,(g.end-toMin(x.time))/60)
+                               : (slotDuration()||2);
+      cell+='<div class="scghost" data-gi="'+(State.schedGhosts||[]).indexOf(g)+
+        '" title="Suggested slot — tap to book it" style="position:absolute;'+
+        'left:1px;right:1px;'+pos(x.time,durH)+'border:2px dashed '+
+        (g.late?'var(--warn)':'var(--good)')+';border-radius:4px;cursor:pointer;'+
+        'z-index:3;color:'+(g.late?'var(--warn)':'var(--good)')+
+        ';font-weight:700;padding:0 2px;background:transparent">'+
+        (g.star?'★ ':'')+esc(fmtMin(toMin(x.time)))+'</div>';
+    });
+    if(selDate===date && String(selCrew)===String(c.id) && selTime){
+      cell+='<div title="This quote" style="position:absolute;left:0;right:0;'+
+        pos(selTime, slotDuration()||2)+
+        'outline:2px solid var(--accent);outline-offset:-1px;border-radius:4px;'+
+        'background:var(--accent-soft);opacity:.9;z-index:2;padding:0 2px;'+
+        'font-weight:700;color:var(--accent)">this quote</div>';
+    }
+    cell+='</div>';
+    html+=cell;
+  }));
+  html+='</div></div>';
+  box.innerHTML=html;
+  $('#sc_prev').onclick=()=>{ SC.off--; renderSchedCal(); };
+  $('#sc_next').onclick=()=>{ SC.off++; renderSchedCal(); };
+  $('#sc_today').onclick=()=>{ SC.off=0; renderSchedCal(); };
+  box.querySelectorAll('.scghost').forEach(el2=>el2.onclick=e=>{
+    e.stopPropagation();
+    const g=(State.schedGhosts||[])[Number(el2.dataset.gi)];
+    if(!g) return;
+    $('#q_scheddate').value=g.date; $('#q_crew').value=String(g.crew);
+    $('#q_schedtime').value=g.time;
+    $('#q_crew2').value=g.crew2?String(g.crew2):'';
+    if($('#q_scheddate2')) $('#q_scheddate2').value=g.date2||'';
+    $('#q_schedtime2').value=g.time2||(g.crew2?g.time:'');
+    SC.off=0; slotDurTouched=false; syncSlotDurField(); renderSlotHint();
+    refreshCrewLoad(); renderSchedCal();
+  });
+  box.querySelectorAll('.sccol').forEach(col=>{
+    col.onclick=e=>{
+      if(e.target!==col) return;
+      const rect=col.getBoundingClientRect();
+      let min=SC.START+Math.round(((e.clientY-rect.top)/SC.PXH*60)/30)*30;
+      min=Math.max(SC.START,Math.min(SC.END-60,min));
+      $('#q_scheddate').value=col.dataset.date;
+      $('#q_crew').value=col.dataset.crew;
+      $('#q_schedtime').value=String(Math.floor(min/60)).padStart(2,'0')+':'+
+        String(min%60).padStart(2,'0');
+      slotDurTouched=false; syncSlotDurField(); renderSlotHint();
+      refreshCrewLoad(); renderSchedCal();
+    };
+  });
+}
 let calMsgTimer = null;
 function calMsg(t, bad){
   const b = $('#calmsg'); if(!b) return;
@@ -4267,6 +4420,8 @@ function calCard(r, rep){
       esc(String(r.phone).replace(/[^\d+]/g,''))+'">'+esc(r.phone)+'</a></div>':'')+
     '<div style="margin-top:6px">'+esc((r.yards||0)+' yd of '+(r.product||''))+
     (Number(r.depth_in)>0?' at '+Number(r.depth_in)+'&Prime;':'')+'</div>'+
+    '<div class="small" style="margin-top:2px">Equipment '+esc(hrs(r.equip_hours))+
+    ' · Labor '+esc(hrs(r.labor_hours))+'</div>'+
     (loads?'<div class="small" style="margin-top:4px">'+loads+'</div>':'')+
     (rep?'<div style="margin-top:8px"><b>'+
       (r.bid_amount!=null?money(r.bid_amount):(r.target_price!=null?money(r.target_price)+
@@ -5350,6 +5505,9 @@ async function renderSuggestions(){
           esc((CREWS||[]).filter(c=>FLEET.indexOf(c)<0).map(c=>c.name).join(' and '))+
           ' can’t place rock — this project rides '+
           esc(FLEET.map(c=>c.name).join(' and ') || 'no truck on file')+' only.</div>';
+      State.schedGhosts = plans.map((pl,i)=>({date:pl.date, time:pl.time,
+        crew:pl.crew, crew2:pl.crew2||'', date2:pl.date2||'', time2:pl.time2||'',
+        end:pl.end, star:i===0, late:pl.end>SLOT_RULES.DAY_END_MIN}));
       box.innerHTML = html;
       box.querySelectorAll('.suggslot').forEach(btn=>{
         btn.onclick = ()=>{
@@ -5360,10 +5518,11 @@ async function renderSuggestions(){
           if($('#q_scheddate2')) $('#q_scheddate2').value = btn.dataset.date2 || '';
           $('#q_schedtime2').value = btn.dataset.time2 ||
             (btn.dataset.crew2 ? btn.dataset.time : '');
-          slotDurTouched=false; syncSlotDurField(); renderSlotHint();
-          refreshCrewLoad(); renderCalEmbed();
+          SC.off=0; slotDurTouched=false; syncSlotDurField(); renderSlotHint();
+          refreshCrewLoad(); renderCalEmbed(); renderSchedCalDebounced();
         };
       });
+      renderSchedCalDebounced();
       return;
     }
 
@@ -5381,10 +5540,19 @@ async function renderSuggestions(){
       '<span title="Change on the Rate Card tab">(Rate Card tab to switch)</span>'+
       calNoteHtml(d)+'</span></div>';
     if(!ranked.length){
+      State.schedGhosts = [];
       box.innerHTML = html+'<div class="small muted">No open slot in the next '+
         SLOT_RULES.HORIZON_DAYS+' days — both trucks are full.</div>';
+      renderSchedCalDebounced();
       return;
     }
+    State.schedGhosts = [];
+    res.forEach(r=>{
+      if(rock && !r.hasCap) return;
+      (r.alts||[]).forEach(b=>State.schedGhosts.push({date:b.date, time:toHM(b.min),
+        crew:r.crew.id, crew2:'', end:(b.end!=null?b.end:null),
+        star:(String(r.crew.id)===String(bestKey) && b===r.best), late:!!b.late}));
+    });
     html += res.map(r=>{
       /* A truck with no rock capacity cannot take a rock job at all --
          named, so the panel explains itself rather than just omitting it. */
@@ -5416,9 +5584,11 @@ async function renderSuggestions(){
         $('#q_scheddate').value = btn.dataset.date;
         $('#q_crew').value = btn.dataset.crew;
         $('#q_schedtime').value = btn.dataset.time;
-        refreshCrewLoad(); renderSlotHint(); renderCalEmbed();
+        SC.off=0;
+        refreshCrewLoad(); renderSlotHint(); renderCalEmbed(); renderSchedCalDebounced();
       };
     });
+    renderSchedCalDebounced();
   }catch(e){
     if(my !== suggReq) return;
     box.innerHTML = '<div class="small muted">Slot suggestions unavailable — '+esc(e.message)+
@@ -5985,6 +6155,7 @@ async function saveQuote(status){
     }
     renderSchedState(saved||{});
     bustSuggCache(); bustCalCache(); renderSuggestionsDebounced(); renderCapNoteDebounced();
+    renderSchedCalDebounced();
     const verb = status==='won' ? 'Scheduled.' : status==='sent' ? 'On hold.'
                : status==='lost' ? 'Marked lost.' : (wasNew?'Saved.':'Updated.');
     /* Photos come back with drive_ids once the script has copied them to
@@ -6016,8 +6187,10 @@ function wire(){
   $('#q_scheddate').addEventListener('change', ()=>{ refreshCrewLoad(); renderCapNoteDebounced(); });
   $('#q_crew').addEventListener('change', ()=>{ refreshCrewLoad(); renderCapNoteDebounced(); });   // load ends by re-rendering the chips
   $('#q_crew2').addEventListener('change', ()=>{ syncSlotDurField(); renderSlotHint(); refreshCrewLoad(); });
-  $('#q_schedtime').addEventListener('input', ()=>{ renderSlotHint(); renderSlotChips(); });
-  $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); renderSlotChips(); });
+  $('#q_schedtime').addEventListener('input', ()=>{ renderSlotHint(); renderSlotChips(); renderSchedCalDebounced(); });
+  $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); renderSlotChips(); renderSchedCalDebounced(); });
+  $('#q_scheddate').addEventListener('change', ()=>{ SC.off=0; renderSchedCalDebounced(); });
+  $('#q_crew').addEventListener('change', renderSchedCalDebounced);
   $('#q_scheddate').addEventListener('change', renderCalEmbed);
   /* ---- internal calendar controls ---- */
   const calStep = dir => {
