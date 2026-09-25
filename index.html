@@ -989,7 +989,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-25-timegrid';   // shown in the header; check it after deploying
+const BUILD = '2026-09-26-quotecard';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3883,6 +3883,11 @@ function wireTimegrid(grid){
       const rect = col.getBoundingClientRect();
       let min = TG.START + Math.round(((e.clientY-rect.top)/TG.PXH*60)/30)*30;
       min = Math.max(TG.START, Math.min(TG.END-60, min));
+      /* A SAVED quote sitting in the builder must not swallow the new slot
+         (field report: "it opens up some other existing quote") — booking
+         from free space means a NEW job. An unsaved draft in progress is the
+         rep picking a slot for it, so that is kept. */
+      if(State.savedQuoteId) $('#newquote').click();
       $('#q_scheddate').value = col.dataset.date;
       $('#q_crew').value = col.dataset.crew;
       $('#q_schedtime').value = hhmm(min);
@@ -4009,7 +4014,7 @@ async function moveBooking(qid, si, tgt, hours){
 async function openCalItem(qid){
   let r = null; try{ r = await DB.getQuote(qid); }catch(e){}
   if(!r) return;
-  if(Cal.crew) crewCard(r); else openQuote(r);
+  calCard(r, !Cal.crew);
 }
 let calMsgTimer = null;
 function calMsg(t, bad){
@@ -4061,35 +4066,67 @@ function wireCalChips(grid){
   });
 }
 /* The crew's day card: everything the crew needs, NOTHING about money. */
-function crewCard(r){
+/* One popup for calendar taps. Crew flavor: job facts only, NO pricing.
+   Rep flavor: adds status + the money line + "Open full quote" — the rep
+   stays on the board unless they choose to edit. Neither shows site or
+   customer history: the card is about THIS job, the builder is for digging. */
+function crewCard(r){ calCard(r, false); }
+function calCard(r, rep){
   const old=$('#crewcard'); if(old) old.remove();
   const wrap=document.createElement('div'); wrap.id='crewcard';
   wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
     'display:flex;align-items:center;justify-content:center;padding:16px';
   const addr=[r.address_raw,r.city,r.zip].filter(Boolean).join(', ');
   const loads = Array.isArray(r.slots)&&r.slots.length
-    ? r.slots.map(sl=>esc(dfmt(sl.date))+' '+(sl.time?esc(fmtMin(toMin(String(sl.time).slice(0,5)))):'')+
-        ' (load'+((sl.to>sl.from)?'s '+sl.from+'–'+sl.to:' '+sl.from)+')').join('<br>')
+    ? r.slots.map(sl=>{
+        const nm=((CREWS||[]).find(c=>String(c.id)===String(sl.crew_id))||{}).name;
+        return esc(dfmt(sl.date))+' '+(sl.time?esc(fmtMin(toMin(String(sl.time).slice(0,5)))):'')+
+          (nm?' · '+esc(nm):'')+' (load'+((sl.to>sl.from)?'s '+sl.from+'–'+sl.to:' '+sl.from)+')';
+      }).join('<br>')
     : (r.scheduled_date ? esc(dfmt(r.scheduled_date))+
-        (r.scheduled_time?' · '+esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5)))):'') : '');
+        (r.scheduled_time?' · '+esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5)))):'')+
+        (r.crew2_id&&r.scheduled_time2?'<br>Load 2: '+
+          esc(dfmt(r.scheduled_date2||r.scheduled_date))+' · '+
+          esc(fmtMin(toMin(String(r.scheduled_time2).slice(0,5)))):'') : '');
+  const statusTag = rep ? (r.status==='won'
+      ? '<span class="tag g">Scheduled</span>'
+      : r.status==='sent' ? '<span class="tag w">ON HOLD</span>'
+      : r.status==='lost' ? '<span class="tag" style="opacity:.7">Lost</span>'
+      : '<span class="tag">Saved</span>') : '';
   wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;'+
     'max-width:480px;width:100%;max-height:85vh;overflow:auto;padding:16px">'+
-    '<div style="display:flex;justify-content:space-between;align-items:center">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'+
     '<b style="font-size:18px">'+esc(r.customer_name||'')+'</b>'+
-    '<button type="button" class="btn ghost sm" id="crewcard_x">✕</button></div>'+
+    '<span style="display:flex;gap:6px;align-items:center">'+statusTag+
+    '<button type="button" class="btn ghost sm" id="crewcard_x">✕</button></span></div>'+
     (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" href="https://maps.google.com/?q='+
       encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
+    (rep&&r.phone?'<div class="small" style="margin-top:4px"><a href="tel:'+
+      esc(String(r.phone).replace(/[^\d+]/g,''))+'">'+esc(r.phone)+'</a></div>':'')+
     '<div style="margin-top:6px">'+esc((r.yards||0)+' yd of '+(r.product||''))+
     (Number(r.depth_in)>0?' at '+Number(r.depth_in)+'&Prime;':'')+'</div>'+
     (loads?'<div class="small" style="margin-top:4px">'+loads+'</div>':'')+
+    (rep?'<div style="margin-top:8px"><b>'+
+      (r.bid_amount!=null?money(r.bid_amount):(r.target_price!=null?money(r.target_price)+
+        ' <span class="small muted">(target — no bid typed)</span>':'—'))+'</b>'+
+      (r.so_no?' <span class="small muted">· SO '+esc(r.so_no)+'</span>':'')+
+      (r.project_no?' <span class="small muted">· PN '+esc(r.project_no)+'</span>':'')+
+      '</div>':'')+
     (r.site_notes?'<div style="margin-top:10px"><b class="small">Site notes</b>'+
       '<div>'+esc(r.site_notes)+'</div></div>':'')+
     (r.notes?'<div style="margin-top:10px"><b class="small">Notes from the quote</b>'+
       '<div>'+esc(r.notes)+'</div></div>':'')+
     '<div id="crewcard_ph" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>'+
+    (rep?'<div class="row" style="margin-top:14px">'+
+      '<button type="button" class="btn" id="crewcard_open" style="background:var(--good)">'+
+      'Open full quote</button>'+
+      '<button type="button" class="btn ghost" id="crewcard_close">Close</button></div>':'')+
     '</div>';
   document.body.appendChild(wrap);
   $('#crewcard_x').onclick=()=>wrap.remove();
+  const cbtn=$('#crewcard_close'); if(cbtn) cbtn.onclick=()=>wrap.remove();
+  const obtn=$('#crewcard_open');
+  if(obtn) obtn.onclick=()=>{ wrap.remove(); openQuote(r); };
   wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
   (Array.isArray(r.site_photos)?r.site_photos:[]).forEach(async ph=>{
     const u = await svThumbUrl(Object.assign({}, ph));
