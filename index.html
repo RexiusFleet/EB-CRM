@@ -163,6 +163,7 @@ tr:last-child td{border-bottom:0}
 .tgev.app{cursor:grab;touch-action:none}
 .tgev.dragging{opacity:.8;z-index:50;box-shadow:0 8px 20px rgba(0,0,0,.35);cursor:grabbing}
 body.crewmode .tgev{font-size:13px}
+body.bidmode .bid-convert{display:none}
 body.crewmode{font-size:17px}
 body.crewmode .calchip{font-size:15px;white-space:normal}
 .kv.total .v{font-size:19px}
@@ -260,6 +261,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   </div>
   <nav class="tabs" id="tabs">
     <button data-view="quote" aria-current="true">New Quote</button>
+    <button data-view="bids">Bids</button>
     <button data-view="quotes">Saved Quotes</button>
     <button data-view="cal">Calendar</button>
     <button data-view="dash">Dashboard</button>
@@ -427,6 +429,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               scheduled before the ERP assigns these. When they arrive, type them here and
               press <b>Hold</b> or <b>Schedule</b> again: the calendar event picks them up.
               (Typed straight into Google they'd be overwritten by the next save.)</div>
+            <div id="bidref" class="hide"></div>
             <!-- ============ SITE VISIT: measurements, notes, photos ============
                  Everything here saves WITH the quote (sql/27). Photos upload to
                  the app's own storage as they are picked; on Hold/Schedule the
@@ -557,6 +560,77 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   </section>
 
   <!-- ============================ SAVED QUOTES ============================ -->
+  <!-- ============================== BIDS ==============================
+       The field worksheet, split out of the quote (per Taylor): a bid is
+       measurements + photos + notes captured on site, saved on its own,
+       and converted into a quote later. Bid notes are REFERENCE for the
+       rep — they never ride the crew's calendar event. Open the app with
+       #bid in the URL for the bid-only portal: just this tab, no quotes,
+       no pricing (sql/29 also ships an optional hard lock for bid-only
+       sign-ins). -->
+  <section id="view-bids" class="hide">
+    <div class="grid" style="gap:16px">
+      <div class="card">
+        <h3>Bid worksheet <span class="muted small" id="bd_state"></span></h3>
+        <div class="body">
+          <div class="row">
+            <div style="flex:2"><label class="f">Customer</label>
+              <input type="text" id="bd_customer" autocomplete="off"></div>
+            <div style="min-width:170px"><label class="f">Phone</label>
+              <input type="text" id="bd_phone" placeholder="(541) 555-0100"></div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <div style="flex:2"><label class="f">Address</label>
+              <input type="text" id="bd_address" autocomplete="off"></div>
+            <div><label class="f">City</label><input type="text" id="bd_city"></div>
+            <div><label class="f">ZIP</label><input type="text" id="bd_zip"></div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <div><label class="f">Product <span class="small muted">if known</span></label>
+              <select id="bd_product"><option value="">— not sure yet —</option></select></div>
+            <div><label class="f">Depth</label>
+              <select id="bd_depth">
+                <option value="1">1"</option><option value="1.5">1.5"</option>
+                <option value="2" selected>2" — standard</option>
+                <option value="2.5">2.5"</option><option value="3">3"</option>
+                <option value="4">4"</option>
+              </select></div>
+          </div>
+          <div style="margin-top:12px"><label class="f">Measurements</label>
+            <div id="bd_measrows"></div>
+            <div class="row" style="margin-top:6px;align-items:center">
+              <button type="button" class="btn ghost sm" id="bd_measadd" style="flex:0 0 auto">+ Add area</button>
+              <div class="small" id="bd_meastotal" style="align-self:center"></div>
+            </div>
+          </div>
+          <div style="margin-top:10px">
+            <label class="f">Photos</label>
+            <input type="file" id="bd_photo_in" accept="image/*" multiple style="display:none">
+            <div class="row" style="align-items:center">
+              <button type="button" class="btn ghost sm" id="bd_photoadd" style="flex:0 0 auto">+ Add photos</button>
+              <span class="small muted" id="bd_photomsg" style="align-self:center"></span>
+            </div>
+            <div id="bd_photolist" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px"></div>
+          </div>
+          <div style="margin-top:10px"><label class="f">Bid notes
+              <span class="small muted">for the rep building the quote — the crew never sees these</span></label>
+            <textarea id="bd_notes" rows="3"
+              placeholder="Slope on the north side, second drop spot, homeowner wants a call first…"></textarea></div>
+          <div class="saverow">
+            <button class="btn" id="bd_save" style="background:var(--good)">Save bid</button>
+            <button class="btn ghost" id="bd_new">New bid</button>
+            <div id="bd_msg" style="flex:1 1 100%"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Saved bids <span class="muted" id="bd_count"></span></h3>
+        <div class="body scroll" id="bidslist"><div class="empty">No bids yet — the worksheet
+          on the left starts one.</div></div>
+      </div>
+    </div>
+  </section>
+
   <section id="view-quotes" class="hide">
     <div class="card"><h3>Saved quotes <span class="muted" id="qcount"></span></h3>
       <div class="body">
@@ -996,7 +1070,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-09-26-erpcard';   // shown in the header; check it after deploying
+const BUILD = '2026-09-27-bids';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1364,6 +1438,21 @@ const DemoDB = {
   async blocks(){ return []; },
   async addBlock(){ throw new Error('Blockouts need live mode.'); },
   async delBlock(){ return null; },
+  _bids: [],
+  async listBids(){ return this._bids.slice().reverse(); },
+  async getBid(id){ return this._bids.find(b=>String(b.id)===String(id)) || null; },
+  async saveBid(b, id){
+    if(id){ const ex=this._bids.find(x=>String(x.id)===String(id));
+      if(ex){ Object.assign(ex, b); return ex; } }
+    const row=Object.assign({id:'bid'+Date.now(), created_at:new Date().toISOString(),
+      status:'open'}, b);
+    this._bids.push(row); return row;
+  },
+  async patchBid(id, patch){
+    const ex=this._bids.find(x=>String(x.id)===String(id));
+    if(ex) Object.assign(ex, patch); return ex;
+  },
+  async delBid(id){ this._bids=this._bids.filter(x=>String(x.id)!==String(id)); },
   async truckCaps(){
     // Same numbers as sql/17_truck_capacity.sql -- the placement-truck sheet.
     const base=[['BeautiBark',32,23],['Hemlock',23,18],
@@ -1591,6 +1680,31 @@ const LiveDB = {
     const r = await SB.rest('blockouts',
       {method:'POST', headers:{Prefer:'return=representation'}, body:JSON.stringify(row)});
     return r && r[0];
+  },
+  async listBids(){
+    return SB.rest('bids?select=*&order=created_at.desc&limit=200');
+  },
+  async getBid(id){
+    const r = await SB.rest('bids?select=*&id=eq.'+encodeURIComponent(id));
+    return r && r[0];
+  },
+  async saveBid(b, id){
+    if(id){
+      const r = await SB.rest('bids?id=eq.'+encodeURIComponent(id),
+        {method:'PATCH', headers:{Prefer:'return=representation'}, body:JSON.stringify(b)});
+      return r && r[0];
+    }
+    const r = await SB.rest('bids',
+      {method:'POST', headers:{Prefer:'return=representation'}, body:JSON.stringify(b)});
+    return r && r[0];
+  },
+  async patchBid(id, patch){
+    const r = await SB.rest('bids?id=eq.'+encodeURIComponent(id),
+      {method:'PATCH', headers:{Prefer:'return=representation'}, body:JSON.stringify(patch)});
+    return r && r[0];
+  },
+  async delBid(id){
+    return SB.rest('bids?id=eq.'+encodeURIComponent(id), {method:'DELETE'});
   },
   async delBlock(id){
     return SB.rest('blockouts?id=eq.'+encodeURIComponent(id), {method:'DELETE'});
@@ -1969,7 +2083,8 @@ function show(v){
   // The tab bar scrolls sideways on phones -- keep the active tab in sight.
   const cur=$('#tabs button[aria-current="true"]');
   if(cur && cur.scrollIntoView) try{ cur.scrollIntoView({block:'nearest',inline:'nearest'}); }catch(e){}
-  ['quote','quotes','cal','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  ['quote','bids','quotes','cal','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  if(v==='bids')   renderBidsList();
   if(v==='cal')    renderCal();
   if(v==='quotes') renderQuotesList();
   if(v==='dash')   renderDash();
@@ -3247,6 +3362,9 @@ async function openQuote(r){
     : [];
   SiteVisit.photos = Array.isArray(r.site_photos) ? r.site_photos.map(p=>Object.assign({},p)) : [];
   renderMeas(); renderPhotos();
+  State.fromBidId = r.bid_id || null;
+  State.bidNotes = r.bid_notes || null;
+  renderBidRef();
   autoFill={drive:false,blow:false,prep:false};  // these are the rep's saved numbers
   renderSchedState(r); recalc(); refreshCrewLoad();
   if(r.site_key) loadSite(r.site_key, {address1:r.address_raw,city:r.city,zip:r.zip},
@@ -4214,10 +4332,232 @@ function exitCrewMode(){
   const b=$('#cal_crew'); if(b) b.textContent='Crew view';
   renderCal();
 }
+let BidPortal = false;
+function enterBidMode(){
+  BidPortal = true;
+  document.body.classList.add('bidmode');
+  const tb=$('#tabs'); if(tb) tb.classList.add('hide');
+  show('bids');
+}
+function exitBidMode(){
+  if(!BidPortal) return;
+  BidPortal = false;
+  document.body.classList.remove('bidmode');
+  const tb=$('#tabs'); if(tb && !Cal.crew) tb.classList.remove('hide');
+}
 function applyCrewMode(){
-  if(/(^|#|&)crew/.test(location.hash)) enterCrewMode(); else exitCrewMode();
+  if(/(^|#|&)crew/.test(location.hash)){ exitBidMode(); enterCrewMode(); }
+  else if(/(^|#|&)bid/.test(location.hash)){ exitCrewMode(); enterBidMode(); }
+  else { exitCrewMode(); exitBidMode(); }
 }
 
+/* ============================ bids tab ====================================
+   A bid is the field worksheet on its own: measurements, photos and
+   rep-reference notes, saved in the bids table (sql/29) BEFORE any quote
+   exists. Convert to quote clears the builder, carries the customer,
+   measurements (suggested yards applied), photos and depth over, and pins
+   the bid notes as a read-only reference box — NOT crew-facing site notes.
+   The '#bid' portal shows only this tab (no quotes, no pricing); sql/29's
+   bid_only_users adds a database-level lock for those sign-ins. */
+const BidSt = { id:null, meas:[], photos:[] };
+function bidReset(){
+  BidSt.id=null; BidSt.meas=[]; BidSt.photos=[];
+  ['bd_customer','bd_phone','bd_address','bd_city','bd_zip','bd_notes']
+    .forEach(i=>{ const el2=$('#'+i); if(el2) el2.value=''; });
+  const pr=$('#bd_product'); if(pr) pr.value='';
+  const dp=$('#bd_depth'); if(dp) dp.value='2';
+  $('#bd_state').textContent='';
+  renderBidMeas(); renderBidPhotos();
+}
+function bidTotals(){
+  const sqft = BidSt.meas.reduce((t,m)=>t+svSqft(m), 0);
+  const depth = parseFloat($('#bd_depth').value)||2;
+  const yards = sqft>0 ? Math.ceil(sqft*(depth/12)/27*2)/2 : 0;
+  return {sqft: Math.round(sqft), depth, yards};
+}
+function renderBidMeas(){
+  const box=$('#bd_measrows'); if(!box) return;
+  box.innerHTML = BidSt.meas.map((m,i)=>
+    '<div class="row" style="margin-top:6px" data-bmi="'+i+'">'+
+    '<div style="flex:2"><label class="f">Area</label><input type="text" class="m_lbl" '+
+      'placeholder="Front beds" value="'+esc(m.label||'')+'"></div>'+
+    '<div><label class="f">L (ft)</label><input type="number" class="m_l num mono" '+
+      'step="0.5" min="0" value="'+(m.l??'')+'"></div>'+
+    '<div><label class="f">W (ft)</label><input type="number" class="m_w num mono" '+
+      'step="0.5" min="0" value="'+(m.w??'')+'"></div>'+
+    '<div><label class="f">Sq ft <span class="small muted">or type it</span></label>'+
+      '<input type="number" class="m_sf num mono" step="1" min="0" value="'+(m.sf??'')+'"></div>'+
+    '<button type="button" class="btn ghost sm m_del" style="flex:0 0 auto;align-self:end" '+
+      'title="Remove area">✕</button>'+
+    '</div>').join('');
+  box.querySelectorAll('[data-bmi]').forEach(row=>{
+    const m = BidSt.meas[Number(row.dataset.bmi)];
+    const upd = ()=>{ m.label=row.querySelector('.m_lbl').value;
+      m.l=row.querySelector('.m_l').value; m.w=row.querySelector('.m_w').value;
+      m.sf=row.querySelector('.m_sf').value; renderBidTotal(); };
+    row.querySelectorAll('input').forEach(inp=>inp.addEventListener('input', upd));
+    row.querySelector('.m_del').onclick=()=>{ BidSt.meas.splice(Number(row.dataset.bmi),1);
+      renderBidMeas(); };
+  });
+  renderBidTotal();
+}
+function renderBidTotal(){
+  const box=$('#bd_meastotal'); if(!box) return;
+  const t=bidTotals();
+  box.innerHTML = t.sqft>0
+    ? '<b>'+t.sqft.toLocaleString()+' sq ft</b> × '+t.depth+'&Prime; ≈ <b>'+t.yards+
+      ' yd</b> <span class="muted">— suggested when this bid becomes a quote</span>'
+    : (BidSt.meas.length?'<span class="muted">Enter lengths and widths (or square feet).</span>':'');
+}
+function renderBidPhotos(){
+  const box=$('#bd_photolist'); if(!box) return;
+  box.innerHTML = BidSt.photos.map((p2,i)=>
+    '<div data-bpi="'+i+'" style="position:relative;width:86px;height:86px;border-radius:8px;'+
+    'overflow:hidden;border:1px solid var(--line);background:var(--panel-2)" title="'+esc(p2.name||'')+'">'+
+    '<img class="pimg" alt="" style="width:100%;height:100%;object-fit:cover;display:none">'+
+    '<span class="small muted pfall" style="position:absolute;inset:0;display:flex;'+
+      'align-items:center;justify-content:center;padding:4px;text-align:center;overflow:hidden">'+
+      esc((p2.name||'photo').slice(0,18))+'</span>'+
+    '<button type="button" class="pdel" title="Remove photo" style="position:absolute;top:2px;'+
+      'right:2px;width:22px;height:22px;border-radius:6px;border:0;cursor:pointer;'+
+      'background:rgba(0,0,0,.55);color:#fff;line-height:1">✕</button>'+
+    '</div>').join('');
+  box.querySelectorAll('[data-bpi]').forEach(card=>{
+    const i=Number(card.dataset.bpi), p2=BidSt.photos[i];
+    svThumbUrl(p2).then(u=>{ if(!u) return;
+      const img=card.querySelector('.pimg'); img.src=u; img.style.display='block';
+      card.querySelector('.pfall').style.display='none'; });
+    card.querySelector('.pdel').onclick=()=>{ BidSt.photos.splice(i,1); renderBidPhotos(); };
+  });
+}
+function bidPayload(){
+  const t=bidTotals();
+  return {
+    customer_name: $('#bd_customer').value.trim()||null,
+    phone: $('#bd_phone').value.trim()||null,
+    address_raw: $('#bd_address').value.trim()||null,
+    city: $('#bd_city').value.trim()||null,
+    zip: $('#bd_zip').value.trim()||null,
+    product: $('#bd_product').value||null,
+    depth_in: parseFloat($('#bd_depth').value)||null,
+    measurements: BidSt.meas.length
+      ? {areas: BidSt.meas.map(m=>({label:m.label||'', l:parseFloat(m.l)||null,
+          w:parseFloat(m.w)||null, sf:Math.round(svSqft(m))})),
+         sqft:t.sqft, depth_in:t.depth, suggested_yards:t.yards}
+      : null,
+    photos: BidSt.photos.length
+      ? BidSt.photos.map(p2=>({path:p2.path, name:p2.name, size:p2.size, at:p2.at,
+          drive_id:p2.drive_id||null, mime:p2.mime||null}))
+      : null,
+    notes: $('#bd_notes').value.trim()||null
+  };
+}
+let bdMsgTimer=null;
+function bdMsg(t,bad){ const b=$('#bd_msg'); if(!b) return;
+  b.innerHTML='<div class="note '+(bad?'bad':'ok')+'">'+esc(t)+'</div>';
+  clearTimeout(bdMsgTimer); bdMsgTimer=setTimeout(()=>{b.innerHTML='';},6000); }
+function openBid(b){
+  BidSt.id=b.id;
+  BidSt.meas=(b.measurements&&Array.isArray(b.measurements.areas))
+    ? b.measurements.areas.map(a=>({label:a.label||'', l:a.l??'', w:a.w??'',
+        sf:(a.l>0&&a.w>0&&Math.abs(a.l*a.w-a.sf)<1)?'':(a.sf??'')}))
+    : [];
+  BidSt.photos=Array.isArray(b.photos)?b.photos.map(x=>Object.assign({},x)):[];
+  $('#bd_customer').value=b.customer_name||''; $('#bd_phone').value=b.phone||'';
+  $('#bd_address').value=b.address_raw||''; $('#bd_city').value=b.city||'';
+  $('#bd_zip').value=b.zip||'';
+  $('#bd_product').value=b.product||'';
+  $('#bd_depth').value=b.depth_in?String(b.depth_in):'2';
+  $('#bd_notes').value=b.notes||'';
+  $('#bd_state').textContent='· editing a saved bid'+(b.status==='quoted'?' (already quoted)':'');
+  renderBidMeas(); renderBidPhotos();
+  show('bids');
+}
+async function renderBidsList(){
+  const box=$('#bidslist'); if(!box) return;
+  fillBidProducts();
+  let bids=[];
+  try{ bids = (await DB.listBids())||[]; }
+  catch(e){
+    box.innerHTML = '<div class="note bad">'+esc(/bids/.test(e.message||'')
+      ? 'The bids table is missing — run sql/29_bids.sql in Supabase.' : e.message)+'</div>';
+    return;
+  }
+  $('#bd_count').textContent = bids.length ? '('+bids.length+')' : '';
+  if(!bids.length){ box.innerHTML='<div class="empty">No bids yet — the worksheet on the left starts one.</div>'; return; }
+  box.innerHTML = bids.map(b=>{
+    const t=(b.measurements||{});
+    return '<div class="kv" style="align-items:center"><span class="k">'+
+      '<b>'+esc(b.customer_name||'(no name)')+'</b> <span class="muted">'+
+      esc([b.address_raw,b.city].filter(Boolean).join(', '))+'</span><br>'+
+      '<span class="small muted">'+esc(dfmt(String(b.created_at||'').slice(0,10)))+
+      (t.sqft?' · '+Number(t.sqft).toLocaleString()+' sq ft ≈ '+t.suggested_yards+' yd':'')+
+      ((b.photos||[]).length?' · '+(b.photos||[]).length+' 📷':'')+
+      (b.status==='quoted'?' · <span class="tag g">quoted</span>':' · <span class="tag w">open</span>')+
+      '</span></span>'+
+      '<span style="display:flex;gap:6px;flex:0 0 auto">'+
+      '<button class="btn ghost sm" data-bopen="'+esc(b.id)+'">Open</button>'+
+      '<button class="btn ghost sm bid-convert" data-bconv="'+esc(b.id)+'" '+
+        'style="color:var(--good);border-color:var(--good)">Convert to quote</button>'+
+      '<button class="btn ghost sm bid-convert" data-bdel="'+esc(b.id)+'" '+
+        'style="color:var(--danger)">✕</button>'+
+      '</span></div>';
+  }).join('');
+  box.querySelectorAll('[data-bopen]').forEach(btn=>btn.onclick=async()=>{
+    const b=await DB.getBid(btn.dataset.bopen); if(b) openBid(b);
+  });
+  box.querySelectorAll('[data-bconv]').forEach(btn=>btn.onclick=()=>convertBid(btn.dataset.bconv));
+  box.querySelectorAll('[data-bdel]').forEach(btn=>btn.onclick=async()=>{
+    try{ await DB.delBid(btn.dataset.bdel); renderBidsList(); }catch(e){ bdMsg(e.message,true); }
+  });
+}
+function fillBidProducts(){
+  const sel=$('#bd_product'); if(!sel || sel.options.length>1) return;
+  ((State.ref&&State.ref.rate_card)||[]).filter(r=>r.active!==false).forEach(r=>{
+    const o=document.createElement('option'); o.value=r.product; o.textContent=r.product;
+    sel.appendChild(o);
+  });
+}
+/* Bid -> quote: fresh builder, everything relevant carried over. */
+async function convertBid(id){
+  let b=null; try{ b=await DB.getBid(id); }catch(e){}
+  if(!b){ bdMsg('That bid was not found.', true); return; }
+  $('#newquote').click();
+  show('quote');
+  $('#q_customer').value=b.customer_name||''; $('#q_phone').value=b.phone||'';
+  $('#q_address').value=b.address_raw||''; $('#q_city').value=b.city||'';
+  $('#q_zip').value=b.zip||'';
+  if(b.product && !$('#q_product').disabled &&
+     [...$('#q_product').options].some(o=>o.value===b.product))
+    $('#q_product').value=b.product;
+  if(b.depth_in) $('#q_depth').value=String(b.depth_in);
+  const t=(b.measurements||{});
+  SiteVisit.meas=(t.areas||[]).map(a=>({label:a.label||'', l:a.l??'', w:a.w??'',
+    sf:(a.l>0&&a.w>0&&Math.abs(a.l*a.w-a.sf)<1)?'':(a.sf??'')}));
+  SiteVisit.photos=Array.isArray(b.photos)?b.photos.map(x=>Object.assign({},x)):[];
+  renderMeas(); renderPhotos();
+  if(t.suggested_yards>0) $('#q_yards').value=t.suggested_yards;
+  State.fromBidId=b.id; State.bidNotes=b.notes||null;
+  renderBidRef();
+  recalc();
+  msg('Bid loaded'+(t.suggested_yards>0?' — '+t.suggested_yards+' yd suggested from '+
+    Number(t.sqft||0).toLocaleString()+' sq ft at '+(t.depth_in||2)+'&Prime;':'')+
+    '. Photos and measurements carried over; the bid notes sit above the Site visit '+
+    'section as your reference. Save/Hold/Schedule marks the bid quoted.', false);
+}
+/* The bid notes box on the quote form: reference for the REP. The crew's
+   event body only ever carries site_notes — never these. */
+function renderBidRef(){
+  const box=$('#bidref'); if(!box) return;
+  if(!State.bidNotes){ box.classList.add('hide'); box.innerHTML=''; return; }
+  box.classList.remove('hide');
+  box.innerHTML='<div style="border:1px dashed var(--line);border-radius:10px;'+
+    'padding:10px 12px;background:var(--panel-2);margin:4px 0 2px">'+
+    '<div class="small" style="font-weight:600">📋 Bid notes '+
+    '<span class="muted">(your reference — the crew never sees these)</span></div>'+
+    '<div class="small" style="margin-top:4px;white-space:pre-wrap">'+
+    esc(State.bidNotes)+'</div></div>';
+}
 /* ======================= site visit (bid worksheet) =======================
    Measurements, site notes and photos live ON the quote (sql/27 columns).
    Photos upload to Supabase Storage the moment they are picked (bucket
@@ -5429,21 +5769,38 @@ async function saveQuote(status){
   /* sql/25 adds scheduled_date2; a database that has not run it yet must
      still save (bookingsBetween's fallback records which world we are in). */
   if(q.scheduled_date2===null && DB.hasDate2===false) delete q.scheduled_date2;
-  /* Site visit rides the quote row (sql/27). */
+  /* Site visit rides the quote row (sql/27); the bid link (sql/29) too. */
   Object.assign(q, svPayload());
+  q.bid_id = State.fromBidId || null;
+  q.bid_notes = State.bidNotes || null;
   let svWarn = '';
   try{
     const wasNew = !State.savedQuoteId;
-    let saved;
-    try{ saved = await DB.saveQuote(q, State.savedQuoteId); }
-    catch(e){
-      /* A database without sql/27 must still save the quote itself. */
-      if(/site_(notes|measurements|photos)/i.test(e.message||'')){
-        delete q.site_notes; delete q.site_measurements; delete q.site_photos;
-        saved = await DB.saveQuote(q, State.savedQuoteId);
-        svWarn = ' ⚠ The site-visit fields (measurements, notes, photos) were NOT saved — '+
-                 'run sql/27_site_visit.sql in Supabase first.';
-      }else throw e;
+    let saved, tries = 0;
+    /* Databases behind on sql/27 or sql/29 still save the quote itself —
+       each missing column group is dropped once, with its own warning. */
+    for(;;){
+      try{ saved = await DB.saveQuote(q, State.savedQuoteId); break; }
+      catch(e){
+        const em = e.message||'';
+        if(++tries<=2 && /bid_(id|notes)/i.test(em)){
+          delete q.bid_id; delete q.bid_notes;
+          svWarn += ' ⚠ The bid link was NOT saved — run sql/29_bids.sql in Supabase.';
+          continue;
+        }
+        if(tries<=2 && /site_(notes|measurements|photos)/i.test(em)){
+          delete q.site_notes; delete q.site_measurements; delete q.site_photos;
+          svWarn += ' ⚠ The site-visit fields (measurements, notes, photos) were NOT saved — '+
+                    'run sql/27_site_visit.sql in Supabase first.';
+          continue;
+        }
+        throw e;
+      }
+    }
+    /* First save off a converted bid: the bid flips to quoted. */
+    if(wasNew && State.fromBidId){
+      try{ await DB.patchBid(State.fromBidId,
+        {status:'quoted', quote_id: saved && saved.id}); }catch(e){}
     }
     State.savedQuoteId = saved && saved.id;
     State.qstatus = status;
@@ -5663,11 +6020,50 @@ function wire(){
     $('#savequote').textContent='Save quote';
     renderSchedState(null); refreshCrewLoad();
     setHistoryCollapsed(false);
+    State.fromBidId=null; State.bidNotes=null; renderBidRef();
     svReset();
     autoFill={drive:true,blow:true,prep:true}; renderHistory(); recalc();
   };
   /* ---- site visit wiring ---- */
   $('#histshow').onclick=()=>setHistoryCollapsed(false);
+  /* ---- bids ---- */
+  $('#bd_measadd').onclick=()=>{ BidSt.meas.push({label:'',l:'',w:'',sf:''}); renderBidMeas(); };
+  $('#bd_depth').addEventListener('change', renderBidTotal);
+  $('#bd_new').onclick=()=>{ bidReset(); bdMsg('New bid.', false); };
+  $('#bd_photoadd').onclick=()=>{
+    if(DB.mode==='demo'){ $('#bd_photomsg').textContent='demo mode — no photo storage'; return; }
+    if(!State.token){ $('#bd_photomsg').textContent='sign in first'; return; }
+    $('#bd_photo_in').click();
+  };
+  $('#bd_photo_in').addEventListener('change', async e=>{
+    const files=[...(e.target.files||[])]; e.target.value='';
+    if(!files.length) return;
+    const pm=$('#bd_photomsg');
+    for(let i=0;i<files.length;i++){
+      pm.textContent='uploading '+(i+1)+' of '+files.length+'…';
+      try{ BidSt.photos.push(await svUploadPhoto(files[i])); renderBidPhotos(); }
+      catch(err){ pm.textContent='⚠ '+err.message; return; }
+    }
+    pm.textContent=files.length+' photo'+(files.length>1?'s':'')+' on the bid.';
+  });
+  $('#bd_save').onclick=async()=>{
+    const pl=bidPayload();
+    if(!pl.customer_name && !pl.address_raw){
+      bdMsg('Give the bid at least a customer or an address.', true); return; }
+    $('#bd_save').disabled=true;
+    try{
+      const saved=await DB.saveBid(pl, BidSt.id);
+      BidSt.id=saved&&saved.id||BidSt.id;
+      $('#bd_state').textContent='· editing a saved bid';
+      bdMsg('Bid saved.'+(pl.measurements?' Suggests '+pl.measurements.suggested_yards+
+        ' yd when it becomes a quote.':''), false);
+      renderBidsList();
+    }catch(e){
+      bdMsg(/bids/.test(e.message||'')
+        ? 'The bids table is missing — run sql/29_bids.sql in Supabase.' : e.message, true);
+    }
+    $('#bd_save').disabled=false;
+  };
   $('#measadd').onclick=()=>{ SiteVisit.meas.push({label:'',l:'',w:'',sf:''}); renderMeas(); };
   $('#q_depth').addEventListener('change', renderMeasTotal);
   $('#q_yards').addEventListener('input', renderMeasTotal);
