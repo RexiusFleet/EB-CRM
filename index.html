@@ -1083,7 +1083,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-01-schedcal';   // shown in the header; check it after deploying
+const BUILD = '2026-10-01-bidarchive';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1465,7 +1465,8 @@ const DemoDB = {
     const ex=this._bids.find(x=>String(x.id)===String(id));
     if(ex) Object.assign(ex, patch); return ex;
   },
-  async delBid(id){ this._bids=this._bids.filter(x=>String(x.id)!==String(id)); },
+  async archiveBid(id){ return this.patchBid(id, {archived_at: new Date().toISOString()}); },
+  async restoreBid(id){ return this.patchBid(id, {archived_at: null}); },
   async truckCaps(){
     // Same numbers as sql/17_truck_capacity.sql -- the placement-truck sheet.
     const base=[['BeautiBark',32,23],['Hemlock',23,18],
@@ -1716,8 +1717,13 @@ const LiveDB = {
       {method:'PATCH', headers:{Prefer:'return=representation'}, body:JSON.stringify(patch)});
     return r && r[0];
   },
-  async delBid(id){
-    return SB.rest('bids?id=eq.'+encodeURIComponent(id), {method:'DELETE'});
+  /* Bids are never hard-deleted from the app (sql/30): archive stamps
+     archived_at, restore clears it — a mis-tap is always recoverable. */
+  async archiveBid(id){
+    return this.patchBid(id, {archived_at: new Date().toISOString()});
+  },
+  async restoreBid(id){
+    return this.patchBid(id, {archived_at: null});
   },
   async delBlock(id){
     return SB.rest('blockouts?id=eq.'+encodeURIComponent(id), {method:'DELETE'});
@@ -4649,7 +4655,9 @@ function openBid(b){
   $('#bd_product').value=b.product||'';
   $('#bd_depth').value=b.depth_in?String(b.depth_in):'2';
   $('#bd_notes').value=b.notes||'';
-  $('#bd_state').textContent='· editing a saved bid'+(b.status==='quoted'?' (already quoted)':'');
+  $('#bd_state').textContent='· editing a saved bid'+
+    (b.status==='quoted'?' (already quoted)':'')+
+    (b.archived_at?' (ARCHIVED — restore it from Saved Bids)':'');
   renderBidMeas(); renderBidPhotos();
   show('bids');
 }
@@ -4678,10 +4686,11 @@ async function renderBidsList(){
     return terms.every(w=>hay.includes(w));
   };
   const shown = bids.filter(match);
-  const open = shown.filter(b=>b.status!=='quoted');
-  const quoted = shown.filter(b=>b.status==='quoted');
+  const open = shown.filter(b=>!b.archived_at && b.status!=='quoted');
+  const quoted = shown.filter(b=>!b.archived_at && b.status==='quoted');
+  const archived = shown.filter(b=>!!b.archived_at);
 
-  const section = (title, list, cls, quotedPile) => {
+  const section = (title, list, cls, mode) => {
     const wrap=el('div');
     wrap.innerHTML='<div class="kv" style="border:0;padding:14px 0 6px">'+
       '<span class="k" style="font-weight:600;color:var(--ink)">'+esc(title)+
@@ -4714,24 +4723,44 @@ async function renderBidsList(){
       mk('Open').onclick=async()=>{
         const full=await DB.getBid(b.id); if(full) openBid(full);
       };
-      if(quotedPile && b.quote_id){
-        const vq=mk('View quote','color:var(--good);border-color:var(--good)');
-        vq.classList.add('bid-convert');
-        vq.onclick=async()=>{
-          let r=null; try{ r=await DB.getQuote(b.quote_id); }catch(e){}
-          if(r) openQuote(r);
-          else bdMsg('That quote was not found — it may have been deleted.', true);
+      if(mode==='archived'){
+        /* Archived = parked, never gone: Restore is the only action beside
+           reading it. Nothing here can destroy the walk-through's data. */
+        const rs=mk('Restore','color:var(--good);border-color:var(--good)');
+        rs.classList.add('bid-convert');
+        rs.onclick=async()=>{
+          try{ await DB.restoreBid(b.id); bdMsg('Bid restored.', false); renderBidsList(); }
+          catch(e){ bdMsg(e.message,true); }
         };
       }else{
-        const cv=mk('Convert to quote','color:var(--good);border-color:var(--good)');
-        cv.classList.add('bid-convert');
-        cv.onclick=()=>convertBid(b.id);
+        if(mode==='quoted' && b.quote_id){
+          const vq=mk('View quote','color:var(--good);border-color:var(--good)');
+          vq.classList.add('bid-convert');
+          vq.onclick=async()=>{
+            let r=null; try{ r=await DB.getQuote(b.quote_id); }catch(e){}
+            if(r) openQuote(r);
+            else bdMsg('That quote was not found — it may have been deleted.', true);
+          };
+        }else{
+          const cv=mk('Convert to quote','color:var(--good);border-color:var(--good)');
+          cv.classList.add('bid-convert');
+          cv.onclick=()=>convertBid(b.id);
+        }
+        const ar=mk('Archive');
+        ar.classList.add('bid-convert');
+        ar.title='Parks the bid under Archived — restorable any time, never deleted';
+        ar.onclick=async()=>{
+          try{
+            await DB.archiveBid(b.id);
+            bdMsg('Bid archived — it is under Archived below, Restore brings it back.', false);
+            renderBidsList();
+          }catch(e){
+            bdMsg(/archived_at/.test(e.message||'')
+              ? 'Archiving needs sql/30_bid_archive.sql — run it in Supabase first.'
+              : e.message, true);
+          }
+        };
       }
-      const dl=mk('✕','color:var(--danger)');
-      dl.classList.add('bid-convert');
-      dl.onclick=async()=>{
-        try{ await DB.delBid(b.id); renderBidsList(); }catch(e){ bdMsg(e.message,true); }
-      };
       tb.appendChild(tr);
     });
     t.appendChild(tb);
@@ -4739,8 +4768,10 @@ async function renderBidsList(){
     return wrap;
   };
   box.innerHTML='';
-  box.appendChild(section('Open — not yet quoted', open, 'w', false));
-  box.appendChild(section('Converted to quotes', quoted, 'g', true));
+  box.appendChild(section('Open — not yet quoted', open, 'w', 'open'));
+  box.appendChild(section('Converted to quotes', quoted, 'g', 'quoted'));
+  if(archived.length || terms.length)
+    box.appendChild(section('Archived — parked, restorable any time', archived, '', 'archived'));
 }
 /* Pick a known site on the BID worksheet: contact fields fill from the
    records (same fallback order as the quote form), nothing else changes —
