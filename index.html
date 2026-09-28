@@ -117,6 +117,11 @@ tr:last-child td{border-bottom:0}
 /* Toast: the can't-miss confirmation after Save / Hold / Schedule. It
    floats above everything (including the sticky saverow) and never
    swallows taps. */
+/* Signed-out gate: an opaque cover over the whole app. dialogs (the
+   sign-in form) render in the browser top layer, above it. */
+#authgate{position:fixed;inset:0;z-index:250;background:var(--bg);
+  display:flex;align-items:center;justify-content:center;padding:24px;
+  text-align:center}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
   z-index:200;max-width:min(560px,calc(100vw - 24px));
   background:var(--good);color:#fff;border-radius:10px;
@@ -1115,7 +1120,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-11-import-driver';   // shown in the header; check it after deploying
+const BUILD = '2026-10-12-authgate';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2044,8 +2049,11 @@ async function loadData(){
     renderAuth(); fillProducts(); recalc();
     loadSearchIndex();
     loadCrews().then(()=>{ renderSchedState(null); refreshCrewLoad(); });
+    /* Role first, THEN the mode, THEN the deep link — a driver's quote
+       link must land on the day card, which needs the mode set. */
+    try{ State.role = await detectRole(); }catch(e){ State.role = null; }
+    applyCrewMode();      // #crew/#driver/#office/#bid — or the account's role
     applyQuoteLink();     // #quote=<id> from a calendar event, once data is up
-    applyCrewMode();      // #crew — read-only crew board, no pricing
   }catch(err){
     $('#boot').classList.remove('hide');
     $('#boot').innerHTML = '<div class="body"><div class="note bad">'+
@@ -2121,7 +2129,32 @@ function loadErrorHtml(e){
   return '<div class="note bad"><b>Could not load data.</b>'+detail+'</div>';
 }
 
+/* The whole app hides behind this until a session exists (live mode
+   only). The sign-in dialog is a <dialog>, so it sits above the cover. */
+function updateAuthGate(){
+  const need = LIVE && !State.user;
+  let g=$('#authgate');
+  if(!need){
+    if(g){ g.remove(); try{ $('#authdlg').close(); }catch(e){} }
+    return;
+  }
+  if(g) return;
+  g=document.createElement('div'); g.id='authgate';
+  g.innerHTML='<div style="max-width:420px">'+
+    '<div style="display:flex;align-items:center;justify-content:center;gap:10px;'+
+    'font-size:22px;font-weight:700"><span class="dot">R</span> Blower Quotes</div>'+
+    '<div class="muted" style="margin:14px 0 20px;font-size:14.5px">Sign in with your '+
+    'Rexius email. What you see next depends on your account — quoting, the office '+
+    'view, the driver board or the bid worksheet.</div>'+
+    '<button class="btn" id="gatesignin" style="padding:12px 34px;font-size:15px">'+
+    'Sign in</button></div>';
+  document.body.appendChild(g);
+  $('#gatesignin').onclick=()=>$('#authdlg').showModal();
+  /* one less click: open the form right away */
+  try{ $('#authdlg').showModal(); }catch(e){}
+}
 function renderAuth(){
+  updateAuthGate();
   const signedIn = !!State.user;
   $('#whoami').textContent = signedIn ? (State.user.email||'') : (LIVE?'':'offline');
   $('#authbtn').textContent = signedIn ? 'Sign out' : 'Sign in';
@@ -2139,6 +2172,7 @@ function show(v){
   /* The bid portal never leaves its two views, whatever asks. */
   if(typeof BidPortal!=='undefined' && BidPortal && v!=='bids' && v!=='bidlist') v='bids';
   if(typeof OfficePortal!=='undefined' && OfficePortal && v!=='quotes' && v!=='cal') v='quotes';
+  if(typeof Cal!=='undefined' && Cal.crew && v!=='cal') v='cal';
   ['quote','bids','bidlist','quotes','cal','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
   if(v==='bids')   fillBidProducts();
@@ -3440,6 +3474,10 @@ async function openQuote(r){
   /* Office portal: the card (revenue split + ERP numbers) IS the quote
      view — the builder, with its costs and pricing, stays shut. */
   if(typeof OfficePortal!=='undefined' && OfficePortal){ calCard(r, false); return; }
+  /* Drivers and crew: the day card IS the quote view — a calendar-event
+     deep link or any stray openQuote stays out of the builder. */
+  if((typeof DriverView!=='undefined' && DriverView) ||
+     (typeof Cal!=='undefined' && Cal.crew)){ crewCard(r); return; }
   show('quote');
   const set=(id,v)=>{ const e=$('#'+id); if(e) e.value = (v==null?'':String(v)); };
   set('q_customer', r.customer_name); set('q_phone', r.phone); set('q_email', r.email);
@@ -5179,7 +5217,23 @@ function exitBidMode(){
   BidPortal = false;
   document.body.classList.remove('bidmode');
 }
+/* Who is this sign-in? Asks the security-definer role functions from
+   sql/29 / 33 / 34; a 404 (sql file not run yet) simply means "not that
+   role". Cached on State for the session. */
+async function detectRole(){
+  if(!LIVE || !State.user || DB.mode==='demo') return null;
+  const ask = fn => SB.rest('rpc/'+fn, {method:'POST', body:'{}'})
+    .then(v=>v===true).catch(()=>false);
+  const [o,d,b] = await Promise.all([
+    ask('is_office_user'), ask('is_driver_user'), ask('is_bid_only_user')]);
+  return o ? 'office' : d ? 'driver' : b ? 'bid' : null;
+}
 function applyCrewMode(){
+  /* A database-locked role OWNS the view — the hash cannot break out. */
+  const role = State.role || null;
+  if(role==='office'){ exitCrewMode(); exitDriverMode(); exitBidMode(); enterOfficeMode(); return; }
+  if(role==='driver'){ exitBidMode(); exitOfficeMode(); enterDriverMode(); return; }
+  if(role==='bid'){ exitCrewMode(); exitDriverMode(); exitOfficeMode(); enterBidMode(); return; }
   if(/(^|#|&)driver/.test(location.hash)){ exitBidMode(); exitOfficeMode(); enterDriverMode(); }
   else if(/(^|#|&)crew/.test(location.hash)){ exitBidMode(); exitOfficeMode(); exitDriverMode(); enterCrewMode(); }
   else if(/(^|#|&)office/.test(location.hash)){ exitCrewMode(); exitDriverMode(); exitBidMode(); enterOfficeMode(); }
