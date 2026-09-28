@@ -1123,7 +1123,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-17-crewsplit';   // shown in the header; check it after deploying
+const BUILD = '2026-10-17-nooverlay';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3992,10 +3992,6 @@ async function calFetch(from, to){
   const hit = calCache.get(key);
   if(hit && Date.now()-hit.t < 60000) return hit.data;
   const backend = await calendarBackend();
-  const wantCal = backend==='google' && GS.configured() && State.token && DB.mode!=='demo';
-  /* The app's own tables answer in tens of ms; the Google busy feed can
-     take seconds (Apps Script cold start). Never make the board wait:
-     draw from the fast three now, overlay Google when it lands. */
   const [raw, iblocks, allBids] = await Promise.all([
     DB.bookingsBetween(from, to).catch(()=>[]),
     backend==='internal' ? DB.blocks(from, to).catch(()=>[]) : Promise.resolve([]),
@@ -4056,38 +4052,17 @@ async function calFetch(from, to){
       time:b.scheduled_time?String(b.scheduled_time).slice(0,5):null,
       hours:Number(b.scheduled_hours)||2, allDay:!b.scheduled_time });
   });
-  const data = {jobs, gEvents, backend,
-    calSeen: false, calErr: null, pending: !!wantCal};
+  /* GOOGLE OVERLAY: OFF (per Taylor 2026-10-17, after the import) — the
+     board shows only the app's own world: bookings, blockouts, penciled
+     bids. The suggestion ENGINE still reads the Google busy feed while
+     calendar_backend='google' (loadSuggData), so double-booking
+     protection is unchanged; it is only the grey chips that are gone.
+     To bring them back, restore the wantCal fetch that lived here
+     (2026-10-15-fastboard has the shape). */
+  const data = {jobs, gEvents, backend, calSeen: false, calErr: null};
   calCache.set(key, {t:Date.now(), data});
   while(calCache.size > 6) calCache.delete(calCache.keys().next().value);
-  if(wantCal){
-    GS.busy(from, to).catch(e=>({err:(e&&e.message)||String(e)||'no reply'}))
-      .then(b2=>{
-        data.pending = false;
-        if(b2 && !b2.err && Array.isArray(b2)){
-          data.calSeen = true;
-          b2.forEach((e,i)=>{
-            const crews = String(e.crew)==='*' ? (CREWS||[]).map(c=>String(c.id)) : [String(e.crew)];
-            crews.forEach(cid=>data.gEvents.push({gid:'g'+i, google:true, block:!!e.block,
-              hold: !!e.hold && !e.block, summary: e.summary||'calendar event',
-              crew_id: cid, date: e.date, time: e.allDay?null:(e.time||null),
-              hours: e.allDay?null:(Number(e.hours)||null), allDay: !!e.allDay}));
-          });
-        }else{
-          data.calErr = (b2 && b2.err) ? String(b2.err) : null;
-        }
-        calGoogleArrived();
-      });
-  }
   return data;
-}
-/* The Google overlay landed (or failed): repaint whatever calendar is on
-   screen. The cache already holds the completed data, so these re-renders
-   cost no new fetches. */
-function calGoogleArrived(){
-  try{ if(!$('#view-cal').classList.contains('hide')) renderCal(); }catch(e){}
-  try{ renderSchedCalDebounced(); }catch(e){}
-  try{ bustSuggCache(); renderSuggestionsDebounced(); }catch(e){}
 }
 async function renderCal(){
   const grid = $('#calgrid'); if(!grid) return;
@@ -4113,9 +4088,7 @@ async function renderCal(){
   catch(e){ grid.innerHTML = '<div class="note bad">'+esc(e.message)+'</div>'; return; }
   $('#calsrc').textContent = d.backend==='internal'
     ? '· internal — Google not consulted'
-    : (d.calSeen ? '· app bookings + Google overlay'
-       : d.pending ? '· app bookings — overlaying Google…'
-       : '· app bookings');
+    : '· app bookings — Google overlay off';
   $('#calnote2').innerHTML = d.backend==='google' && d.calErr
     ? '⚠ Google overlay unavailable — showing app bookings only. '+esc(d.calErr.slice(0,90))
     : (Cal.crew ? 'Tap a job for the address, notes and photos.'
