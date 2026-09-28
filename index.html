@@ -1101,7 +1101,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-04-bookflow';   // shown in the header; check it after deploying
+const BUILD = '2026-10-05-qarchive';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2536,6 +2536,14 @@ async function renderCustJobs(){
   const box=$('#custjobs'), sub=$('#custjobssub');
   const id=($('#q_custno').value||'').trim();
   sub.textContent='';
+  /* House accounts (per Taylor): Dept. 32 / 34 self-deliveries would flood
+     this panel with internal jobs — nothing a rep can sell against. */
+  const custNm=($('#q_customer').value||'').trim();
+  if(/rexius\s+dept\.?\s*(32|34)\b/i.test(custNm)){
+    box.innerHTML='<div class="empty">House account — the cross-address job list '+
+      'is turned off for Rexius Dept. 32 and Dept. 34.</div>';
+    return;
+  }
   if(!id){
     box.innerHTML='<div class="empty">Jobs delivered to this customer at other addresses '+
       'show here — enter a Customer # above to search.</div>';
@@ -3094,6 +3102,32 @@ async function setQuoteStatus(r, status){
 
 let qsearchTerm = '';
 let quotesListHash = '';
+/* Archive a quote (sql/32): parked, not lost — demoted to draft, any hold
+   or booking taken off the calendar, restorable from the Archived pile. */
+async function archiveQuote(r){
+  if(DB.mode!=='demo' && GS.configured() &&
+     (r.calendar_event_id || (Array.isArray(r.slots) && r.slots.length)) &&
+     (await calendarBackend())==='google'){
+    try{ await GS.remove(r.id,
+      (Array.isArray(r.slots)?r.slots:[]).map(sl=>sl&&sl.event_id).filter(Boolean)); }
+    catch(e){}
+  }
+  const patch = { archived_at: new Date().toISOString(), status:'draft',
+    scheduled_date:null, crew_id:null, crew2_id:null, scheduled_time:null,
+    scheduled_hours:null, scheduled_time2:null,
+    calendar_event_id:null, calendar_id:null, calendar_event_id2:null };
+  if(DB.hasDate2!==false) patch.scheduled_date2 = null;
+  if(DB.hasSlots!==false) patch.slots = null;
+  try{ await DB.patchQuote(r.id, patch); }
+  catch(e){
+    throw new Error(/archived_at/.test(e.message||'')
+      ? 'Archiving needs sql/32_quote_archive.sql — run it in Supabase first.'
+      : e.message);
+  }
+  if(State.savedQuoteId===r.id){ State.qstatus='draft'; State.scheduled=false;
+    try{ updateSchedMode(); }catch(e){} }
+  bustCalCache(); bustSuggCache();
+}
 async function renderQuotesList(){
   const box=$('#quoteslist');
   box.innerHTML='<div class="empty"><span class="spin"></span></div>';
@@ -3113,12 +3147,15 @@ async function renderQuotesList(){
   };
   const shown = rows.filter(match);
 
-  /* Three piles that mean different things to the business. Pending first --
-     it is the pile that needs somebody's decision. */
-  const pending = shown.filter(r=>r.status==='sent');
-  const saved   = shown.filter(r=>r.status!=='sent' && r.status!=='won' && r.status!=='lost');
-  const won     = shown.filter(r=>r.status==='won');
-  const lost    = shown.filter(r=>r.status==='lost');
+  /* Piles that mean different things to the business. Pending first --
+     it is the pile that needs somebody's decision. Archived quotes (parked,
+     not lost -- a customer who got three quotes keeps one) sit last. */
+  const live    = shown.filter(r=>!r.archived_at);
+  const pending = live.filter(r=>r.status==='sent');
+  const saved   = live.filter(r=>r.status!=='sent' && r.status!=='won' && r.status!=='lost');
+  const won     = live.filter(r=>r.status==='won');
+  const lost    = live.filter(r=>r.status==='lost');
+  const archived= shown.filter(r=>!!r.archived_at);
 
   const section = (title, list, cls, opts) => {
     const wrap=el('div');
@@ -3166,8 +3203,10 @@ async function renderQuotesList(){
         if(!btn) return;
         btn.onclick=async e=>{
           const b=e.target; b.disabled=true; b.textContent='\u2026';
-          const note=await setQuoteStatus(r,a.status).catch(err=>' \u2014 '+err.message);
-          flashQuotesMsg(a.done+note+'. Open the quote to undo.');
+          const note = a.run
+            ? await a.run(r).then(()=>'').catch(err=>' \u2014 '+err.message)
+            : await setQuoteStatus(r,a.status).catch(err=>' \u2014 '+err.message);
+          flashQuotesMsg(a.done+note+(a.run?'':'. Open the quote to undo.'));
           renderQuotesList();
         };
       });
@@ -3184,11 +3223,16 @@ async function renderQuotesList(){
   qflashMsg='';
   /* Four piles. On hold first -- those are blocking a truck's day and need
      somebody's decision. Saved quotes hold nothing, so they wait quietly. */
+  /* Archive: parked, not lost — for the two-of-three quotes a customer
+     never took. Off the calendar, out of every pile but its own. */
+  const ARCH = {act:'arch', label:'Archive', color:'var(--muted)', run:archiveQuote,
+    done:'Archived \u2014 parked under Archived below; any hold came off the calendar'};
   box.appendChild(section('On hold \u2014 awaiting confirmation', pending, 'w', {acts:[
     {act:'sched', label:'Schedule', status:'won',  color:'var(--good)',
      done:'Scheduled \u2014 the hold is now a confirmed booking'},
     {act:'lose',  label:'Lost',     status:'lost', color:'var(--danger)',
-     done:'Marked lost \u2014 the hold is off the calendar'}
+     done:'Marked lost \u2014 the hold is off the calendar'},
+    ARCH
   ]}));
   box.appendChild(section('Saved \u2014 not on the calendar', saved, '', {acts:[
     {act:'hold', label:'Hold', status:'sent', color:'var(--warn)',
@@ -3197,10 +3241,17 @@ async function renderQuotesList(){
     {act:'sched', label:'Schedule', status:'won', color:'var(--good)',
      when:r=>!!(r.scheduled_date && r.crew_id),
      done:'Scheduled \u2014 booked on the calendar'},
-    {act:'lose', label:'Lost', status:'lost', color:'var(--danger)', done:'Marked lost'}
+    {act:'lose', label:'Lost', status:'lost', color:'var(--danger)', done:'Marked lost'},
+    ARCH
   ]}));
   box.appendChild(section('Won', won, 'g'));
-  box.appendChild(section('Lost', lost, 'd'));
+  box.appendChild(section('Lost', lost, 'd', {acts:[ARCH]}));
+  if(archived.length || terms.length)
+    box.appendChild(section('Archived \u2014 parked, restorable any time', archived, '', {acts:[
+      {act:'restore', label:'Restore', color:'var(--good)',
+       run:async r=>{ await DB.patchQuote(r.id, {archived_at:null}); },
+       done:'Restored \u2014 back under Saved'}
+    ]}));
 }
 
 let qflashMsg='';
