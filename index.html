@@ -114,6 +114,19 @@ tr:last-child td{border-bottom:0}
   color:var(--warn);border-radius:9px;padding:10px 12px;font-size:13px}
 .note.bad{background:var(--danger-soft);border-color:color-mix(in srgb,var(--danger) 30%,transparent);color:var(--danger)}
 .note.ok{background:var(--accent-soft);border-color:transparent;color:var(--accent)}
+/* Toast: the can't-miss confirmation after Save / Hold / Schedule. It
+   floats above everything (including the sticky saverow) and never
+   swallows taps. */
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+  z-index:200;max-width:min(560px,calc(100vw - 24px));
+  background:var(--good);color:#fff;border-radius:10px;
+  padding:12px 18px;font-weight:600;font-size:14px;line-height:1.4;
+  box-shadow:0 8px 24px rgba(0,0,0,.28);
+  animation:toastin .18s ease-out;pointer-events:none}
+#toast.bad{background:var(--danger)}
+#toast.gone{opacity:0;transition:opacity .35s}
+@keyframes toastin{from{opacity:0;transform:translate(-50%,10px)}
+  to{opacity:1;transform:translate(-50%,0)}}
 .empty{padding:34px 16px;text-align:center;color:var(--muted);font-size:14px}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);
   border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
@@ -179,6 +192,7 @@ body.bidmode #tabs button[data-view="bids"],
 body.bidmode #tabs button[data-view="bidlist"]{display:inline-block}
 body.crewmode{font-size:17px}
 body.crewmode .calchip{font-size:15px;white-space:normal}
+body.crewmode #cal_block{display:none}
 .kv.total .v{font-size:19px}
 .basis{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.4}
 .basis b{color:var(--accent);font-weight:600}
@@ -255,8 +269,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   .btn{min-height:44px}
   .btn.sm{min-height:38px;padding:7px 12px}
   .saverow{gap:8px;padding:10px 0 calc(6px + env(safe-area-inset-bottom))}
+  #toast{bottom:calc(84px + env(safe-area-inset-bottom))}
   .saverow .btn{flex:1 1 auto}
-  #calembedbody iframe{height:440px !important}
   dialog{width:calc(100vw - 20px)}
   .dlg{padding:16px}
   /* The two-per-row field rule above also grabs nav buttons (‹ Today ›
@@ -556,44 +570,10 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
         </div>
       </div>
 
-      <!-- FULL WIDTH: the live crew calendar, always visible. gridColumn 1/-1
-           spans both columns of .qgrid; on narrow screens the grid is one
-           column anyway. -->
-      <div class="card" id="calembedcard" style="grid-column:1/-1">
-        <h3>Truck calendar <span class="muted small">live from Google — follows the
-          date you pick</span></h3>
-        <div class="body">
-          <div id="calembedbody"></div>
-          <div class="small muted" style="margin-top:6px">If this asks for permission,
-            your Google account needs at least read access to the truck calendar — ask
-            an admin to share it (<i>See all event details</i> is enough).</div>
-
-          <!-- Blockouts: holidays, PTO, shop days. One click writes a real
-               calendar event (stamped as a block) that the slot suggestions,
-               capacity notes and crew calendars all respect. -->
-          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-2)">
-            <div class="small" style="font-weight:600;margin-bottom:6px">Block out time
-              <span class="muted" style="font-weight:400">· holidays, PTO, shop days —
-              suggestions steer around these</span></div>
-            <div class="row">
-              <div><label class="f">Date</label><input type="date" id="bl_date"></div>
-              <div><label class="f">Truck</label><select id="bl_crew">
-                <option value="*">All trucks</option></select></div>
-              <div><label class="f">From <span class="small muted">blank = all day</span></label>
-                <input type="time" id="bl_from" step="900"></div>
-              <div><label class="f">To</label><input type="time" id="bl_to" step="900"></div>
-            </div>
-            <div class="row" style="margin-top:8px">
-              <div style="flex:2"><label class="f">Reason</label>
-                <input type="text" id="bl_reason" placeholder="Labor Day, PTO Shane, boom repair…"></div>
-              <div style="max-width:140px;align-self:flex-end">
-                <button class="btn ghost" id="bl_add" style="width:100%">Block</button></div>
-            </div>
-            <div id="bl_msg"></div>
-            <div id="bl_list" class="small" style="margin-top:8px"></div>
-          </div>
-        </div>
-      </div>
+      <!-- The Google-Calendar iframe card lived here until 2026-10-09.
+           Retired per Taylor: the internal mini calendar (Schedule section)
+           and the Calendar tab are the view now; blockouts moved to the
+           Calendar tab's 🚫 Block time button. -->
     </div>
   </section>
 
@@ -712,6 +692,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           <button type="button" class="btn ghost sm" id="cal_month" style="flex:0 0 auto">Month</button>
           <button type="button" class="btn ghost sm" id="cal_crew" style="flex:0 0 auto"
             title="Read-only board for the crew — no pricing anywhere">Crew view</button>
+          <button type="button" class="btn ghost sm" id="cal_block" style="flex:0 0 auto"
+            title="Holiday, PTO, shop day — suggestions steer around blocks">🚫 Block time</button>
         </div>
         <div class="small muted" id="calnote2" style="margin-top:6px"></div>
         <div id="calmsg"></div>
@@ -1122,7 +1104,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-07-crewhours';   // shown in the header; check it after deploying
+const BUILD = '2026-10-09-blockbtn';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3279,7 +3261,8 @@ async function renderQuotesList(){
 }
 
 let qflashMsg='';
-function flashQuotesMsg(text){ qflashMsg=text; }
+function flashQuotesMsg(text){ qflashMsg=text;
+  try{ toast(text, /\u2014 .*error|failed/i.test(text)); }catch(e){} }
 
 /* The calendar->quote sync lands moves in the database within about a minute,
    so while the Saved Quotes list is on screen it re-checks itself. It only
@@ -3682,9 +3665,7 @@ async function loadCrews(){
   try{
     const cfg = await DB.appConfig();
     GS.url = (cfg.apps_script_url || '').trim() || null;
-    CAL_EMBED_ID = (cfg.master_calendar_id || '').trim() || null;
   }catch(e){ /* reported by the connection check, not here */ }
-  renderCalEmbed();
   const sel=$('#q_crew');
   sel.innerHTML = '<option value="">— choose —</option>' +
     CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+
@@ -3692,10 +3673,6 @@ async function loadCrews(){
   const sel2=$('#q_crew2');
   if(sel2) sel2.innerHTML = '<option value="">— same truck —</option>' +
     CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('');
-  const selB=$('#bl_crew');
-  if(selB) selB.innerHTML = '<option value="*">All trucks</option>' +
-    CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('');
-  renderBlockList();
   // Crews share one master calendar now, so "no calendar for this crew" is not
   // a meaningful per-crew state any more; the availability panel reports the
   // single calendar's configuration instead.
@@ -4310,6 +4287,67 @@ async function createBlockout(o){
   try{ await loadSuggData(true); }catch(e){}
   renderSuggestionsDebounced(); refreshCrewLoad();
   return 'Blocked — suggestions now steer around it.';
+}
+/* The Calendar tab's 🚫 Block time button (per Taylor: a real button, not
+   an empty-slot hunt). Same bl_* ids the old embed-card form used, so
+   blMsg() and renderBlockList() carry straight over. */
+async function calBlockCard(){
+  const old=$('#blockcard'); if(old) old.remove();
+  const wrap=document.createElement('div'); wrap.id='blockcard';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
+    'display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);'+
+    'border-radius:12px;max-width:520px;width:100%;max-height:85vh;overflow:auto;padding:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center">'+
+    '<b>\ud83d\udeab Block out time</b>'+
+    '<button type="button" class="btn ghost sm" id="bl_x">\u2715</button></div>'+
+    '<div class="small muted" style="margin-top:2px">Holiday, PTO, shop day \u2014 slot '+
+    'suggestions, capacity notes and the board all steer around a block.</div>'+
+    '<div class="row" style="margin-top:10px">'+
+    '<div><label class="f">Date</label><input type="date" id="bl_date"></div>'+
+    '<div><label class="f">Truck</label><select id="bl_crew">'+
+    '<option value="*">All trucks</option>'+
+    (CREWS||[]).map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('')+
+    '</select></div>'+
+    '<div style="max-width:110px"><label class="f">From <span class="small muted">blank = all day</span></label>'+
+    '<input type="time" id="bl_from" step="900"></div>'+
+    '<div style="max-width:110px"><label class="f">To</label>'+
+    '<input type="time" id="bl_to" step="900"></div>'+
+    '</div>'+
+    '<div class="row" style="margin-top:8px">'+
+    '<div style="flex:2"><label class="f">Reason</label>'+
+    '<input type="text" id="bl_reason" placeholder="Labor Day, PTO Shane, boom repair\u2026"></div>'+
+    '<div style="max-width:140px;align-self:flex-end">'+
+    '<button type="button" class="btn" id="bl_add" style="width:100%">Block</button></div>'+
+    '</div>'+
+    '<div id="bl_msg"></div>'+
+    '<div class="small" style="font-weight:600;margin-top:12px;padding-top:10px;'+
+    'border-top:1px solid var(--line-2)">Upcoming blockouts</div>'+
+    '<div id="bl_list" class="small" style="margin-top:6px">'+
+    '<span class="muted"><span class="spin" style="width:10px;height:10px"></span> '+
+    'loading\u2026</span></div>'+
+    '</div>';
+  document.body.appendChild(wrap);
+  $('#bl_x').onclick=()=>wrap.remove();
+  wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
+  /* default the date to the week the board is showing */
+  $('#bl_date').value = (Cal&&Cal.anchor) || calFmt(new Date());
+  $('#bl_add').onclick=async()=>{
+    const date=$('#bl_date').value;
+    if(!date){ blMsg('Pick a date to block.', true); return; }
+    const btn=$('#bl_add'); btn.disabled=true; btn.textContent='Blocking\u2026';
+    try{
+      const m = await createBlockout({ crewId: $('#bl_crew').value, date,
+        from: $('#bl_from').value || null, to: $('#bl_to').value || null,
+        reason: $('#bl_reason').value.trim() });
+      blMsg(m, false);
+      $('#bl_reason').value=''; $('#bl_from').value=''; $('#bl_to').value='';
+      renderBlockList(); renderCal();
+    }catch(e){ blMsg(e.message, true); }
+    btn.disabled=false; btn.textContent='Block';
+  };
+  try{ await loadSuggData(); }catch(e){}
+  renderBlockList();
 }
 /* The Calendar tab's "add" chooser: pencil a bid here, or block the time. */
 async function calAddCard(date, crewId, time){
@@ -5788,15 +5826,19 @@ function renderBlockList(){
         blMsg('Blockout removed.', false);
         bustSuggCache(); await loadSuggData(true);
         renderSuggestionsDebounced(); refreshCrewLoad();
+        renderBlockList();
+        try{ if(!$('#view-cal').classList.contains('hide')) renderCal(); }catch(e2){}
       }catch(e){ blMsg(e.message, true); btn.disabled=false; }
     };
   });
 }
 let blMsgTimer=null;
 function blMsg(t,bad){
-  $('#bl_msg').innerHTML='<div class="note '+(bad?'bad':'ok')+'" style="margin-top:8px">'+esc(t)+'</div>';
+  const e0=$('#bl_msg');   // lives in a popup now — it may have closed
+  if(e0) e0.innerHTML='<div class="note '+(bad?'bad':'ok')+'" style="margin-top:8px">'+esc(t)+'</div>';
+  toast(t,bad);
   clearTimeout(blMsgTimer);
-  blMsgTimer=setTimeout(()=>{$('#bl_msg').innerHTML='';}, 5000);
+  blMsgTimer=setTimeout(()=>{const e1=$('#bl_msg'); if(e1) e1.innerHTML='';}, 5000);
 }
 function bustSuggCache(){ suggData.t = 0; }
 
@@ -5949,7 +5991,7 @@ async function renderSuggestions(){
           $('#q_schedtime2').value = btn.dataset.time2 ||
             (btn.dataset.crew2 ? btn.dataset.time : '');
           SC.off=0; slotDurTouched=false; syncSlotDurField(); renderSlotHint();
-          refreshCrewLoad(); renderCalEmbed(); renderSchedCalDebounced();
+          refreshCrewLoad(); renderSchedCalDebounced();
         };
       });
       renderSchedCalDebounced();
@@ -6015,7 +6057,7 @@ async function renderSuggestions(){
         $('#q_crew').value = btn.dataset.crew;
         $('#q_schedtime').value = btn.dataset.time;
         SC.off=0;
-        refreshCrewLoad(); renderSlotHint(); renderCalEmbed(); renderSchedCalDebounced();
+        refreshCrewLoad(); renderSlotHint(); renderSchedCalDebounced();
       };
     });
     renderSchedCalDebounced();
@@ -6136,28 +6178,8 @@ async function renderCapNote(){
 
 const renderCapNoteDebounced = debounce(renderCapNote, 400);
 
-let CAL_EMBED_ID = null;
-function renderCalEmbed(){
-  const holder=$('#calembedbody'); if(!holder) return;
-  if(!CAL_EMBED_ID){ holder.innerHTML='<span class="small muted">No calendar configured.</span>'; return; }
-  const d=$('#q_scheddate').value;
-  let dates='';
-  if(d){
-    const s=new Date(d+'T00:00:00'); s.setDate(s.getDate()-((s.getDay()+6)%7));  // Monday
-    const e=new Date(s); e.setDate(e.getDate()+6);
-    const f=x=>x.toISOString().slice(0,10).replace(/-/g,'');
-    dates='&dates='+f(s)+'%2F'+f(e);
-  }
-  const src='https://calendar.google.com/calendar/embed?src='+encodeURIComponent(CAL_EMBED_ID)+
-    '&ctz=America%2FLos_Angeles&mode=WEEK&wkst=2&showTitle=0&showPrint=0&showTz=0'+
-    '&showCalendars=0&showTabs=0'+dates;
-  // Only swap the iframe when the src actually changed -- reloading Google's
-  // embed on every keystroke would flicker and hammer their servers.
-  const cur=holder.querySelector('iframe');
-  if(cur && cur.getAttribute('src')===src) return;
-  holder.innerHTML='<iframe src="'+src+'" style="width:100%;height:700px;border:1px solid '+
-    'var(--line);border-radius:8px;background:#fff" frameborder="0" scrolling="no"></iframe>';
-}
+/* renderCalEmbed (the Google iframe) retired 2026-10-09 — the internal
+   board and the Schedule mini calendar are the views now. */
 
 function renderWonHint(live){
   const box = $('#schedwon'); if(!box) return;
@@ -6240,6 +6262,24 @@ async function doUnschedule(){
    Taking a booking off without losing the quote = the Remove booking button
    (which also returns the quote to the Saved pile). Every verb saves the
    form, so there is no separate "update the calendar" step to forget. */
+/* While a save is in flight the pressed verb reads "Scheduling\u2026" and
+   every save-shaped button locks \u2014 a double-tap can't book twice. On
+   release, Save quote re-labels from whether a quote now exists. */
+function setSaveBusy(on, status){
+  const one=(id,busyTxt)=>{ const b=$('#'+id); if(!b) return;
+    if(on){ if(!b.dataset.idle) b.dataset.idle=b.textContent;
+      b.disabled=true; if(busyTxt) b.textContent=busyTxt; }
+    else{ b.disabled=false;
+      if(id==='savequote') b.textContent=State.savedQuoteId?'Update quote':'Save quote';
+      else if(b.dataset.idle) b.textContent=b.dataset.idle;
+      delete b.dataset.idle; } };
+  const plain = status!=='sent' && status!=='won' && status!=='lost';
+  one('savequote',  on&&plain          ? 'Saving\u2026'     : null);
+  one('holdquote',  on&&status==='sent'? 'Holding\u2026'    : null);
+  one('schedquote', on&&status==='won' ? 'Scheduling\u2026' : null);
+  one('sb_sched',   on&&status==='won' ? 'Scheduling\u2026' : null);
+  one('lostquote',  on&&status==='lost'? 'Saving\u2026'     : null);
+}
 async function saveQuote(status){
   const wasStatus = State.qstatus || 'draft';   // what the quote WAS, for messaging
   status = status || wasStatus;
@@ -6484,6 +6524,7 @@ async function saveQuote(status){
   q.bid_id = State.fromBidId || null;
   q.bid_notes = State.bidNotes || null;
   let svWarn = '';
+  setSaveBusy(true, status);
   try{
     const wasNew = !State.savedQuoteId;
     let saved, tries = 0;
@@ -6588,8 +6629,10 @@ async function saveQuote(status){
     renderSchedState(saved||{});
     bustSuggCache(); bustCalCache(); renderSuggestionsDebounced(); renderCapNoteDebounced();
     updateSchedMode();
-    const verb = status==='won' ? 'Scheduled.' : status==='sent' ? 'On hold.'
-               : status==='lost' ? 'Marked lost.' : (wasNew?'Saved.':'Updated.');
+    const verb = status==='won' ? '\u2713 Scheduled \u2014 booked on the calendar.'
+               : status==='sent' ? '\u2713 On hold \u2014 the slot is held on the calendar.'
+               : status==='lost' ? '\u2713 Marked lost.'
+               : (wasNew?'\u2713 Quote saved.':'\u2713 Quote updated.');
     /* Photos come back with drive_ids once the script has copied them to
        Drive — keep the local list (and its thumbnails) in step. */
     if(saved && Array.isArray(saved.site_photos)){
@@ -6606,9 +6649,23 @@ async function saveQuote(status){
       renderHistory();
     }
   }catch(e){ msg(e.message,true); }
+  finally{ setSaveBusy(false, status); }
 }
-let msgTimer=null;
+let msgTimer=null, toastTimer=null;
+/* The floating confirmation. textContent, so no escaping needed; errors
+   stay up longer because they carry reading. */
+function toast(t,bad){
+  const old=$('#toast'); if(old) old.remove();
+  const el=document.createElement('div'); el.id='toast';
+  if(bad) el.className='bad';
+  el.textContent=t;
+  document.body.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{ el.classList.add('gone');
+    setTimeout(()=>{ el.remove(); },400); }, bad?6500:4000);
+}
 function msg(t,bad){
+  toast(t,bad);
   const h='<div class="note '+(bad?'bad':'ok')+'">'+esc(t)+'</div>';
   $('#savemsg').innerHTML=h;
   const q2=$('#savemsg_q'); if(q2) q2.innerHTML=h;
@@ -6628,7 +6685,6 @@ function wire(){
   $('#q_scheddate').addEventListener('change', ()=>{ SC.off=0; SC.base=null;
     renderSchedCalDebounced(); renderSuggestionsDebounced(); });
   $('#q_crew').addEventListener('change', renderSchedCalDebounced);
-  $('#q_scheddate').addEventListener('change', renderCalEmbed);
   /* ---- internal calendar controls ---- */
   const calStep = dir => {
     const a = new Date((Cal.anchor||calFmt(new Date()))+'T00:00:00');
@@ -6639,6 +6695,7 @@ function wire(){
   $('#cal_prev').onclick = ()=>calStep(-1);
   $('#cal_next').onclick = ()=>calStep(1);
   $('#cal_today').onclick = ()=>{ Cal.anchor = calFmt(new Date()); renderCal(); };
+  $('#cal_block').onclick = ()=>calBlockCard();
   $('#cal_week').onclick = ()=>{ Cal.view='week'; renderCal(); };
   $('#cal_month').onclick = ()=>{ Cal.view='month'; renderCal(); };
   $('#cal_crew').onclick = ()=>{ location.hash = Cal.crew ? '' : '#crew'; };
@@ -6817,19 +6874,6 @@ function wire(){
     pm.textContent=files.length+' photo'+(files.length>1?'s':'')+
       ' attached — they ride to the crew\u2019s event on the next Hold/Schedule.';
   });
-    $('#bl_add').onclick=async()=>{
-    const date=$('#bl_date').value;
-    if(!date){ blMsg('Pick a date to block.', true); return; }
-    const btn=$('#bl_add'); btn.disabled=true;
-    try{
-      const m = await createBlockout({ crewId: $('#bl_crew').value, date,
-        from: $('#bl_from').value || null, to: $('#bl_to').value || null,
-        reason: $('#bl_reason').value.trim() });
-      blMsg(m, false);
-      $('#bl_reason').value=''; $('#bl_from').value=''; $('#bl_to').value='';
-    }catch(e){ blMsg(e.message, true); }
-    btn.disabled=false;
-  };
   $('#authbtn').onclick=async()=>{
     if(State.user){ SB.signOut(); renderAuth(); location.reload(); return; }
     $('#authdlg').showModal();
