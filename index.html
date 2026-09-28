@@ -12,7 +12,8 @@
   --bg:#f6f7f5; --panel:#ffffff; --panel-2:#fbfcfa; --ink:#1b2019; --muted:#5f6b5c;
   --line:#e0e4dd; --line-2:#eef1ec; --accent:#2f6b3c; --accent-ink:#ffffff;
   --accent-soft:#e8f1e9; --warn:#a8620f; --warn-soft:#fdf1e2; --danger:#a32f2f;
-  --danger-soft:#fbeaea; --good:#2f6b3c; --star:#b58a00; --shadow:0 1px 2px rgba(20,30,18,.06),0 4px 14px rgba(20,30,18,.05);
+  --danger-soft:#fbeaea; --good:#2f6b3c; --star:#b58a00; --thisq:#1d5fd6;
+  --shadow:0 1px 2px rgba(20,30,18,.06),0 4px 14px rgba(20,30,18,.05);
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
 }
@@ -20,13 +21,15 @@
   --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
   --line:#2a3025; --line-2:#222719; --accent:#6fbf7f; --accent-ink:#0f1410;
   --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585; --star:#e0c34d;
-  --danger-soft:#2a1717; --good:#6fbf7f; --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
+  --danger-soft:#2a1717; --good:#6fbf7f; --thisq:#7fb0f5;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
 }}
 :root[data-theme="dark"]{
   --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
   --line:#2a3025; --line-2:#222719; --accent:#6fbf7f; --accent-ink:#0f1410;
   --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585; --star:#e0c34d;
-  --danger-soft:#2a1717; --good:#6fbf7f; --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
+  --danger-soft:#2a1717; --good:#6fbf7f; --thisq:#7fb0f5;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
@@ -1127,7 +1130,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-13-onenote';   // shown in the header; check it after deploying
+const BUILD = '2026-10-14-tripyards';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4000,18 +4003,34 @@ async function calFetch(from, to){
   const jobs = [];
   (raw||[]).forEach(b=>{
     const hold = b.status==='sent';
-    const push = (crew,date,time,hours,lbl,si)=>{ if(date) jobs.push({qid:b.id,
-      customer:b.customer_name||'', product:b.product||'', yards:Number(b.yards)||0,
+    const totY = Number(b.yards)||0;
+    /* Per Taylor: each calendar entry shows THAT TRIP's yards, not the
+       whole project. Slots split by their load counts; a legacy
+       two-truck split goes by each leg's hours; one trip = the total. */
+    const push = (crew,date,time,hours,lbl,si,y)=>{ if(date) jobs.push({qid:b.id,
+      customer:b.customer_name||'', product:b.product||'',
+      yards: (y!=null? y : totY), totYards: totY,
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
       hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
-      b.slots.forEach((sl,i)=>push(sl.crew_id||b.crew_id, sl.date, sl.time, sl.hours,
-        (sl.to>sl.from ? 'loads '+sl.from+'–'+sl.to : 'load '+sl.from), i));
+      const L = b.slots.reduce((m,sl)=>Math.max(m, Number(sl.to)||Number(sl.from)||0), 0)
+             || b.slots.length;
+      b.slots.forEach((sl,i)=>{
+        const n = (sl.to>sl.from) ? (sl.to-sl.from+1) : 1;
+        push(sl.crew_id||b.crew_id, sl.date, sl.time, sl.hours,
+          (sl.to>sl.from ? 'loads '+sl.from+'–'+sl.to : 'load '+sl.from), i,
+          Math.round(totY*n/L*10)/10);
+      });
     }else if(b.crew2_id){
-      push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours, 'load 1', 0);
+      const h1=Number(b.scheduled_hours)||1;
+      const h2=Number(b.scheduled_hours2)||h1;
+      const y1=Math.round(totY*h1/(h1+h2)*10)/10;
+      push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours,
+        'load 1', 0, y1);
       push(b.crew2_id, b.scheduled_date2||b.scheduled_date,
            b.scheduled_time2||b.scheduled_time,
-           b.scheduled_hours2||b.scheduled_hours, 'load 2', 1);
+           b.scheduled_hours2||b.scheduled_hours, 'load 2', 1,
+           Math.round((totY-y1)*10)/10);
     }else push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours, '', 0);
   });
   const gEvents = [];
@@ -4131,8 +4150,10 @@ function tgEvent(it, crew){
     (it.hold?'border-style:dashed;opacity:.75;':'')+'">'+
     '<b>'+esc(timeTxt)+'</b>'+(it.hold?' <span class="muted">HOLD</span>':'')+
     '<br>'+esc(it.customer)+
-    (it.yards?'<div class="muted" style="font-size:10.5px">'+Math.round(it.yards)+'yd '+
-      esc(it.product)+(it.lbl?' · '+esc(it.lbl):'')+'</div>':'')+'</div>';
+    (it.yards?'<div class="muted" style="font-size:10.5px">'+(Math.round(it.yards*10)/10)+'yd '+
+      esc(it.product)+(it.lbl?' · '+esc(it.lbl):'')+
+      (it.totYards&&it.totYards>it.yards?' <span style="opacity:.75">(of '+
+        (Math.round(it.totYards*10)/10)+')</span>':'')+'</div>':'')+'</div>';
 }
 function tgBanner(it, crew){
   const col = it.block ? 'var(--danger)'
@@ -4865,7 +4886,7 @@ async function renderSchedCal(){
       Math.max(14,((e0-s0)/60*SC.PXH-2)).toFixed(1)+'px;'; };
   let html='<div class="row" style="align-items:center;margin-bottom:4px">'+
     '<span class="small" style="font-weight:600;align-self:center">Week of '+esc(dfmt(from))+'</span>'+
-    '<span class="small muted sclegend" style="align-self:center">· <span style="color:var(--star);font-weight:700">★ yellow dash</span> = best · green dash = suggested · tap to book · solid = taken</span>'+
+    '<span class="small muted sclegend" style="align-self:center">· <span style="color:var(--star);font-weight:700">★ yellow dash</span> = best · green dash = suggested · <span style="color:var(--thisq);font-weight:700">blue = this quote</span> · solid = taken</span>'+
     '<span style="flex:1 1 auto"></span>'+
     '<button type="button" class="btn ghost sm" id="sc_prev" style="flex:0 0 auto;padding:3px 10px">‹</button>'+
     '<button type="button" class="btn ghost sm" id="sc_today" style="flex:0 0 auto;padding:3px 10px">This week</button>'+
@@ -4934,11 +4955,14 @@ async function renderSchedCal(){
         (g.star?'★ ':'')+esc(fmtMin(toMin(x.time)))+'</div>';
     });
     if(selDate===date && String(selCrew)===String(c.id) && selTime){
+      /* BLUE on purpose (per Taylor): nothing else on the board is blue,
+         so the quote being worked on is findable at a glance. */
       cell+='<div title="This quote" style="position:absolute;left:0;right:0;'+
         pos(selTime, slotDuration()||2)+
-        'outline:2px solid var(--accent);outline-offset:-1px;border-radius:4px;'+
-        'background:var(--accent-soft);opacity:.9;z-index:2;padding:0 2px;'+
-        'font-weight:700;color:var(--accent)">this quote</div>';
+        'outline:2px solid var(--thisq);outline-offset:-1px;border-radius:4px;'+
+        'background:color-mix(in srgb, var(--thisq) 16%, transparent);'+
+        'z-index:2;padding:0 2px;'+
+        'font-weight:700;color:var(--thisq)">this quote</div>';
     }
     cell+='</div>';
     html+=cell;
@@ -5039,17 +5063,31 @@ function calCard(r, rep){
   wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
     'display:flex;align-items:center;justify-content:center;padding:16px';
   const addr=[r.address_raw,r.city,r.zip].filter(Boolean).join(', ');
+  /* Per Taylor: each trip line carries ITS yards, not the project total. */
+  const totY_=Number(r.yards)||0;
+  const y1_=(h1,h2)=>Math.round(totY_*h1/(h1+h2)*10)/10;
   const loads = Array.isArray(r.slots)&&r.slots.length
-    ? r.slots.map(sl=>{
-        const nm=((CREWS||[]).find(c=>String(c.id)===String(sl.crew_id))||{}).name;
-        return esc(dfmt(sl.date))+' '+(sl.time?esc(fmtMin(toMin(String(sl.time).slice(0,5)))):'')+
-          (nm?' · '+esc(nm):'')+' (load'+((sl.to>sl.from)?'s '+sl.from+'–'+sl.to:' '+sl.from)+')';
-      }).join('<br>')
+    ? (()=>{ const L=r.slots.reduce((m,sl)=>Math.max(m,Number(sl.to)||Number(sl.from)||0),0)
+               || r.slots.length;
+        return r.slots.map(sl=>{
+          const nm=((CREWS||[]).find(c=>String(c.id)===String(sl.crew_id))||{}).name;
+          const n=(sl.to>sl.from)?(sl.to-sl.from+1):1;
+          const y=Math.round(totY_*n/L*10)/10;
+          return esc(dfmt(sl.date))+' '+(sl.time?esc(fmtMin(toMin(String(sl.time).slice(0,5)))):'')+
+            (nm?' · '+esc(nm):'')+' (load'+((sl.to>sl.from)?'s '+sl.from+'–'+sl.to:' '+sl.from)+')'+
+            (totY_?' · <b>'+y+' yd</b>':'');
+        }).join('<br>'); })()
     : (r.scheduled_date ? esc(dfmt(r.scheduled_date))+
         (r.scheduled_time?' · '+esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5)))):'')+
-        (r.crew2_id&&r.scheduled_time2?'<br>Load 2: '+
-          esc(dfmt(r.scheduled_date2||r.scheduled_date))+' · '+
-          esc(fmtMin(toMin(String(r.scheduled_time2).slice(0,5)))):'') : '');
+        (r.crew2_id&&r.scheduled_time2
+          ? (totY_?' · <b>'+y1_(Number(r.scheduled_hours)||1,
+              (Number(r.scheduled_hours2)||Number(r.scheduled_hours)||1))+' yd</b>':'')+
+            '<br>Load 2: '+
+            esc(dfmt(r.scheduled_date2||r.scheduled_date))+' · '+
+            esc(fmtMin(toMin(String(r.scheduled_time2).slice(0,5))))+
+            (totY_?' · <b>'+(Math.round((totY_-y1_(Number(r.scheduled_hours)||1,
+              (Number(r.scheduled_hours2)||Number(r.scheduled_hours)||1)))*10)/10)+' yd</b>':'')
+          : '') : '');
   const statusTag = (rep||office) ? (r.status==='won'
       ? '<span class="tag g">Scheduled</span>'
       : r.status==='sent' ? '<span class="tag w">ON HOLD</span>'
@@ -5067,7 +5105,10 @@ function calCard(r, rep){
       '<div class="small" style="margin-top:4px">📞 <a href="tel:'+
       esc(String(r.phone).replace(/[^\d+]/g,''))+'">'+esc(r.phone)+'</a></div>':'')+
     '<div style="margin-top:6px">'+esc((r.yards||0)+' yd of '+(r.product||''))+
-    (Number(r.depth_in)>0?' at '+Number(r.depth_in)+'&Prime;':'')+'</div>'+
+    (Number(r.depth_in)>0?' at '+Number(r.depth_in)+'&Prime;':'')+
+    (((Array.isArray(r.slots)&&r.slots.length>1)||r.crew2_id)
+      ?' <span class="muted small">(project total — per-trip yards below)</span>':'')+
+    '</div>'+
     /* Hours are rep-only for now (per Taylor 2026-10-09: hide Project
        Hours on the crew card too — the crew card carries no hours line). */
     (rep
