@@ -1123,7 +1123,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-16-terraseed';   // shown in the header; check it after deploying
+const BUILD = '2026-10-17-crewsplit';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1704,7 +1704,8 @@ const LiveDB = {
       '&scheduled_date=lte.'+encodeURIComponent(to)+
       '&status=in.(sent,won)&limit=500';
     const base='quotes?select=id,product,yards,customer_name,address_raw,status,crew_id,'+
-      'scheduled_date,scheduled_time,scheduled_hours,equip_hours,crew2_id,scheduled_time2';
+      'scheduled_date,scheduled_time,scheduled_hours,equip_hours,crew2_id,scheduled_time2,'+
+      'account_no,so_no,project_no';
     try{
       const r = await SB.rest(base+',scheduled_date2,scheduled_hours2,slots'+tail);
       this.hasDate2 = true; this.hasSlots = true;
@@ -4007,9 +4008,11 @@ async function calFetch(from, to){
     /* Per Taylor: each calendar entry shows THAT TRIP's yards, not the
        whole project. Slots split by their load counts; a legacy
        two-truck split goes by each leg's hours; one trip = the total. */
+    const erpN = [b.account_no, b.so_no, b.project_no].filter(v=>v&&String(v).trim()).length;
     const push = (crew,date,time,hours,lbl,si,y)=>{ if(date) jobs.push({qid:b.id,
       customer:b.customer_name||'', product:b.product||'',
       yards: (y!=null? y : totY), totYards: totY,
+      erp: erpN===3 ? 'full' : erpN ? 'partial' : 'none',
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
       hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
@@ -4172,9 +4175,18 @@ function tgEvent(it, crew){
     '<b>'+esc(timeTxt)+'</b>'+(it.hold?' <span class="muted">HOLD</span>':'')+
     '<br>'+esc(it.customer)+
     (it.yards?'<div class="muted" style="font-size:10.5px">'+(Math.round(it.yards*10)/10)+'yd '+
-      esc(it.product)+(it.lbl?' · '+esc(it.lbl):'')+
-      (it.totYards&&it.totYards>it.yards?' <span style="opacity:.75">(of '+
-        (Math.round(it.totYards*10)/10)+')</span>':'')+'</div>':'')+'</div>';
+      esc(it.product)+
+      /* Crew/driver: THEIR trip only — no cross-truck load labels, no
+         project total (per Taylor: "just display what is relevant"). */
+      (it.lbl && !Cal.crew ? ' · '+esc(it.lbl):'')+
+      (!Cal.crew && it.totYards && it.totYards>it.yards ? ' <span style="opacity:.75">(of '+
+        (Math.round(it.totYards*10)/10)+')</span>':'')+
+      /* ERP badge, rep/office only: which bookings still need numbers. */
+      (!Cal.crew && it.erp ? (it.erp==='full'
+        ? ' <span style="color:var(--good);font-weight:700">✓#s</span>'
+        : ' <span style="color:var(--warn);font-weight:700">'+
+          (it.erp==='partial'?'#s…':'no #s')+'</span>') : '')+
+      '</div>':'')+'</div>';
 }
 function tgBanner(it, crew){
   const col = it.block ? 'var(--danger)'
@@ -4264,7 +4276,7 @@ function wireTimegrid(grid){
   /* Drag to move: vertical = retime (15-min snap), across = day/truck. */
   grid.querySelectorAll('.tgev.app').forEach(ch=>{
     ch.onclick = e=>{ e.stopPropagation();
-      if(Cal.crew || OfficePortal) openCalItem(ch.dataset.qid); };
+      if(Cal.crew || OfficePortal) openCalItem(ch.dataset.qid, ch.dataset.crew); };
     ch.addEventListener('pointerdown', e=>{
       if(Cal.crew || OfficePortal || e.button) return;
       e.preventDefault();
@@ -4855,10 +4867,10 @@ function renderSchedBooked(){
   };
   $('#sb_remove').onclick=()=>doUnschedule();
 }
-async function openCalItem(qid){
+async function openCalItem(qid, crewId){
   let r = null; try{ r = await DB.getQuote(qid); }catch(e){}
   if(!r) return;
-  calCard(r, !Cal.crew);
+  calCard(r, !Cal.crew, crewId);
 }
 /* ---- the MINI internal calendar inside the quote's Schedule section ----
    The same data as the Calendar tab (calFetch: app bookings + Google overlay
@@ -5113,10 +5125,11 @@ function wireCalChips(grid){
    Rep flavor: adds status + the money line + "Open full quote" — the rep
    stays on the board unless they choose to edit. Neither shows site or
    customer history: the card is about THIS job, the builder is for digging. */
-function crewCard(r){ calCard(r, false); }
-function calCard(r, rep){
+function crewCard(r, focusCrew){ calCard(r, false, focusCrew); }
+function calCard(r, rep, focusCrew){
   const office = (typeof OfficePortal!=='undefined' && OfficePortal);
   if(office) rep = false;   // office is its own flavor, never the rep card
+  const crewView = !rep && !office;   // crew or driver: THEIR truck only
   const old=$('#crewcard'); if(old) old.remove();
   const wrap=document.createElement('div'); wrap.id='crewcard';
   wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
@@ -5125,28 +5138,48 @@ function calCard(r, rep){
   /* Per Taylor: each trip line carries ITS yards, not the project total. */
   const totY_=Number(r.yards)||0;
   const y1_=(h1,h2)=>Math.round(totY_*h1/(h1+h2)*10)/10;
+  /* crewView (per Taylor): a crew opening a split job sees ONLY their
+     truck's trips, with no "load 1 of 2" framing — that wording is the
+     rep's cross-truck picture. crewShare collects their yards for the
+     volume line. */
+  const mine = cid => !crewView || !focusCrew || String(cid)===String(focusCrew);
+  let crewShare = null;
   const loads = Array.isArray(r.slots)&&r.slots.length
     ? (()=>{ const L=r.slots.reduce((m,sl)=>Math.max(m,Number(sl.to)||Number(sl.from)||0),0)
                || r.slots.length;
-        return r.slots.map(sl=>{
+        const rows=r.slots.filter(sl=>mine(sl.crew_id||r.crew_id));
+        if(crewView && focusCrew && rows.length)
+          crewShare = Math.round(rows.reduce((a,sl)=>{
+            const n=(sl.to>sl.from)?(sl.to-sl.from+1):1;
+            return a + totY_*n/L; },0)*10)/10;
+        return rows.map(sl=>{
           const nm=((CREWS||[]).find(c=>String(c.id)===String(sl.crew_id))||{}).name;
           const n=(sl.to>sl.from)?(sl.to-sl.from+1):1;
           const y=Math.round(totY_*n/L*10)/10;
           return esc(dfmt(sl.date))+' '+(sl.time?esc(fmtMin(toMin(String(sl.time).slice(0,5)))):'')+
-            (nm?' · '+esc(nm):'')+' (load'+((sl.to>sl.from)?'s '+sl.from+'–'+sl.to:' '+sl.from)+')'+
+            (nm?' · '+esc(nm):'')+
+            (crewView?'':' (load'+((sl.to>sl.from)?'s '+sl.from+'–'+sl.to:' '+sl.from)+')')+
             (totY_?' · <b>'+y+' yd</b>':'');
         }).join('<br>'); })()
-    : (r.scheduled_date ? esc(dfmt(r.scheduled_date))+
-        (r.scheduled_time?' · '+esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5)))):'')+
-        (r.crew2_id&&r.scheduled_time2
-          ? (totY_?' · <b>'+y1_(Number(r.scheduled_hours)||1,
-              (Number(r.scheduled_hours2)||Number(r.scheduled_hours)||1))+' yd</b>':'')+
-            '<br>Load 2: '+
-            esc(dfmt(r.scheduled_date2||r.scheduled_date))+' · '+
-            esc(fmtMin(toMin(String(r.scheduled_time2).slice(0,5))))+
-            (totY_?' · <b>'+(Math.round((totY_-y1_(Number(r.scheduled_hours)||1,
-              (Number(r.scheduled_hours2)||Number(r.scheduled_hours)||1)))*10)/10)+' yd</b>':'')
-          : '') : '');
+    : (r.scheduled_date ? (()=>{
+        const h1=Number(r.scheduled_hours)||1;
+        const h2=Number(r.scheduled_hours2)||h1;
+        const split=!!(r.crew2_id&&r.scheduled_time2);
+        const yA=split?y1_(h1,h2):totY_, yB=split?Math.round((totY_-y1_(h1,h2))*10)/10:0;
+        const lineA=esc(dfmt(r.scheduled_date))+
+          (r.scheduled_time?' · '+esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5)))):'')+
+          (split&&totY_?' · <b>'+yA+' yd</b>':'');
+        const lineB=!split?'':
+          (crewView?'':'Load 2: ')+
+          esc(dfmt(r.scheduled_date2||r.scheduled_date))+' · '+
+          esc(fmtMin(toMin(String(r.scheduled_time2).slice(0,5))))+
+          (totY_?' · <b>'+yB+' yd</b>':'');
+        if(crewView && focusCrew && split){
+          if(String(focusCrew)===String(r.crew_id)){ crewShare=yA; return lineA; }
+          if(String(focusCrew)===String(r.crew2_id)){ crewShare=yB; return lineB; }
+        }
+        return lineA + (lineB?'<br>'+lineB:'');
+      })() : '');
   const statusTag = (rep||office) ? (r.status==='won'
       ? '<span class="tag g">Scheduled</span>'
       : r.status==='sent' ? '<span class="tag w">ON HOLD</span>'
@@ -5163,10 +5196,15 @@ function calCard(r, rep){
     ((rep||office||(typeof DriverView!=='undefined'&&DriverView))&&r.phone?
       '<div class="small" style="margin-top:4px">📞 <a href="tel:'+
       esc(String(r.phone).replace(/[^\d+]/g,''))+'">'+esc(r.phone)+'</a></div>':'')+
-    '<div style="margin-top:6px">'+esc((r.yards||0)+' yd of '+(r.product||''))+
+    '<div style="margin-top:6px">'+
+    (crewShare!=null
+      ? esc(crewShare+' yd of '+(r.product||''))
+      : esc((r.yards||0)+' yd of '+(r.product||'')))+
     (Number(r.depth_in)>0?' at '+Number(r.depth_in)+'&Prime;':'')+
-    (((Array.isArray(r.slots)&&r.slots.length>1)||r.crew2_id)
-      ?' <span class="muted small">(project total — per-trip yards below)</span>':'')+
+    (crewShare!=null
+      ? ' <span class="muted small">(your truck’s share)</span>'
+      : (((Array.isArray(r.slots)&&r.slots.length>1)||r.crew2_id)
+          ?' <span class="muted small">(project total — per-trip yards below)</span>':''))+
     '</div>'+
     /* Hours are rep-only for now (per Taylor 2026-10-09: hide Project
        Hours on the crew card too — the crew card carries no hours line). */
