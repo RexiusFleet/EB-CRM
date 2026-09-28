@@ -1120,7 +1120,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-12-authgate';   // shown in the header; check it after deploying
+const BUILD = '2026-10-12-erpsave';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -5127,7 +5127,14 @@ function calCard(r, rep){
                  so_no:      $('#cc_so').value.trim()||null,
                  project_no: $('#cc_pn').value.trim()||null };
     try{
-      await DB.patchQuote(r.id, vals);
+      const upd = await DB.patchQuote(r.id, vals);
+      /* PostgREST reports an empty success when RLS matches 0 rows (the
+         office assistant hit this — sql/18's sync-bot failure, again).
+         An empty save is a FAILURE and says which sql file fixes it. */
+      if(DB.mode!=='demo' && !upd)
+        throw new Error('Nothing saved — this sign-in is not allowed to update '+
+          'this quote. Run sql/35_office_update.sql in Supabase, and check the '+
+          'user is registered in office_users.');
       Object.assign(r, vals);
       let m='Saved.';
       const backend=await calendarBackend();
