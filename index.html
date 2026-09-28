@@ -1111,7 +1111,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-10-officeportal';   // shown in the header; check it after deploying
+const BUILD = '2026-10-10-officeqty';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4866,13 +4866,20 @@ function calCard(r, rep){
     /* Office money box (per Taylor): the three revenue lines + their
        total, and NOTHING else — no bid amount, costs, margins or notes. */
     (office?(function(){
-      const m3=[['Material',r.material_rev],['Labor',r.labor_rev],
-                ['Equipment',r.equip_rev]];
+      /* Each line carries its quantity (per Taylor): Material 15 yd
+         Hemlock, Labor 4.5 hr, Equipment 3.75 hr. */
+      const qty=h=>h!=null&&!isNaN(h)?Number(h).toFixed(2).replace(/\.?0+$/,'')+' hr':'';
+      const m3=[
+        ['Material', r.material_rev,
+          (r.yards?r.yards+' yd'+(r.product?' '+r.product:''):'')],
+        ['Labor',     r.labor_rev,  qty(r.labor_hours)],
+        ['Equipment', r.equip_rev,  qty(r.equip_hours)]];
       const tot=m3.reduce((a,x)=>a+(Number(x[1])||0),0);
       return '<div style="margin-top:10px;border:1px solid var(--line);'+
         'border-radius:10px;padding:8px 12px">'+
         '<div class="small" style="font-weight:600;margin-bottom:4px">Revenue</div>'+
-        m3.map(x=>'<div class="kv"><span class="k">'+x[0]+'</span><b>'+
+        m3.map(x=>'<div class="kv"><span class="k">'+x[0]+
+          (x[2]?' <span class="muted">· '+esc(x[2])+'</span>':'')+'</span><b>'+
           (x[1]!=null?money(x[1]):'—')+'</b></div>').join('')+
         '<div class="kv" style="border-top:1px solid var(--line-2);margin-top:4px;'+
         'padding-top:4px"><span class="k">Total</span><b>'+money(tot)+'</b></div>'+
