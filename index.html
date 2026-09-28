@@ -1123,7 +1123,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-17-nooverlay';   // shown in the header; check it after deploying
+const BUILD = '2026-10-18-importbadge';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4147,14 +4147,18 @@ function tgEvent(it, crew){
     (it.hold?'border-style:dashed;opacity:.75;':'')+'">'+
     '<b>'+esc(timeTxt)+'</b>'+(it.hold?' <span class="muted">HOLD</span>':'')+
     '<br>'+esc(it.customer)+
-    (it.yards?'<div class="muted" style="font-size:10.5px">'+(Math.round(it.yards*10)/10)+'yd '+
-      esc(it.product)+
+    ((it.yards || (!Cal.crew && it.erp))
+      ?'<div class="muted" style="font-size:10.5px">'+
+      (it.yards?(Math.round(it.yards*10)/10)+'yd '+esc(it.product||''):'')+
       /* Crew/driver: THEIR trip only — no cross-truck load labels, no
          project total (per Taylor: "just display what is relevant"). */
-      (it.lbl && !Cal.crew ? ' · '+esc(it.lbl):'')+
-      (!Cal.crew && it.totYards && it.totYards>it.yards ? ' <span style="opacity:.75">(of '+
+      (it.yards && it.lbl && !Cal.crew ? ' · '+esc(it.lbl):'')+
+      (!Cal.crew && it.yards && it.totYards && it.totYards>it.yards
+        ? ' <span style="opacity:.75">(of '+
         (Math.round(it.totYards*10)/10)+')</span>':'')+
-      /* ERP badge, rep/office only: which bookings still need numbers. */
+      /* ERP badge, rep/office only: which bookings still need numbers.
+         NOT gated on yards — imported Google events have none (field
+         report: the badge did not carry over to imported events). */
       (!Cal.crew && it.erp ? (it.erp==='full'
         ? ' <span style="color:var(--good);font-weight:700">✓#s</span>'
         : ' <span style="color:var(--warn);font-weight:700">'+
