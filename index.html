@@ -1130,7 +1130,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-15-fastboard';   // shown in the header; check it after deploying
+const BUILD = '2026-10-15-importfix';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4420,10 +4420,12 @@ function importParse(events){
   (events||[]).forEach(e=>{
     if(!e || !e.date) return;
     if(e.block){
+      const mm2t = m => String(Math.floor(m/60)).padStart(2,'0')+':'+
+        String(Math.round(m%60)).padStart(2,'0');
       blocks.push({ crew_id:String(e.crew||'*'), date:e.date,
         from: e.allDay?null:(e.time||null),
         to: (!e.allDay && e.time && e.hours)
-          ? hhmm(toMin(e.time)+Math.round(Number(e.hours)*60)) : null,
+          ? mm2t(toMin(e.time)+Math.round(Number(e.hours)*60)) : null,
         reason: String(e.summary||'blocked')
           .replace(/^🚫\s*/,'').replace(/^CLOSED\s*[—-]\s*/i,'').trim()||'blocked' });
     }else{
@@ -4520,7 +4522,13 @@ async function calImportCard(){
       'calendar: '+esc(failed[0].err)+'</div>'); return;
   }
   const events=parts.flatMap(p=>p.ev||[]);
-  const {jobs, blocks}=importParse(events);
+  let jobs, blocks;
+  try{ ({jobs, blocks}=importParse(events)); }
+  catch(e){
+    shell('<div class="note bad" style="margin-top:10px">The calendar answered, but '+
+      'one of its events could not be read: '+esc(e.message)+'</div>');
+    return;
+  }
   const failNote = failed.length
     ? '<div class="note bad" style="margin-top:8px">⚠ '+failed.length+' of '+win.length+
       ' calendar windows did not answer ('+esc(failed[0].err)+') — the list below is '+
@@ -4535,6 +4543,7 @@ async function calImportCard(){
   }
   const crewOpts=(sel)=> (CREWS||[]).map(c=>'<option value="'+esc(c.id)+'"'+
     (String(sel)===String(c.id)?' selected':'')+'>'+esc(c.name)+'</option>').join('');
+  try{
   shell(failNote+
     '<div class="small muted" style="margin-top:6px">Manual Google events for the next '+
     '120 days (app-made bookings are already here). Jobs become scheduled entries; '+
@@ -4586,6 +4595,10 @@ async function calImportCard(){
       (r.errs.length?' — '+r.errs.length+' failed: '+r.errs[0]:'');
     calMsg(m, !!r.errs.length); toast(m, !!r.errs.length);
   };
+  }catch(e){
+    shell('<div class="note bad" style="margin-top:10px">Could not draw the import '+
+      'list: '+esc(e.message)+'</div>');
+  }
 }
 /* The Calendar tab's 🚫 Block time button (per Taylor: a real button, not
    an empty-slot hunt). Same bl_* ids the old embed-card form used, so
