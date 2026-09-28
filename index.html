@@ -1130,7 +1130,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-14-tripyards';   // shown in the header; check it after deploying
+const BUILD = '2026-10-14-fastimport';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4464,24 +4464,49 @@ async function calImportCard(){
       'Google calendar connection (Rate Card → Check). Nothing to import in demo mode.</div>');
     return;
   }
-  shell('<div class="small muted" style="margin-top:8px"><span class="spin"></span> '+
-    'Reading the Google calendar…</div>');
-  const from=calFmt(new Date());
-  const toD=new Date(); toD.setDate(toD.getDate()+120);
-  let events=null;
-  try{ events=await GS.busy(from, calFmt(toD)); }
-  catch(e){ shell('<div class="note bad" style="margin-top:10px">Could not read the '+
-    'calendar: '+esc(e.message)+'</div>'); return; }
+  /* One 120-day busy call took forever (field report) — Apps Script cold
+     start plus a four-month event scan in a single request. Read the four
+     30-day windows IN PARALLEL instead: total wait = the slowest window,
+     and the counter shows life while Google wakes up. */
+  const win=[]; {
+    const d0=new Date();
+    for(let k=0;k<4;k++){
+      const a=new Date(d0); a.setDate(a.getDate()+k*30+(k?1:0));
+      const b2=new Date(d0); b2.setDate(b2.getDate()+(k+1)*30);
+      win.push([calFmt(a), calFmt(b2)]);
+    }
+  }
+  let done=0;
+  const prog=()=>shell('<div class="small muted" style="margin-top:8px">'+
+    '<span class="spin"></span> Reading the Google calendar… '+done+'/'+win.length+
+    ' windows'+(done===0?' <span class="muted">(the calendar script can take ~10 s '+
+    'to wake up)</span>':'')+'</div>');
+  prog();
+  const parts=await Promise.all(win.map(w=>
+    GS.busy(w[0], w[1]).then(ev=>{ done++; prog(); return {ev}; })
+      .catch(e=>{ done++; prog(); return {err:e.message, w}; })));
+  const failed=parts.filter(p=>p.err);
+  if(failed.length===win.length){
+    shell('<div class="note bad" style="margin-top:10px">Could not read the '+
+      'calendar: '+esc(failed[0].err)+'</div>'); return;
+  }
+  const events=parts.flatMap(p=>p.ev||[]);
   const {jobs, blocks}=importParse(events);
+  const failNote = failed.length
+    ? '<div class="note bad" style="margin-top:8px">⚠ '+failed.length+' of '+win.length+
+      ' calendar windows did not answer ('+esc(failed[0].err)+') — the list below is '+
+      'missing '+failed.map(f=>esc(dfmt(f.w[0]))+'–'+esc(dfmt(f.w[1]))).join(', ')+
+      '. Import what shows, then reopen to retry the rest.</div>'
+    : '';
   if(!jobs.length && !blocks.length){
-    shell('<div class="note ok" style="margin-top:10px">Nothing to import — every event '+
+    shell(failNote+'<div class="note ok" style="margin-top:10px">Nothing to import — every event '+
       'on the Google calendar for the next 120 days was made by this app (those are '+
       'already on the app calendar).</div>');
     return;
   }
   const crewOpts=(sel)=> (CREWS||[]).map(c=>'<option value="'+esc(c.id)+'"'+
     (String(sel)===String(c.id)?' selected':'')+'>'+esc(c.name)+'</option>').join('');
-  shell(
+  shell(failNote+
     '<div class="small muted" style="margin-top:6px">Manual Google events for the next '+
     '120 days (app-made bookings are already here). Jobs become scheduled entries; '+
     'blocks land in the internal blockout list. <b>Google is not changed</b> — until '+
