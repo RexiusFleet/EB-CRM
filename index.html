@@ -1122,7 +1122,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-06-mobilepass';   // shown in the header; check it after deploying
+const BUILD = '2026-10-07-crewhours';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4803,8 +4803,14 @@ function calCard(r, rep){
       esc(String(r.phone).replace(/[^\d+]/g,''))+'">'+esc(r.phone)+'</a></div>':'')+
     '<div style="margin-top:6px">'+esc((r.yards||0)+' yd of '+(r.product||''))+
     (Number(r.depth_in)>0?' at '+Number(r.depth_in)+'&Prime;':'')+'</div>'+
-    '<div class="small" style="margin-top:2px">Equipment '+esc(hrs(r.equip_hours))+
-    ' · Labor '+esc(hrs(r.labor_hours))+'</div>'+
+    /* Crew flavor (per Taylor): one number the crew plans around —
+       "Project Hours" = the equipment hours. Labor/Equipment split is
+       rep-only detail. */
+    (rep
+      ? '<div class="small" style="margin-top:2px">Equipment '+esc(hrs(r.equip_hours))+
+        ' · Labor '+esc(hrs(r.labor_hours))+'</div>'
+      : '<div class="small" style="margin-top:2px">Project Hours: '+
+        esc(hrs(r.equip_hours))+'</div>')+
     (loads?'<div class="small" style="margin-top:4px">'+loads+'</div>':'')+
     (rep?'<div style="margin-top:8px"><b>'+
       (r.bid_amount!=null?money(r.bid_amount):(r.target_price!=null?money(r.target_price)+
