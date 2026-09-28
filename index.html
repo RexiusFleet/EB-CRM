@@ -333,13 +333,18 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             <button class="btn ghost sm" id="clearsite"
               title="Clear the customer and address fields — the rest of the quote stays">Clear site</button></h3>
           <div class="body grid" style="gap:12px">
+            <!-- Customer name gets its OWN line (per Taylor) — long names
+                 were fighting three other fields for the row. Contact
+                 details sit on the line below. -->
             <div class="row">
-              <div style="flex:2"><label class="f">Customer name</label>
+              <div style="flex:1 1 100%"><label class="f">Customer name</label>
                 <div class="addrwrap" id="custwrap">
                   <input type="text" id="q_customer" autocomplete="off"
                          placeholder="Click to browse, or type a new customer">
                   <div class="results hide" id="custresults"></div>
                 </div></div>
+            </div>
+            <div class="row">
               <div style="min-width:170px"><label class="f">Phone</label><input type="text" id="q_phone" placeholder="(541) 555-0100"></div>
               <!-- flex:0 0 + min-width: the 9-digit customer number must
                    never squeeze narrower than it prints (field report). -->
@@ -777,18 +782,6 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   </div>
 </form></dialog>
 
-<!-- Shown when a rep edits a customer name or address that was filled from an
-     existing record. Guessing silently either way would be wrong: keeping the
-     record's value hides a genuine correction, keeping the edit can silently
-     detach a quote from the customer's history. So the rep decides. -->
-<dialog id="editdlg"><div class="dlg">
-  <h2>Confirm this change</h2>
-  <div id="editdlgmsg" class="small" style="margin:8px 0 16px"></div>
-  <div class="row">
-    <button class="btn" id="editkeep">Keep my edit</button>
-    <button class="btn ghost" id="editrestore">Put the original back</button>
-  </div>
-</div></dialog>
 
 <!-- engine.js inlined at build time (etl/build.py) so this file is
      entirely self-contained: nothing else needs deploying with it. -->
@@ -1130,7 +1123,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-15-importfix';   // shown in the header; check it after deploying
+const BUILD = '2026-10-16-terraseed';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3338,7 +3331,6 @@ async function quotesAutoTick(){
   const view=$('#view-quotes');
   if(!view || view.classList.contains('hide')) return;
   if(document.visibilityState!=='visible') return;
-  const dlg=$('#editdlg'); if(dlg && dlg.open) return;
   let rows; try{ rows=await DB.listQuotes(); }catch(e){ return; }
   if(JSON.stringify(rows)!==quotesListHash){
     flashQuotesMsg('Updated — the schedule changed on the calendar or in another session.');
@@ -7132,39 +7124,18 @@ function wire(){
   $('#q_drive').addEventListener('input',()=>{autoFill.drive=false; recalc();});
   $('#q_blow').addEventListener('input',()=>{autoFill.blow=false; recalc();});
   $('#q_bid').addEventListener('input',recalc);
-  /* A field that was filled from an existing record does not change silently:
-     the rep confirms the edit (or puts the original back). Picking a different
-     site from the dropdown is already an explicit choice, so only typed edits
-     -- which fire 'change' -- go through the dialog. */
-  function confirmPrefillEdit(field, label, oldVal, onKeep){
-    const dlg=$('#editdlg'); if(!dlg || !dlg.showModal){ State.prefill[field]=null; if(onKeep) onKeep(); return; }
-    const now=$(field==='customer'?'#q_customer':'#q_address').value.trim();
-    $('#editdlgmsg').innerHTML =
-      'The '+label+' was filled from an existing customer record:<br>'+
-      '<b>'+esc(oldVal)+'</b><br>and you changed it to:<br><b>'+esc(now)+'</b><br><br>'+
-      'Keep your edit, or put the record’s value back?';
-    dlg.showModal();
-    $('#editkeep').onclick=()=>{ dlg.close(); State.prefill[field]=null; if(onKeep) onKeep(); };
-    $('#editrestore').onclick=()=>{
-      dlg.close();
-      $(field==='customer'?'#q_customer':'#q_address').value=oldVal;
-    };
-  }
-  $('#q_customer').addEventListener('change',()=>{
-    const old=State.prefill.customer, now=$('#q_customer').value.trim();
-    if(old && now!==old) confirmPrefillEdit('customer','customer name', old);
-  });
+  /* The edit-confirmation dialog is RETIRED (per Taylor 2026-10-15): a
+     typed edit over a record-filled customer name or address simply
+     stands — no prompt, no putting the original back. Wrong names get
+     cleaned up in the data later; a prompt mid-quote caused mistakes. */
+  $('#q_customer').addEventListener('change',()=>{ State.prefill.customer=null; });
   $('#q_address').addEventListener('change',()=>{
-    const proceed=()=>{
-      const k=resolveSiteKey($('#q_address').value);
-      if(!$('#q_city').value) $('#q_city').value=extractCity($('#q_address').value);
-      if(!$('#q_zip').value)  $('#q_zip').value=extractZip($('#q_address').value);
-      if(k) loadSite(k,{address1:$('#q_address').value,city:$('#q_city').value,zip:$('#q_zip').value},
-                     {keepTyped:true});
-    };
-    const old=State.prefill.address, now=$('#q_address').value.trim();
-    if(old && now!==old) confirmPrefillEdit('address','address', old, proceed);
-    else proceed();
+    State.prefill.address=null;
+    const k=resolveSiteKey($('#q_address').value);
+    if(!$('#q_city').value) $('#q_city').value=extractCity($('#q_address').value);
+    if(!$('#q_zip').value)  $('#q_zip').value=extractZip($('#q_address').value);
+    if(k) loadSite(k,{address1:$('#q_address').value,city:$('#q_city').value,zip:$('#q_zip').value},
+                   {keepTyped:true});
   });
   /* Save/Update quote PRESERVES the quote's current status. It used to force
      'draft', which silently pulled a booked job off the calendar when a rep
