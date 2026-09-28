@@ -195,11 +195,13 @@ body.bidmode #tabs button[data-view="bidlist"]{display:inline-block}
 body.officemode #tabs button{display:none}
 body.officemode #tabs button[data-view="quotes"],
 body.officemode #tabs button[data-view="cal"]{display:inline-block}
-body.officemode #cal_block,body.officemode #cal_crew{display:none}
+body.officemode #cal_block,body.officemode #cal_crew,
+body.officemode #cal_import{display:none}
 body.officemode #quoteslist [data-act]:not([data-act="open"]){display:none}
 body.crewmode{font-size:17px}
 body.crewmode .calchip{font-size:15px;white-space:normal}
-body.crewmode #cal_block{display:none}
+body.crewmode #cal_block,body.crewmode #cal_import,
+body.drivermode #cal_crew{display:none}
 .kv.total .v{font-size:19px}
 .basis{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.4}
 .basis b{color:var(--accent);font-weight:600}
@@ -701,6 +703,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             title="Read-only board for the crew — no pricing anywhere">Crew view</button>
           <button type="button" class="btn ghost sm" id="cal_block" style="flex:0 0 auto"
             title="Holiday, PTO, shop day — suggestions steer around blocks">🚫 Block time</button>
+          <button type="button" class="btn ghost sm" id="cal_import" style="flex:0 0 auto"
+            title="Copy manual Google-calendar events into the app calendar">⇪ Import Google</button>
         </div>
         <div class="small muted" id="calnote2" style="margin-top:6px"></div>
         <div id="calmsg"></div>
@@ -1111,7 +1115,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-10-officeqty';   // shown in the header; check it after deploying
+const BUILD = '2026-10-11-import-driver';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4301,6 +4305,160 @@ async function createBlockout(o){
   renderSuggestionsDebounced(); refreshCrewLoad();
   return 'Blocked — suggestions now steer around it.';
 }
+/* ---- Import Google events (per Taylor: "convert current events on
+   google calendar into events on the new app calendar") -------------
+   The busy feed already returns every NON-app event (manual office
+   bookings, blockouts) with crew parsed from the "#17-" title prefix.
+   Jobs become quote rows; blocks become blockouts-table rows (visible
+   once calendar_backend='internal'). Google itself is never touched —
+   until the switch, an imported job shows beside its grey original. */
+function importParse(events){
+  const jobs=[], blocks=[];
+  (events||[]).forEach(e=>{
+    if(!e || !e.date) return;
+    if(e.block){
+      blocks.push({ crew_id:String(e.crew||'*'), date:e.date,
+        from: e.allDay?null:(e.time||null),
+        to: (!e.allDay && e.time && e.hours)
+          ? hhmm(toMin(e.time)+Math.round(Number(e.hours)*60)) : null,
+        reason: String(e.summary||'blocked')
+          .replace(/^🚫\s*/,'').replace(/^CLOSED\s*[—-]\s*/i,'').trim()||'blocked' });
+    }else{
+      const raw=String(e.summary||'').trim();
+      const customer=raw.replace(/^HOLD\s+/i,'')
+        .replace(/^#\d+\s*[-–]\s*/,'')          // "#56-BeautiBark …" → truck off
+        .trim()||'(untitled event)';
+      jobs.push({ crew:String(e.crew||'*'), date:e.date,
+        time: e.allDay?null:(e.time||null),
+        hours: e.allDay?null:(Number(e.hours)||null),
+        hold: !!e.hold, summary:raw, customer });
+    }
+  });
+  return {jobs, blocks};
+}
+window.importParse = importParse;
+async function importApply(jobs, blocks){
+  /* dedupe against what the app already has in the same window */
+  const dates=[...jobs.map(j=>j.date), ...blocks.map(b=>b.date)].sort();
+  const from=dates[0], to=dates[dates.length-1];
+  let haveJ=[], haveB=[];
+  try{ haveJ=await DB.bookingsBetween(from,to); }catch(e){}
+  try{ haveB=await DB.blocks(from,to); }catch(e){}
+  const jkey=(c,d,t)=>String(c||'').toLowerCase()+'|'+d+'|'+(t?String(t).slice(0,5):'');
+  const seenJ=new Set(haveJ.map(q=>jkey(q.customer_name,q.scheduled_date,q.scheduled_time)));
+  const seenB=new Set((haveB||[]).map(b=>b.date+'|'+b.crew_id+'|'+(b.from_time?String(b.from_time).slice(0,5):'')));
+  let nj=0, nb=0, skipped=0, errs=[];
+  for(const j of jobs){
+    if(seenJ.has(jkey(j.customer,j.date,j.time))){ skipped++; continue; }
+    try{
+      await DB.saveQuote({ status: j.hold?'sent':'won',
+        customer_name: j.customer, crew_id: j.crew,
+        scheduled_date: j.date, scheduled_time: j.time,
+        scheduled_hours: j.hours,
+        rep_name: (State.user&&State.user.email)||'import',
+        notes: '[Imported from Google Calendar] '+j.summary }, null);
+      nj++;
+    }catch(e){ errs.push(j.customer+': '+e.message); }
+  }
+  for(const b of blocks){
+    if(seenB.has(b.date+'|'+b.crew_id+'|'+(b.from||''))){ skipped++; continue; }
+    try{
+      await DB.addBlock({ crew_id:b.crew_id, date:b.date,
+        from_time:b.from, to_time:b.to, reason:b.reason });
+      nb++;
+    }catch(e){ errs.push(b.reason+': '+e.message); }
+  }
+  bustCalCache(); bustSuggCache();
+  return {nj, nb, skipped, errs};
+}
+async function calImportCard(){
+  const old=$('#importcard'); if(old) old.remove();
+  const wrap=document.createElement('div'); wrap.id='importcard';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
+    'display:flex;align-items:center;justify-content:center;padding:16px';
+  const shell=(inner)=>{'use strict'; wrap.innerHTML=
+    '<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;'+
+    'max-width:680px;width:100%;max-height:85vh;overflow:auto;padding:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center">'+
+    '<b>⇪ Import Google events</b>'+
+    '<button type="button" class="btn ghost sm" id="im_x">✕</button></div>'+inner+'</div>';
+    $('#im_x').onclick=()=>wrap.remove();
+    wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); }; };
+  document.body.appendChild(wrap);
+  if(DB.mode==='demo' || !GS.configured() || !State.token){
+    shell('<div class="note bad" style="margin-top:10px">This needs the live app with the '+
+      'Google calendar connection (Rate Card → Check). Nothing to import in demo mode.</div>');
+    return;
+  }
+  shell('<div class="small muted" style="margin-top:8px"><span class="spin"></span> '+
+    'Reading the Google calendar…</div>');
+  const from=calFmt(new Date());
+  const toD=new Date(); toD.setDate(toD.getDate()+120);
+  let events=null;
+  try{ events=await GS.busy(from, calFmt(toD)); }
+  catch(e){ shell('<div class="note bad" style="margin-top:10px">Could not read the '+
+    'calendar: '+esc(e.message)+'</div>'); return; }
+  const {jobs, blocks}=importParse(events);
+  if(!jobs.length && !blocks.length){
+    shell('<div class="note ok" style="margin-top:10px">Nothing to import — every event '+
+      'on the Google calendar for the next 120 days was made by this app (those are '+
+      'already on the app calendar).</div>');
+    return;
+  }
+  const crewOpts=(sel)=> (CREWS||[]).map(c=>'<option value="'+esc(c.id)+'"'+
+    (String(sel)===String(c.id)?' selected':'')+'>'+esc(c.name)+'</option>').join('');
+  shell(
+    '<div class="small muted" style="margin-top:6px">Manual Google events for the next '+
+    '120 days (app-made bookings are already here). Jobs become scheduled entries; '+
+    'blocks land in the internal blockout list. <b>Google is not changed</b> — until '+
+    'the app is switched to the internal calendar, an imported job shows next to its '+
+    'grey Google original.</div>'+
+    (jobs.length?'<div class="small" style="font-weight:600;margin-top:12px">Jobs ('+jobs.length+')</div>'+
+      '<table class="tbl" style="margin-top:4px"><thead><tr><th></th><th>Date</th>'+
+      '<th>Time</th><th>Event</th><th>Truck</th></tr></thead><tbody>'+
+      jobs.map((j,i)=>'<tr><td><input type="checkbox" class="im_j" data-i="'+i+'" checked></td>'+
+        '<td style="white-space:nowrap">'+esc(dfmt(j.date))+'</td>'+
+        '<td>'+(j.time?esc(fmtMin(toMin(j.time))):'all day')+'</td>'+
+        '<td>'+esc(j.summary)+(j.hold?' <span class="tag w">HOLD</span>':'')+'</td>'+
+        '<td><select class="im_crew" data-i="'+i+'">'+crewOpts(j.crew!=='*'?j.crew:'')+
+        '</select></td></tr>').join('')+'</tbody></table>':'')+
+    (blocks.length?'<div class="small" style="font-weight:600;margin-top:12px">Blockouts ('+blocks.length+')</div>'+
+      '<table class="tbl" style="margin-top:4px"><thead><tr><th></th><th>Date</th>'+
+      '<th>Time</th><th>Truck</th><th>Reason</th></tr></thead><tbody>'+
+      blocks.map((b,i)=>'<tr><td><input type="checkbox" class="im_b" data-i="'+i+'" checked></td>'+
+        '<td style="white-space:nowrap">'+esc(dfmt(b.date))+'</td>'+
+        '<td>'+(b.from?esc(fmtMin(toMin(b.from)))+(b.to?'–'+esc(fmtMin(toMin(b.to))):''):'all day')+'</td>'+
+        '<td>'+(b.crew_id==='*'?'All trucks':esc((((CREWS||[]).find(c=>String(c.id)===String(b.crew_id)))||{}).name||b.crew_id))+'</td>'+
+        '<td>'+esc(b.reason)+'</td></tr>').join('')+'</tbody></table>':'')+
+    '<label class="small" style="display:block;margin-top:12px">'+
+    '<input type="checkbox" id="im_switch"> Switch the app to the <b>internal calendar</b> '+
+    'right after the import (Google stops being consulted; switch back any time on the '+
+    'Rate Card tab note or with one SQL line)</label>'+
+    '<div class="row" style="margin-top:10px">'+
+    '<button type="button" class="btn" id="im_go" style="background:var(--accent);'+
+    'color:var(--accent-ink);flex:0 0 auto">Import</button>'+
+    '<span class="small muted" id="im_msg" style="align-self:center"></span></div>');
+  $('#im_go').onclick=async()=>{
+    const btn=$('#im_go'); btn.disabled=true; btn.textContent='Importing…';
+    const pickedJ=[...wrap.querySelectorAll('.im_j')].filter(c=>c.checked).map(c=>{
+      const i=+c.dataset.i, j=Object.assign({}, jobs[i]);
+      const sel=wrap.querySelector('.im_crew[data-i="'+i+'"]');
+      j.crew=(sel&&sel.value)||j.crew; return j;
+    }).filter(j=>j.crew && j.crew!=='*');
+    const pickedB=[...wrap.querySelectorAll('.im_b')].filter(c=>c.checked)
+      .map(c=>blocks[+c.dataset.i]);
+    const r=await importApply(pickedJ, pickedB);
+    if($('#im_switch').checked && (r.nj||r.nb||!r.errs.length)){
+      try{ await DB.setConfig('calendar_backend','internal'); _cbCache.t=0; }
+      catch(e){ r.errs.push('backend switch: '+e.message); }
+    }
+    wrap.remove(); renderCal();
+    const m='✓ Imported '+r.nj+' job'+(r.nj===1?'':'s')+' + '+r.nb+' blockout'+
+      (r.nb===1?'':'s')+(r.skipped?' ('+r.skipped+' already here, skipped)':'')+
+      (r.errs.length?' — '+r.errs.length+' failed: '+r.errs[0]:'');
+    calMsg(m, !!r.errs.length); toast(m, !!r.errs.length);
+  };
+}
 /* The Calendar tab's 🚫 Block time button (per Taylor: a real button, not
    an empty-slot hunt). Same bl_* ids the old embed-card form used, so
    blMsg() and renderBlockList() carry straight over. */
@@ -4852,7 +5010,8 @@ function calCard(r, rep){
     '<button type="button" class="btn ghost sm" id="crewcard_x">✕</button></span></div>'+
     (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" href="https://maps.google.com/?q='+
       encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
-    ((rep||office)&&r.phone?'<div class="small" style="margin-top:4px"><a href="tel:'+
+    ((rep||office||(typeof DriverView!=='undefined'&&DriverView))&&r.phone?
+      '<div class="small" style="margin-top:4px">📞 <a href="tel:'+
       esc(String(r.phone).replace(/[^\d+]/g,''))+'">'+esc(r.phone)+'</a></div>':'')+
     '<div style="margin-top:6px">'+esc((r.yards||0)+' yd of '+(r.product||''))+
     (Number(r.depth_in)>0?' at '+Number(r.depth_in)+'&Prime;':'')+'</div>'+
@@ -4994,6 +5153,21 @@ function exitOfficeMode(){
   OfficePortal = false;
   document.body.classList.remove('officemode');
 }
+/* Driver view (#driver, per Taylor): the crew board — calendar only,
+   read-only, no pricing, no hours — PLUS the customer's phone number
+   on the day card (drivers call from the driveway; the blower crew
+   view stays phone-free). */
+let DriverView = false;
+function enterDriverMode(){
+  DriverView = true;
+  document.body.classList.add('drivermode');
+  enterCrewMode();               // same board, same read-only rules
+}
+function exitDriverMode(){
+  if(!DriverView) return;
+  DriverView = false;
+  document.body.classList.remove('drivermode');
+}
 let BidPortal = false;
 function enterBidMode(){
   BidPortal = true;
@@ -5006,10 +5180,11 @@ function exitBidMode(){
   document.body.classList.remove('bidmode');
 }
 function applyCrewMode(){
-  if(/(^|#|&)crew/.test(location.hash)){ exitBidMode(); exitOfficeMode(); enterCrewMode(); }
-  else if(/(^|#|&)office/.test(location.hash)){ exitCrewMode(); exitBidMode(); enterOfficeMode(); }
-  else if(/(^|#|&)bid/.test(location.hash)){ exitCrewMode(); exitOfficeMode(); enterBidMode(); }
-  else { exitCrewMode(); exitBidMode(); exitOfficeMode(); }
+  if(/(^|#|&)driver/.test(location.hash)){ exitBidMode(); exitOfficeMode(); enterDriverMode(); }
+  else if(/(^|#|&)crew/.test(location.hash)){ exitBidMode(); exitOfficeMode(); exitDriverMode(); enterCrewMode(); }
+  else if(/(^|#|&)office/.test(location.hash)){ exitCrewMode(); exitDriverMode(); exitBidMode(); enterOfficeMode(); }
+  else if(/(^|#|&)bid/.test(location.hash)){ exitCrewMode(); exitDriverMode(); exitOfficeMode(); enterBidMode(); }
+  else { exitCrewMode(); exitDriverMode(); exitBidMode(); exitOfficeMode(); }
 }
 
 /* ============================ bids tab ====================================
@@ -6750,6 +6925,7 @@ function wire(){
   $('#cal_next').onclick = ()=>calStep(1);
   $('#cal_today').onclick = ()=>{ Cal.anchor = calFmt(new Date()); renderCal(); };
   $('#cal_block').onclick = ()=>calBlockCard();
+  $('#cal_import').onclick = ()=>calImportCard();
   $('#cal_week').onclick = ()=>{ Cal.view='week'; renderCal(); };
   $('#cal_month').onclick = ()=>{ Cal.view='month'; renderCal(); };
   $('#cal_crew').onclick = ()=>{ location.hash = Cal.crew ? '' : '#crew'; };
