@@ -338,7 +338,9 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                   <div class="results hide" id="custresults"></div>
                 </div></div>
               <div style="min-width:170px"><label class="f">Phone</label><input type="text" id="q_phone" placeholder="(541) 555-0100"></div>
-              <div style="max-width:130px"><label class="f">Customer #</label>
+              <!-- flex:0 0 + min-width: the 9-digit customer number must
+                   never squeeze narrower than it prints (field report). -->
+              <div style="flex:0 0 132px;min-width:132px;max-width:150px"><label class="f">Customer #</label>
                 <input type="text" id="q_custno" autocomplete="off" class="mono" placeholder="020105687"></div>
               <div style="flex:2"><label class="f">Email</label><input type="text" id="q_email"></div>
             </div>
@@ -490,12 +492,17 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div class="kv"><span class="k" id="k_erev">Equipment revenue</span><span class="v" id="o_erev">—</span></div>
             </div>
 
-            <div><label class="f">Notes</label><textarea id="q_notes" rows="2"
-                 placeholder="Access, hose pull, gate code, staging…"></textarea></div>
-            <div><label class="f">Site notes for the crew
-                <span class="small muted">these print on the calendar event</span></label>
+            <!-- ONE notes field (per Taylor, 2026-10-13): shared by the rep
+                 and the drivers/crew — it prints on the calendar event and
+                 shows on the driver day card. The old rep-only Notes box is
+                 retired; its column stays for legacy quotes (kept hidden so
+                 old text still round-trips on re-save). -->
+            <div class="hide"><textarea id="q_notes" rows="2"></textarea></div>
+            <div><label class="f">Notes
+                <span class="small muted">shared with the rep, crew and drivers — prints on the calendar event</span></label>
               <textarea id="q_sitenotes" rows="2"
-                placeholder="Gate code, dogs, hose pull ~150 ft, park on the north side…"></textarea></div>
+                placeholder="Gate code, dogs, hose pull ~150 ft, park on the north side…"></textarea>
+              <div id="oldnotes" class="small muted hide" style="margin-top:4px"></div></div>
             <div class="row">
               <div><label class="f">Account #</label>
                 <input type="text" id="q_account" autocomplete="off" placeholder="02-0104761"></div>
@@ -1120,7 +1127,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-12-erpsave';   // shown in the header; check it after deploying
+const BUILD = '2026-10-13-onenote';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3519,6 +3526,14 @@ async function openQuote(r){
   setHistoryCollapsed(r.status==='sent' || r.status==='won');
   /* Site visit: measurements, notes and photos ride the row. */
   $('#q_sitenotes').value = r.site_notes || '';
+  /* Legacy quotes may carry old rep-only notes: show them read-only under
+     the shared field (they stay on the quote; new text goes to everyone). */
+  const on=$('#oldnotes');
+  if(on){ const legacy=(r.notes||'').trim();
+    on.classList.toggle('hide', !legacy);
+    on.innerHTML = legacy
+      ? '\ud83d\udcdd <b>Older rep-only notes on this quote:</b> '+esc(legacy)
+      : ''; }
   SiteVisit.meas = (r.site_measurements && Array.isArray(r.site_measurements.areas))
     ? r.site_measurements.areas.map(a=>({label:a.label||'', l:a.l??'', w:a.w??'',
         /* sf saved from L×W stays derived on reopen; a typed sf stays typed */
@@ -5575,6 +5590,7 @@ const SiteVisit = { meas: [], photos: [], pool: [] };
 function svReset(){
   SiteVisit.meas = []; SiteVisit.photos = []; SiteVisit.pool = [];
   const sn=$('#q_sitenotes'); if(sn) sn.value='';
+  const on2=$('#oldnotes'); if(on2){ on2.classList.add('hide'); on2.innerHTML=''; }
   renderMeas(); renderPhotos();
   try{ renderBidRef(); }catch(e){}
 }
