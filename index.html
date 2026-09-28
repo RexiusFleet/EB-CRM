@@ -190,6 +190,13 @@ body.bidmode .bid-convert{display:none}
 body.bidmode #tabs button{display:none}
 body.bidmode #tabs button[data-view="bids"],
 body.bidmode #tabs button[data-view="bidlist"]{display:inline-block}
+/* Office portal (#office): Saved Quotes + Calendar only; the board is
+   look-don't-touch, and the quote piles lose their verb buttons. */
+body.officemode #tabs button{display:none}
+body.officemode #tabs button[data-view="quotes"],
+body.officemode #tabs button[data-view="cal"]{display:inline-block}
+body.officemode #cal_block,body.officemode #cal_crew{display:none}
+body.officemode #quoteslist [data-act]:not([data-act="open"]){display:none}
 body.crewmode{font-size:17px}
 body.crewmode .calchip{font-size:15px;white-space:normal}
 body.crewmode #cal_block{display:none}
@@ -1104,7 +1111,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-09-blockbtn';   // shown in the header; check it after deploying
+const BUILD = '2026-10-10-officeportal';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2127,6 +2134,7 @@ function show(v){
   if(cur && cur.scrollIntoView) try{ cur.scrollIntoView({block:'nearest',inline:'nearest'}); }catch(e){}
   /* The bid portal never leaves its two views, whatever asks. */
   if(typeof BidPortal!=='undefined' && BidPortal && v!=='bids' && v!=='bidlist') v='bids';
+  if(typeof OfficePortal!=='undefined' && OfficePortal && v!=='quotes' && v!=='cal') v='quotes';
   ['quote','bids','bidlist','quotes','cal','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
   if(v==='bids')   fillBidProducts();
@@ -3425,6 +3433,9 @@ window.addEventListener('hashchange', ()=>{ deepLinkDone=''; applyQuoteLink(); }
    form, so "Open" is how a rep gets at the booking for an existing quote --
    there is one scheduling panel, not two that can disagree. */
 async function openQuote(r){
+  /* Office portal: the card (revenue split + ERP numbers) IS the quote
+     view — the builder, with its costs and pricing, stays shut. */
+  if(typeof OfficePortal!=='undefined' && OfficePortal){ calCard(r, false); return; }
   show('quote');
   const set=(id,v)=>{ const e=$('#'+id); if(e) e.value = (v==null?'':String(v)); };
   set('q_customer', r.customer_name); set('q_phone', r.phone); set('q_email', r.email);
@@ -4137,13 +4148,14 @@ function wireTimegrid(grid){
     ch.onclick = e=>{ e.stopPropagation(); openCalItem(ch.dataset.qid); };
   });
   grid.querySelectorAll('.tgev[data-bidid]').forEach(ch=>{
-    ch.onclick = e=>{ e.stopPropagation(); if(!Cal.crew) bidCardById(ch.dataset.bidid); };
+    ch.onclick = e=>{ e.stopPropagation();
+      if(!Cal.crew && !OfficePortal) bidCardById(ch.dataset.bidid); };
   });
   /* Empty grid space opens the two-action chooser (per Taylor: never the
      quote builder): pencil a BID onto the slot, or BLOCK the time out. */
   grid.querySelectorAll('.tgcol').forEach(col=>{
     col.addEventListener('click', e=>{
-      if(Cal.crew || e.target.closest('.tgev')) return;
+      if(Cal.crew || OfficePortal || e.target.closest('.tgev')) return;
       const rect = col.getBoundingClientRect();
       let min = TG.START + Math.round(((e.clientY-rect.top)/TG.PXH*60)/30)*30;
       min = Math.max(TG.START, Math.min(TG.END-60, min));
@@ -4152,9 +4164,10 @@ function wireTimegrid(grid){
   });
   /* Drag to move: vertical = retime (15-min snap), across = day/truck. */
   grid.querySelectorAll('.tgev.app').forEach(ch=>{
-    ch.onclick = e=>{ e.stopPropagation(); if(Cal.crew) openCalItem(ch.dataset.qid); };
+    ch.onclick = e=>{ e.stopPropagation();
+      if(Cal.crew || OfficePortal) openCalItem(ch.dataset.qid); };
     ch.addEventListener('pointerdown', e=>{
-      if(Cal.crew || e.button) return;
+      if(Cal.crew || OfficePortal || e.button) return;
       e.preventDefault();
       const rect = ch.getBoundingClientRect();
       tgDrag = { ch, x0:e.clientX, y0:e.clientY, grabY:e.clientY-rect.top,
@@ -4808,6 +4821,8 @@ function wireCalChips(grid){
    customer history: the card is about THIS job, the builder is for digging. */
 function crewCard(r){ calCard(r, false); }
 function calCard(r, rep){
+  const office = (typeof OfficePortal!=='undefined' && OfficePortal);
+  if(office) rep = false;   // office is its own flavor, never the rep card
   const old=$('#crewcard'); if(old) old.remove();
   const wrap=document.createElement('div'); wrap.id='crewcard';
   wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
@@ -4824,7 +4839,7 @@ function calCard(r, rep){
         (r.crew2_id&&r.scheduled_time2?'<br>Load 2: '+
           esc(dfmt(r.scheduled_date2||r.scheduled_date))+' · '+
           esc(fmtMin(toMin(String(r.scheduled_time2).slice(0,5)))):'') : '');
-  const statusTag = rep ? (r.status==='won'
+  const statusTag = (rep||office) ? (r.status==='won'
       ? '<span class="tag g">Scheduled</span>'
       : r.status==='sent' ? '<span class="tag w">ON HOLD</span>'
       : r.status==='lost' ? '<span class="tag" style="opacity:.7">Lost</span>'
@@ -4837,25 +4852,40 @@ function calCard(r, rep){
     '<button type="button" class="btn ghost sm" id="crewcard_x">✕</button></span></div>'+
     (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" href="https://maps.google.com/?q='+
       encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
-    (rep&&r.phone?'<div class="small" style="margin-top:4px"><a href="tel:'+
+    ((rep||office)&&r.phone?'<div class="small" style="margin-top:4px"><a href="tel:'+
       esc(String(r.phone).replace(/[^\d+]/g,''))+'">'+esc(r.phone)+'</a></div>':'')+
     '<div style="margin-top:6px">'+esc((r.yards||0)+' yd of '+(r.product||''))+
     (Number(r.depth_in)>0?' at '+Number(r.depth_in)+'&Prime;':'')+'</div>'+
-    /* Crew flavor (per Taylor): one number the crew plans around —
-       "Project Hours" = the equipment hours. Labor/Equipment split is
-       rep-only detail. */
+    /* Hours are rep-only for now (per Taylor 2026-10-09: hide Project
+       Hours on the crew card too — the crew card carries no hours line). */
     (rep
       ? '<div class="small" style="margin-top:2px">Equipment '+esc(hrs(r.equip_hours))+
         ' · Labor '+esc(hrs(r.labor_hours))+'</div>'
-      : '<div class="small" style="margin-top:2px">Project Hours: '+
-        esc(hrs(r.equip_hours))+'</div>')+
+      : '')+
     (loads?'<div class="small" style="margin-top:4px">'+loads+'</div>':'')+
+    /* Office money box (per Taylor): the three revenue lines + their
+       total, and NOTHING else — no bid amount, costs, margins or notes. */
+    (office?(function(){
+      const m3=[['Material',r.material_rev],['Labor',r.labor_rev],
+                ['Equipment',r.equip_rev]];
+      const tot=m3.reduce((a,x)=>a+(Number(x[1])||0),0);
+      return '<div style="margin-top:10px;border:1px solid var(--line);'+
+        'border-radius:10px;padding:8px 12px">'+
+        '<div class="small" style="font-weight:600;margin-bottom:4px">Revenue</div>'+
+        m3.map(x=>'<div class="kv"><span class="k">'+x[0]+'</span><b>'+
+          (x[1]!=null?money(x[1]):'—')+'</b></div>').join('')+
+        '<div class="kv" style="border-top:1px solid var(--line-2);margin-top:4px;'+
+        'padding-top:4px"><span class="k">Total</span><b>'+money(tot)+'</b></div>'+
+        '</div>';
+    })():'')+
     (rep?'<div style="margin-top:8px"><b>'+
       (r.bid_amount!=null?money(r.bid_amount):(r.target_price!=null?money(r.target_price)+
-        ' <span class="small muted">(target — no bid typed)</span>':'—'))+'</b></div>'+
+        ' <span class="small muted">(target — no bid typed)</span>':'—'))+'</b></div>':'')+
+    ((rep||office)?
       /* ERP numbers usually arrive after scheduling — typed HERE they save
          straight to the quote and land on the calendar event, no trip
-         through the builder. */
+         through the builder. This save is the ONE write the office lock
+         (sql/33) allows. */
       '<div class="row" style="margin-top:8px">'+
       '<div><label class="f">Customer #</label><input type="text" id="cc_acct" '+
         'autocomplete="off" placeholder="02-0104761" value="'+esc(r.account_no||'')+'"></div>'+
@@ -4869,14 +4899,16 @@ function calCard(r, rep){
       'Save #s</button>'+
       '<span class="small muted" id="cc_msg" style="align-self:center"></span></div>'
       :'')+
-    (r.site_notes?'<div style="margin-top:10px"><b class="small">Site notes</b>'+
+    (!office&&r.site_notes?'<div style="margin-top:10px"><b class="small">Site notes</b>'+
       '<div>'+esc(r.site_notes)+'</div></div>':'')+
-    (r.notes?'<div style="margin-top:10px"><b class="small">Notes from the quote</b>'+
+    (!office&&r.notes?'<div style="margin-top:10px"><b class="small">Notes from the quote</b>'+
       '<div>'+esc(r.notes)+'</div></div>':'')+
     '<div id="crewcard_ph" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>'+
     (rep?'<div class="row" style="margin-top:14px">'+
       '<button type="button" class="btn" id="crewcard_open" style="background:var(--good)">'+
       'Open full quote</button>'+
+      '<button type="button" class="btn ghost" id="crewcard_close">Close</button></div>'
+     :office?'<div class="row" style="margin-top:14px">'+
       '<button type="button" class="btn ghost" id="crewcard_close">Close</button></div>':'')+
     '</div>';
   document.body.appendChild(wrap);
@@ -4915,7 +4947,7 @@ function calCard(r, rep){
     sbtn.disabled=false;
   };
   wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
-  (Array.isArray(r.site_photos)?r.site_photos:[]).forEach(async ph=>{
+  (office?[]:(Array.isArray(r.site_photos)?r.site_photos:[])).forEach(async ph=>{
     const u = await svThumbUrl(Object.assign({}, ph));
     if(!u) return;
     const img=document.createElement('img');
@@ -4941,6 +4973,20 @@ function exitCrewMode(){
   const b=$('#cal_crew'); if(b) b.textContent='Crew view';
   renderCal();
 }
+/* Office portal (#office in the URL): Saved Quotes + a read-only board.
+   Quotes open as the office CARD (revenue split + ERP numbers), never the
+   builder. sql/33_office_users.sql is the matching database lock. */
+let OfficePortal = false;
+function enterOfficeMode(){
+  OfficePortal = true;
+  document.body.classList.add('officemode');
+  show('quotes');
+}
+function exitOfficeMode(){
+  if(!OfficePortal) return;
+  OfficePortal = false;
+  document.body.classList.remove('officemode');
+}
 let BidPortal = false;
 function enterBidMode(){
   BidPortal = true;
@@ -4953,9 +4999,10 @@ function exitBidMode(){
   document.body.classList.remove('bidmode');
 }
 function applyCrewMode(){
-  if(/(^|#|&)crew/.test(location.hash)){ exitBidMode(); enterCrewMode(); }
-  else if(/(^|#|&)bid/.test(location.hash)){ exitCrewMode(); enterBidMode(); }
-  else { exitCrewMode(); exitBidMode(); }
+  if(/(^|#|&)crew/.test(location.hash)){ exitBidMode(); exitOfficeMode(); enterCrewMode(); }
+  else if(/(^|#|&)office/.test(location.hash)){ exitCrewMode(); exitBidMode(); enterOfficeMode(); }
+  else if(/(^|#|&)bid/.test(location.hash)){ exitCrewMode(); exitOfficeMode(); enterBidMode(); }
+  else { exitCrewMode(); exitBidMode(); exitOfficeMode(); }
 }
 
 /* ============================ bids tab ====================================
