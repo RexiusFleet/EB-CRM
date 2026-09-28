@@ -259,6 +259,13 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   #calembedbody iframe{height:440px !important}
   dialog{width:calc(100vw - 20px)}
   .dlg{padding:16px}
+  /* The two-per-row field rule above also grabs nav buttons (‹ Today ›
+     · Week Month Crew view · ‹ This week ›) and blows each into a 45%
+     slab. Buttons size to their label again; hint/label spans flow. */
+  .row>button.btn{flex:0 0 auto !important;display:inline-flex;
+    align-items:center;justify-content:center}
+  .row>span{flex:1 1 auto !important;display:inline}
+  .row>span.sclegend{display:none}  /* mini-cal legend: too long for a phone */
 }
 </style>
 </head>
@@ -1115,7 +1122,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-05-histfold';   // shown in the header; check it after deploying
+const BUILD = '2026-10-06-mobilepass';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4596,7 +4603,7 @@ async function renderSchedCal(){
       Math.max(14,((e0-s0)/60*SC.PXH-2)).toFixed(1)+'px;'; };
   let html='<div class="row" style="align-items:center;margin-bottom:4px">'+
     '<span class="small" style="font-weight:600;align-self:center">Week of '+esc(dfmt(from))+'</span>'+
-    '<span class="small muted" style="align-self:center">· <span style="color:var(--star);font-weight:700">★ yellow dash</span> = best · green dash = suggested · tap to book · solid = taken</span>'+
+    '<span class="small muted sclegend" style="align-self:center">· <span style="color:var(--star);font-weight:700">★ yellow dash</span> = best · green dash = suggested · tap to book · solid = taken</span>'+
     '<span style="flex:1 1 auto"></span>'+
     '<button type="button" class="btn ghost sm" id="sc_prev" style="flex:0 0 auto;padding:3px 10px">‹</button>'+
     '<button type="button" class="btn ghost sm" id="sc_today" style="flex:0 0 auto;padding:3px 10px">This week</button>'+
