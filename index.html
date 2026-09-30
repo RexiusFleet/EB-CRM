@@ -1126,7 +1126,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-20-freshform';   // shown in the header; check it after deploying
+const BUILD = '2026-10-21-mapscheck';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2336,7 +2336,11 @@ function suggest(){
   }
   $('#drivebasis').innerHTML = basisLabel(d.basis) + esc(d.detail) +
     (proj.loads>1 ? ' <b>× '+proj.loads+' loads</b> (one round trip each)' : '') +
-    (autoFill.drive?'':' <span class="tag">overridden</span>');
+    (autoFill.drive?'':' <span class="tag">overridden</span>') +
+    ((DT.url && DT.err && d.basis!=='gmaps' && $('#q_address').value.trim())
+      ? '<div class="small muted" style="margin-top:3px">⚠ Google Maps lookup '+
+        'failed ('+esc(String(DT.err).slice(0,70))+') — using the estimate above.</div>'
+      : '');
   $('#blowbasis').innerHTML  = basisLabel(b.basis) + esc(b.detail) +
     (autoFill.blow?'':' <span class="tag">overridden</span>');
 
@@ -2385,9 +2389,15 @@ function renderYardRef(){
       esc(z.zone_key)+' ('+z.n+' job'+(z.n>1?'s':'')+')'
     : 'No billed history for this city yet';
 
+  const live = (typeof mapsDriveFor==='function') ? mapsDriveFor(addr) : null;
   box.innerHTML = links +
-    '<span class="hint">'+hist+'. Maps shows <b>one-way</b> driving only — your figure is '+
-    'round trip and has historically run well above 2&times; the pure drive, so treat Maps as a floor.</span>';
+    '<span class="hint">'+hist+'. '+
+    (live
+      ? 'The drive estimate above is the live Google Maps <b>round trip</b> ('+
+        live.out_min+' + '+live.back_min+' min) — billed history is shown for comparison.'
+      : 'Maps shows <b>one-way</b> driving only — your figure is round trip and has '+
+        'historically run well above 2&times; the pure drive, so treat Maps as a floor.')+
+    '</span>';
 }
 
 /* ---- Google Maps drive time (per Taylor: real route yard -> address
@@ -2423,9 +2433,15 @@ async function applyMapsDrive(){
   if(!DT.url || !addr || DB.mode==='demo') return;
   const my=++dtReq;
   try{
+    DT.err=null;
     await fetchDriveTime(addr);
     if(my===dtReq) recalc();      // the estimator override picks it up
-  }catch(e){ /* zone estimate stands; nothing to un-draw */ }
+  }catch(e){
+    /* the zone/history estimate stands — but SAY so, or a configured
+       service that fails just looks like the feature never existed */
+    DT.err = e.message || 'no reply';
+    if(my===dtReq) recalc();
+  }
 }
 /* Engine-level override: every caller (suggest, saveQuote's est_basis)
    sees the Maps number when one exists for the current address. */
@@ -3451,6 +3467,25 @@ async function runCalCheck(){
       ? 'internal — bookings live in the app only; Google is not consulted'
       : 'google — events sync to Google Calendar (app_config calendar_backend)'));
   }catch(e){}
+  /* Drive-time service (drive-time.gs): optional, so an unset URL is a
+     grey fact, not a failure — but a SET URL that does not answer is. */
+  if(!DT.url){
+    rows.push(line(true,'Drive time (Google Maps)',
+      'not set — quotes use billed history / city medians. To turn it on, deploy '+
+      'drive-time.gs and set app_config key drive_time_url'));
+  }else{
+    try{
+      const r0 = await withTimeout(fetch(DT.url, {redirect:'follow'}), 15000,
+        'the drive-time service');
+      let j0=null; try{ j0=JSON.parse(await r0.text()); }catch(e){}
+      rows.push(line(!!(j0&&j0.ok),'Drive time (Google Maps)',
+        (j0&&j0.ok) ? 'answering — yard: '+(j0.yard||'?')
+                    : 'set, but the URL did not answer with the service\u2019s JSON — '+
+                      'check it is the /exec Web app URL with access "Anyone"'));
+    }catch(e){
+      rows.push(line(false,'Drive time (Google Maps)', 'set, but unreachable: '+e.message));
+    }
+  }
   rows.push(line(!!GS.url,'Calendar service URL',
     GS.url ? String(GS.url).slice(0,44)+'…' : 'not set in app_config'));
   if(!GS.url){
