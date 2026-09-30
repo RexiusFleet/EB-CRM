@@ -1123,7 +1123,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-18-importbadge';   // shown in the header; check it after deploying
+const BUILD = '2026-10-19-truckpick';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2284,12 +2284,19 @@ function updateCrewEligibility(){
   const product=$('#q_product').value;
   ['q_crew','q_crew2'].forEach(id=>{
     const sel=$('#'+id); if(!sel) return;
+    /* Field report (phone): iOS Safari opens the truck wheel, and any
+       rewrite of the <select>'s options while it is open breaks the
+       pick — the choice never lands. The wheel focuses the select, so:
+       while focused, defer; and even unfocused, write only real
+       changes (background recalcs re-ran this constantly). */
+    if(document.activeElement===sel){ sel.dataset.eligDirty='1'; return; }
     [...sel.options].forEach(o=>{
       if(!o.value) return;
       const ok=crewCanPlace(o.value, product);
-      o.disabled=!ok;
+      if(o.disabled!==!ok) o.disabled=!ok;
       const c=(CREWS||[]).find(x=>String(x.id)===String(o.value));
-      o.textContent=(c?c.name:o.value)+(ok?'':' — can’t place rock');
+      const txt=(c?c.name:o.value)+(ok?'':' — can’t place rock');
+      if(o.textContent!==txt) o.textContent=txt;
     });
     if(sel.value && !crewCanPlace(sel.value, product)) sel.value='';
   });
@@ -3739,13 +3746,19 @@ async function loadCrews(){
     const cfg = await DB.appConfig();
     GS.url = (cfg.apps_script_url || '').trim() || null;
   }catch(e){ /* reported by the connection check, not here */ }
-  const sel=$('#q_crew');
-  sel.innerHTML = '<option value="">— choose —</option>' +
-    CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+
-      '</option>').join('');
-  const sel2=$('#q_crew2');
-  if(sel2) sel2.innerHTML = '<option value="">— same truck —</option>' +
-    CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('');
+  const fill=(el, first)=>{
+    if(!el) return;
+    const html='<option value="">'+first+'</option>' +
+      CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('');
+    const write=()=>{ const v=el.value; el.innerHTML=html;
+      if(v && [...el.options].some(o=>o.value===v)) el.value=v; };
+    /* mid-pick on a phone: rebuild after the wheel closes, not under it */
+    if(document.activeElement===el)
+      el.addEventListener('blur', write, {once:true});
+    else write();
+  };
+  fill($('#q_crew'),  '— choose —');
+  fill($('#q_crew2'), '— same truck —');
   // Crews share one master calendar now, so "no calendar for this crew" is not
   // a meaningful per-crew state any more; the availability panel reports the
   // single calendar's configuration instead.
@@ -4990,6 +5003,13 @@ async function renderSchedCal(){
       const g=x.g;
       const durH = g.end!=null ? Math.max(0.5,(g.end-toMin(x.time))/60)
                                : (slotDuration()||2);
+      /* The picked slot already draws blue — a ghost on the same spot
+         would stack its label straight through it (field report). */
+      if(selDate===date && String(selCrew)===String(c.id) && selTime){
+        const g0=toMin(x.time), g1=g0+durH*60;
+        const s0=toMin(selTime), s1=s0+(slotDuration()||2)*60;
+        if(g0 < s1 && g1 > s0) return;
+      }
       cell+='<div class="scghost" data-gi="'+(State.schedGhosts||[]).indexOf(g)+
         '" title="'+(g.star?'Best slot — tap to book it':'Suggested slot — tap to book it')+
         '" style="position:absolute;'+
@@ -5000,16 +5020,19 @@ async function renderSchedCal(){
         (g.star?'var(--star)':g.late?'var(--warn)':'var(--good)')+
         ';font-weight:700;padding:0 2px;background:'+
         (g.star?'color-mix(in srgb, var(--star) 12%, transparent)':'transparent')+'">'+
-        (g.star?'★ ':'')+esc(fmtMin(toMin(x.time)))+'</div>';
+        '<span style="background:var(--panel);border-radius:3px;padding:0 3px">'+
+        (g.star?'★ ':'')+esc(fmtMin(toMin(x.time)))+'</span></div>';
     });
     if(selDate===date && String(selCrew)===String(c.id) && selTime){
       /* BLUE on purpose (per Taylor): nothing else on the board is blue,
          so the quote being worked on is findable at a glance. */
+      /* Opaque fill + top z: a hold or booking underneath must not bleed
+         through the label (field report: stacked, unreadable). */
       cell+='<div title="This quote" style="position:absolute;left:0;right:0;'+
         pos(selTime, slotDuration()||2)+
         'outline:2px solid var(--thisq);outline-offset:-1px;border-radius:4px;'+
-        'background:color-mix(in srgb, var(--thisq) 16%, transparent);'+
-        'z-index:2;padding:0 2px;'+
+        'background:color-mix(in srgb, var(--thisq) 16%, var(--panel));'+
+        'z-index:6;padding:0 2px;'+
         'font-weight:700;color:var(--thisq)">this quote</div>';
     }
     cell+='</div>';
@@ -7100,6 +7123,10 @@ function wire(){
   initPickers();
   $('#q_scheddate').addEventListener('change', ()=>{ refreshCrewLoad(); renderCapNoteDebounced(); });
   $('#q_crew').addEventListener('change', ()=>{ refreshCrewLoad(); renderCapNoteDebounced(); });   // load ends by re-rendering the chips
+  ['q_crew','q_crew2'].forEach(id=>$('#'+id).addEventListener('blur', ()=>{
+    const el=$('#'+id);
+    if(el && el.dataset.eligDirty){ delete el.dataset.eligDirty; updateCrewEligibility(); }
+  }));
   $('#q_crew2').addEventListener('change', ()=>{ syncSlotDurField(); renderSlotHint(); refreshCrewLoad(); });
   $('#q_schedtime').addEventListener('input', ()=>{ renderSlotHint(); renderSlotChips(); renderSchedCalDebounced(); });
   $('#q_scheddur').addEventListener('input', ()=>{ slotDurTouched=true; renderSlotHint(); renderSlotChips(); renderSchedCalDebounced(); });
@@ -7120,8 +7147,21 @@ function wire(){
   $('#cal_import').onclick = ()=>calImportCard();
   $('#cal_week').onclick = ()=>{ Cal.view='week'; renderCal(); };
   $('#cal_month').onclick = ()=>{ Cal.view='month'; renderCal(); };
-  $('#cal_crew').onclick = ()=>{ location.hash = Cal.crew ? '' : '#crew'; };
+  /* Toggling Crew view must NOT leave '#crew' in the browser history —
+     the Back button was walking into it later and re-entering crew mode
+     (tabs gone, per Taylor: "I lose the entire top menu"). replaceState
+     swaps the hash without adding a history entry; typed/bookmarked
+     #crew links still work through applyCrewMode on load. */
+  $('#cal_crew').onclick = ()=>{
+    const h = Cal.crew ? '' : '#crew';
+    try{ history.replaceState(null, '', location.pathname+location.search+h); }
+    catch(e){ location.hash = h; }
+    applyCrewMode();
+  };
   window.addEventListener('hashchange', applyCrewMode);
+  /* Back/forward restoring the page from the browser cache keeps the DOM
+     as it was left — re-derive the mode from the URL it landed on. */
+  window.addEventListener('pageshow', e=>{ if(e.persisted) applyCrewMode(); });
   $('#btnunschedule').onclick = doUnschedule;
   $('#qsearch').addEventListener('input', debounce(()=>{
     qsearchTerm = $('#qsearch').value.trim();
