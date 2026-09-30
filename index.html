@@ -1126,7 +1126,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-21-mapswarm';   // shown in the header; check it after deploying
+const BUILD = '2026-10-22-mapsonly';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2410,16 +2410,14 @@ function renderYardRef(){
    multiplier, basis label and saved est_basis all flow as usual. A
    typed drive time still wins (autoFill.drive false skips the fill). */
 const DT = { url:null, cache:new Map(), last:null, inflight:null };
-async function fetchDriveTime(addr){
-  addr = String(addr||'').trim();
-  if(!DT.url || !addr || addr.length<6) return null;
-  const k = addr.toLowerCase();
-  if(DT.cache.has(k)) return DT.cache.get(k);
+async function fetchDriveTime(dest){
+  dest = String(dest||'').trim();
+  if(!DT.url || !dest || dest.length<3) return null;
   const once = async (ms)=>{
     const r = await withTimeout(fetch(DT.url, {
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'},   // no preflight
-      body: JSON.stringify({address: addr}),
+      body: JSON.stringify({address: dest}),
       redirect:'follow'
     }), ms, 'the drive-time service');
     let body=null; try{ body=JSON.parse(await r.text()); }catch(e){}
@@ -2427,16 +2425,13 @@ async function fetchDriveTime(addr){
       'not the service\u2019s JSON \u2014 is the deployment\u2019s access set to "Anyone"?');
     return body;
   };
-  let body;
-  try{ body = await once(45000); }
+  try{ return await once(45000); }
   catch(e){
     /* a COLD Apps Script can blow the first timeout; the retry usually
        lands on the instance the first call woke up */
     if(e.status!=='timeout') throw e;
-    body = await once(45000);
+    return await once(45000);
   }
-  DT.cache.set(k, body);
-  return body;
 }
 function mapsDriveFor(addr){
   const k=String(addr||'').trim().toLowerCase();
@@ -2445,18 +2440,32 @@ function mapsDriveFor(addr){
 let dtReq=0;
 async function applyMapsDrive(){
   const addr=$('#q_address').value.trim();
+  const city=$('#q_city').value.trim();
+  const zip=$('#q_zip').value.trim();
   if(!DT.url || !addr || DB.mode==='demo') return;
+  const key=addr.toLowerCase();
   const my=++dtReq;
+  if(DT.cache.has(key)){ recalc(); return; }
+  const dest=[addr, city, zip&&zip.length===5 ? 'OR '+zip : (city?'OR':'')]
+    .filter(Boolean).join(', ');
+  let body=null;
   try{
     DT.err=null;
-    await fetchDriveTime(addr);
-    if(my===dtReq) recalc();      // the estimator override picks it up
+    body = await fetchDriveTime(dest);
   }catch(e){
-    /* the zone/history estimate stands — but SAY so, or a configured
-       service that fails just looks like the feature never existed */
-    DT.err = e.message || 'no reply';
-    if(my===dtReq) recalc();
+    /* Per Taylor: an address Maps cannot find falls back to the CITY as
+       the reference point — marked approximate on the basis line. */
+    if(city){
+      try{
+        body = await fetchDriveTime(city+', OR');
+        if(body) body.approx = city;
+      }catch(e2){ DT.err = e2.message || 'no reply'; }
+    }else{
+      DT.err = e.message || 'no reply';
+    }
   }
+  if(body) DT.cache.set(key, body);
+  if(my===dtReq) recalc();
 }
 /* Engine-level override: every caller (suggest, saveQuote's est_basis)
    sees the Maps number when one exists for the current address. */
@@ -2464,23 +2473,36 @@ async function applyMapsDrive(){
   if(typeof Engine==='undefined' || !Engine.estimateDrive) return; // boot() reports this case
   const zoneEst = Engine.estimateDrive;
   Engine.estimateDrive = function(ctx){
-    const d = zoneEst(ctx);
     try{
       const m = mapsDriveFor($('#q_address').value);
       if(m && m.out_min!=null){
         return { hours: Math.round((m.out_min+m.back_min)/60*100)/100,
           basis:'gmaps', n:1,
           detail: m.out_min+' min out · '+m.back_min+' min back'+
-            (m.miles?' · '+m.miles+' mi round trip':'') };
+            (m.miles?' · '+m.miles+' mi round trip':'')+
+            (m.approx?' · to '+m.approx+' (exact address not found — city used)':'') };
+      }
+      /* Maps-only mode (per Taylor 2026-10-22): with the service
+         configured, history/zone drive numbers are OUT — the field
+         waits for Maps or asks the rep to type. */
+      if(DT.url && DB.mode!=='demo'){
+        const addr=$('#q_address').value.trim();
+        if(!addr) return { hours:0, basis:'fallback', n:0,
+          detail:'enter the job address — drive time comes from Google Maps' };
+        if(DT.err) return { hours:0, basis:'fallback', n:0,
+          detail:'Google Maps unreachable ('+String(DT.err).slice(0,60)+
+            ') — type the round trip' };
+        return { hours:0, basis:'gmaps_wait', n:0,
+          detail:'asking Google Maps…' };
       }
     }catch(e){}
-    return d;
+    return zoneEst(ctx);
   };
 })();
 function basisLabel(b){
   const map={site_product:['site history','g'],site_scaled:['site history','g'],site:['site history','g'],
              product_band:['product + volume',''],product:['product average',''],
-             gmaps:['Google Maps','g'],
+             gmaps:['Google Maps','g'], gmaps_wait:['Google Maps…',''],
              zone:['city average',''],default:['company default','w'],fallback:['no data','d']};
   const m=map[b]||['',''];
   return '<span class="tag '+m[1]+'" style="margin-right:6px">'+esc(m[0])+'</span>';
@@ -5308,7 +5330,9 @@ function calCard(r, rep, focusCrew){
     '<button type="button" class="btn ghost sm" id="crewcard_x">✕</button></span></div>'+
     (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" href="https://maps.google.com/?q='+
       encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
-    ((rep||office||(typeof DriverView!=='undefined'&&DriverView))&&r.phone?
+    /* Phone shows on EVERY flavor of the card (per Taylor 2026-10-21:
+       the crew needs it too, not just drivers). */
+    (r.phone?
       '<div class="small" style="margin-top:4px">📞 <a href="tel:'+
       esc(String(r.phone).replace(/[^\d+]/g,''))+'">'+esc(r.phone)+'</a></div>':'')+
     '<div style="margin-top:6px">'+
