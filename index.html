@@ -1126,7 +1126,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-21-mapscheck';   // shown in the header; check it after deploying
+const BUILD = '2026-10-21-mapswarm';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2069,6 +2069,9 @@ async function loadData(){
       const we = new Date(ws); we.setDate(we.getDate()+5);
       calFetch(calFmt(ws), calFmt(we));
       loadSuggData();
+      /* wake the drive-time script too, so the first address typed
+         doesn't pay its cold start */
+      if(DT.url) fetch(DT.url, {redirect:'follow'}).catch(()=>{});
     }catch(e){} }, 600);
   }catch(err){
     $('#boot').classList.remove('hide');
@@ -2412,14 +2415,26 @@ async function fetchDriveTime(addr){
   if(!DT.url || !addr || addr.length<6) return null;
   const k = addr.toLowerCase();
   if(DT.cache.has(k)) return DT.cache.get(k);
-  const r = await withTimeout(fetch(DT.url, {
-    method:'POST',
-    headers:{'Content-Type':'text/plain;charset=utf-8'},   // no preflight
-    body: JSON.stringify({address: addr}),
-    redirect:'follow'
-  }), 20000, 'the drive-time service');
-  let body=null; try{ body=JSON.parse(await r.text()); }catch(e){}
-  if(!body || !body.ok) throw new Error((body&&body.error)||'no reply');
+  const once = async (ms)=>{
+    const r = await withTimeout(fetch(DT.url, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},   // no preflight
+      body: JSON.stringify({address: addr}),
+      redirect:'follow'
+    }), ms, 'the drive-time service');
+    let body=null; try{ body=JSON.parse(await r.text()); }catch(e){}
+    if(!body || !body.ok) throw new Error((body&&body.error)||
+      'not the service\u2019s JSON \u2014 is the deployment\u2019s access set to "Anyone"?');
+    return body;
+  };
+  let body;
+  try{ body = await once(45000); }
+  catch(e){
+    /* a COLD Apps Script can blow the first timeout; the retry usually
+       lands on the instance the first call woke up */
+    if(e.status!=='timeout') throw e;
+    body = await once(45000);
+  }
   DT.cache.set(k, body);
   return body;
 }
