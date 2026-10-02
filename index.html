@@ -558,6 +558,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div id="schedbooked" class="hide"></div>
               <div id="suggestbox" style="margin-bottom:6px"></div>
               <div id="schedpick">
+              <div id="loadplan"></div>
               <div class="row">
                 <div><label class="f">Date</label><input type="date" id="q_scheddate"></div>
                 <div><label class="f">Truck</label><select id="q_crew"></select></div>
@@ -1130,7 +1131,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-25-pindate2';   // shown in the header; check it after deploying
+const BUILD = '2026-10-26-loadplan';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1491,9 +1492,12 @@ const DemoDB = {
   async appConfig(){ return Object.assign({capacity_mode:'dry'}, this._cfg||{}); },
   async setConfig(key, value){ (this._cfg=this._cfg||{})[key]=value; return {key, value}; },
   async bookingsBetween(from,to){
+    const back=(d=>{ const x=new Date(d+'T00:00:00'); x.setDate(x.getDate()-14);
+      return x.toISOString().slice(0,10); })(from);
     return this._quotes.filter(q=>q.scheduled_date && q.crew_id &&
-      q.scheduled_date>=from && q.scheduled_date<=to &&
-      (q.status==='sent'||q.status==='won'));
+      (q.status==='sent'||q.status==='won') &&
+      ((q.scheduled_date>=back && q.scheduled_date<=to) ||
+       (q.scheduled_date2 && q.scheduled_date2>=from && q.scheduled_date2<=to)));
   },
   async blocks(){ return []; },
   async addBlock(){ throw new Error('Blockouts need live mode.'); },
@@ -1707,7 +1711,17 @@ const LiveDB = {
   /* Everything holding or booked in a date window -- what the slot-suggestion
      engine reasons over. Drafts hold nothing, lost quotes are gone. */
   async bookingsBetween(from,to){
-    const tail='&scheduled_date=gte.'+encodeURIComponent(from)+
+    /* A booking can have LEGS far from its day-1 date (a hand-picked
+       load 2 weeks out, an N-day slots layout). Filtering on
+       scheduled_date alone made those legs vanish from any week that
+       did not contain day 1 (field report 2026-10-25). Day-1 window
+       widened 14 days back for slots spans, OR date2 in the window. */
+    const back=(d=>{ const x=new Date(d+'T00:00:00'); x.setDate(x.getDate()-14);
+      return x.toISOString().slice(0,10); })(from);
+    const tail='&or=(and(scheduled_date.gte.'+back+',scheduled_date.lte.'+to+
+      '),and(scheduled_date2.gte.'+from+',scheduled_date2.lte.'+to+'))'+
+      '&status=in.(sent,won)&limit=500';
+    const tailOld='&scheduled_date=gte.'+back+
       '&scheduled_date=lte.'+encodeURIComponent(to)+
       '&status=in.(sent,won)&limit=500';
     const base='quotes?select=id,product,yards,customer_name,address_raw,status,crew_id,'+
@@ -1726,7 +1740,7 @@ const LiveDB = {
     }catch(e){
       // sql/25 not run yet either: the pre-spillover column set.
       this.hasDate2 = false; this.hasSlots = false;
-      return SB.rest(base+tail);
+      return SB.rest(base+tailOld);
     }
   },
   async truckCaps(){
@@ -2662,6 +2676,7 @@ function renderSchedWho(){
 function recalc(){
   setTimeout(()=>{ syncSlotDurField(); renderSlotHint(); }, 0);
   renderSchedWho();
+  try{ lpBuild(); }catch(e){}
   suggest();
   const ctx = estimateCtx();
   const rc = currentRate();
@@ -4182,6 +4197,175 @@ function layoutDays(opt){
   return {L, slots, crewId: c1};
 }
 
+/* ======================= PER-LOAD PLANNER ==========================
+   (per Taylor 2026-10-26): a 58-yd / 3-load order is scheduled one
+   LOAD at a time — yards for the trip (rep's choice), truck, date,
+   time, and that load's own hours: drive round trip + its share of
+   the blow time. Booking uses these rows verbatim. */
+const LoadPlan = { rows: [], n: 0 };
+function loadPlanActive(){
+  try{ return SchedUI.mode!=='booked' && (projectLoads().loads||1) > 1; }
+  catch(e){ return false; }
+}
+function lpCapOf(crew){
+  const product=$('#q_product').value;
+  if(!product || !suggData.capMap) return null;
+  const r=suggData.capMap.get(String(crew)+'|'+product);
+  return r ? Number(suggData.mode==='wet'?r.wet_yards:r.dry_yards) : null;
+}
+function lpSplit(style){
+  const tot=parseFloat($('#q_yards').value)||0, N=LoadPlan.n;
+  if(!(tot>0)||N<2) return;
+  const ys=[];
+  if(style==='max'){
+    let left=tot;
+    for(let i=0;i<N;i++){
+      const cap=lpCapOf(LoadPlan.rows[i].crew||$('#q_crew').value||'1');
+      const take=(i===N-1)?left:Math.min(left, cap>0?cap:Math.ceil(tot/N));
+      ys.push(Math.round(take*2)/2); left=Math.round((left-take)*2)/2;
+    }
+  }else{
+    const per=Math.round(tot/N*2)/2;
+    let left=tot;
+    for(let i=0;i<N;i++){ const take=(i===N-1)?left:per;
+      ys.push(Math.round(take*2)/2); left=Math.round((left-take)*2)/2; }
+  }
+  LoadPlan.rows.forEach((r,i)=>{ r.yards=ys[i];
+    const el=$('#lp_y'+i); if(el) el.value=ys[i]; });
+  lpCalc();
+}
+function lpRowHours(r){
+  const tot=parseFloat($('#q_yards').value)||0;
+  const N=LoadPlan.n||1;
+  const drive=(parseFloat($('#q_drive').value)||0)/N;   // q_drive = all loads
+  const blow=(parseFloat($('#q_blow').value)||0)*((parseFloat(r.yards)||0)/(tot||1));
+  return { drive: Math.round(drive*100)/100, blow: Math.round(blow*100)/100,
+    hours: Math.max(0.5, Math.round((drive+blow)*4)/4) };
+}
+function lpCalc(){
+  if(!$('#loadplan') || !LoadPlan.rows.length) return;
+  const tot=parseFloat($('#q_yards').value)||0;
+  let sum=0;
+  LoadPlan.rows.forEach((r,i)=>{
+    sum+=parseFloat(r.yards)||0;
+    const h=lpRowHours(r);
+    const el=$('#lp_calc'+i);
+    if(el) el.innerHTML='drive '+h.drive+' + blow '+h.blow+
+      ' ≈ <b>'+h.hours+' hr</b>'+
+      (function(){ const cap=lpCapOf(r.crew||$('#q_crew').value||'');
+        return (cap>0 && (parseFloat(r.yards)||0)>cap)
+          ? ' <span style="color:var(--warn);font-weight:600">⚠ over the '+
+            cap+' yd capacity</span>' : ''; })();
+  });
+  sum=Math.round(sum*10)/10;
+  const sEl=$('#lp_sum');
+  if(sEl) sEl.innerHTML = (Math.abs(sum-tot)<0.26)
+    ? '<span style="color:var(--good);font-weight:600">'+
+      LoadPlan.rows.map(r=>r.yards||0).join(' + ')+' = '+sum+' yd ✓</span>'
+    : '<span style="color:var(--warn);font-weight:600">⚠ loads add to '+sum+
+      ' yd — the quote is '+tot+' yd</span>';
+}
+function lpBuild(){
+  const box=$('#loadplan'); if(!box) return;
+  const N=projectLoads().loads||1;
+  const r1row=$('#q_scheddate') && $('#q_scheddate').closest('.row');
+  const r2row=$('#q_crew2') && $('#q_crew2').closest('.row');
+  const r3row=$('#q_schedtime') && $('#q_schedtime').closest('.row');
+  if(!loadPlanActive() || N<2){
+    if(LoadPlan.n){ LoadPlan.n=0; LoadPlan.rows=[]; box.innerHTML=''; }
+    if(r1row) r1row.style.display='';
+    if(r2row) r2row.style.display='';
+    if(r3row) r3row.style.display='';
+    return;
+  }
+  if(r1row) r1row.style.display='none';
+  if(r2row) r2row.style.display='none';
+  if(r3row) r3row.style.display='none';
+  if(LoadPlan.n===N){ lpCalc(); lpPullRow1(); return; }
+  /* (re)build: keep what carries over, default the rest to an even split */
+  const old=LoadPlan.rows;
+  LoadPlan.n=N;
+  LoadPlan.rows=[];
+  for(let i=0;i<N;i++){
+    const o=old[i]||{};
+    LoadPlan.rows.push({ yards:o.yards||0,
+      crew: i===0 ? ($('#q_crew').value||o.crew||'') : (o.crew||$('#q_crew').value||''),
+      date: i===0 ? ($('#q_scheddate').value||o.date||'') : (o.date||''),
+      time: i===0 ? ($('#q_schedtime').value||o.time||'') : (o.time||'') });
+  }
+  const crewOpts=sel=>'<option value="">— truck —</option>'+
+    (CREWS||[]).map(c=>'<option value="'+esc(c.id)+'"'+
+      (String(sel)===String(c.id)?' selected':'')+
+      (crewCanPlace(c.id,$('#q_product').value)?'':' disabled')+'>'+esc(c.name)+'</option>').join('');
+  box.innerHTML='<div style="border:1px solid var(--line);border-radius:10px;'+
+    'padding:10px 12px;margin-bottom:10px;background:var(--panel-2)">'+
+    '<div class="row" style="align-items:center;margin-bottom:2px">'+
+    '<b class="small">'+N+' loads — schedule each one</b>'+
+    '<span style="flex:1 1 auto"></span>'+
+    '<button type="button" class="btn ghost sm" id="lp_even" style="flex:0 0 auto">Even split</button>'+
+    '<button type="button" class="btn ghost sm" id="lp_max" style="flex:0 0 auto">Max first loads</button>'+
+    '</div>'+
+    LoadPlan.rows.map((r,i)=>
+      '<div class="row" style="margin-top:8px;align-items:flex-end">'+
+      '<b style="flex:0 0 58px;align-self:center">Load '+(i+1)+'</b>'+
+      '<div style="flex:0 0 86px"><label class="f">Yards</label>'+
+      '<input type="number" id="lp_y'+i+'" step="0.5" min="0" class="mono" value="'+(r.yards||'')+'"></div>'+
+      '<div style="flex:0 0 130px"><label class="f">Truck</label>'+
+      '<select id="lp_c'+i+'">'+crewOpts(r.crew)+'</select></div>'+
+      '<div style="flex:0 0 150px"><label class="f">Date</label>'+
+      '<input type="date" id="lp_d'+i+'" value="'+esc(r.date||'')+'"></div>'+
+      '<div style="flex:0 0 112px"><label class="f">Start</label>'+
+      '<input type="time" id="lp_t'+i+'" step="900" value="'+esc(r.time||'')+'"></div>'+
+      '<span class="small muted" id="lp_calc'+i+'" style="align-self:center"></span>'+
+      '</div>').join('')+
+    '<div class="small" id="lp_sum" style="margin-top:8px"></div>'+
+    '</div>';
+  $('#lp_even').onclick=()=>lpSplit('even');
+  $('#lp_max').onclick=()=>lpSplit('max');
+  LoadPlan.rows.forEach((r,i)=>{
+    $('#lp_y'+i).addEventListener('input',()=>{ r.yards=parseFloat($('#lp_y'+i).value)||0; lpCalc(); });
+    $('#lp_c'+i).addEventListener('change',()=>{ r.crew=$('#lp_c'+i).value;
+      if(i===0) lpPushRow1(); lpCalc(); });
+    $('#lp_d'+i).addEventListener('change',()=>{ r.date=$('#lp_d'+i).value;
+      if(i===0) lpPushRow1(); });
+    $('#lp_t'+i).addEventListener('change',()=>{ r.time=$('#lp_t'+i).value;
+      if(i===0) lpPushRow1(); });
+  });
+  if(!LoadPlan.rows.some(r=>r.yards>0)) lpSplit('even'); else lpCalc();
+}
+/* row 1 IS the quote's main slot: planner edits flow into the classic
+   fields (capacity notes, mini calendar, holds warnings all follow),
+   and a tapped suggestion/ghost flows back into row 1. */
+function lpPushRow1(){
+  const r=LoadPlan.rows[0]; if(!r) return;
+  if(r.date) $('#q_scheddate').value=r.date;
+  if(r.crew) $('#q_crew').value=r.crew;
+  if(r.time) $('#q_schedtime').value=r.time;
+  refreshCrewLoad(); renderCapNoteDebounced(); renderSchedCalDebounced();
+  bustSuggCache(); renderSuggestionsDebounced();
+}
+function lpPullRow1(){
+  const r=LoadPlan.rows[0]; if(!r) return;
+  const set=(id,val,key)=>{ const el=$('#'+id);
+    if(el && document.activeElement!==el && val && r[key]!==val){ r[key]=val; el.value=val; } };
+  set('lp_d0', $('#q_scheddate').value, 'date');
+  set('lp_c0', $('#q_crew').value, 'crew');
+  set('lp_t0', $('#q_schedtime').value, 'time');
+}
+/* The booking the planner describes, in layoutDays' slot shape — each
+   slot carries ITS yards, which every calendar view prefers. */
+function plannerLayout(){
+  const N=LoadPlan.n;
+  const slots=LoadPlan.rows.map((r,i)=>{
+    const h=lpRowHours(r);
+    const cr=(CREWS||[]).find(c=>String(c.id)===String(r.crew));
+    return { crew_id:String(r.crew), date:r.date,
+      time: r.time || (cr?firstStartFor(cr, r.date):SLOT_RULES.FIRST_START),
+      loads:1, from:i+1, to:i+1, hours:h.hours,
+      yards: Math.round((parseFloat(r.yards)||0)*10)/10 };
+  });
+  return {L:N, slots, crewId: slots[0] && slots[0].crew_id, planner:true};
+}
 /* Back-compat shape for the notes and duration fields: slot 1's share and
    whether anything runs on a later day. */
 function splitCounts(){
@@ -4260,7 +4444,7 @@ async function calFetch(from, to){
         const n = (sl.to>sl.from) ? (sl.to-sl.from+1) : 1;
         push(sl.crew_id||b.crew_id, sl.date, sl.time, sl.hours,
           (sl.to>sl.from ? 'loads '+sl.from+'–'+sl.to : 'load '+sl.from), i,
-          Math.round(totY*n/L*10)/10);
+          Number(sl.yards)>0 ? Number(sl.yards) : Math.round(totY*n/L*10)/10);
       });
     }else if(b.crew2_id){
       const h1=Number(b.scheduled_hours)||1;
@@ -5037,6 +5221,7 @@ function updateSchedMode(){
   t('schedverbs', booked);
   t('schedbooked', !booked);
   if(booked) renderSchedBooked();
+  try{ lpBuild(); }catch(e){}
   renderSchedCalDebounced();
 }
 function renderSchedBooked(){
@@ -5392,7 +5577,7 @@ function calCard(r, rep, focusCrew){
         return rows.map(sl=>{
           const nm=((CREWS||[]).find(c=>String(c.id)===String(sl.crew_id))||{}).name;
           const n=(sl.to>sl.from)?(sl.to-sl.from+1):1;
-          const y=Math.round(totY_*n/L*10)/10;
+          const y=Number(sl.yards)>0 ? Number(sl.yards) : Math.round(totY_*n/L*10)/10;
           return esc(dfmt(sl.date))+' '+(sl.time?esc(fmtMin(toMin(String(sl.time).slice(0,5)))):'')+
             (nm?' · '+esc(nm):'')+
             (crewView?'':' (load'+((sl.to>sl.from)?'s '+sl.from+'–'+sl.to:' '+sl.from)+')')+
@@ -7014,7 +7199,30 @@ async function saveQuote(status){
   }
   if((status==='sent'||status==='won') && $('#q_schedtime').value &&
      projectLoads().loads > 1){
-    const ld = layoutDays();
+    /* The planner, when on screen, IS the layout: the rep scheduled
+       each load by hand (yards included). Refuse an incomplete or
+       mis-summed plan by name. */
+    let ld;
+    if(loadPlanActive() && LoadPlan.rows.length>1){
+      for(let i=0;i<LoadPlan.rows.length;i++){
+        const r2=LoadPlan.rows[i];
+        if(!r2.date || !r2.crew){
+          msg('Load '+(i+1)+' still needs a '+(!r2.date?'date':'truck')+
+            ' — every load is scheduled on its own line now.', true);
+          return;
+        }
+      }
+      const totY2=parseFloat($('#q_yards').value)||0;
+      const sum2=Math.round(LoadPlan.rows.reduce((a,r2)=>a+(parseFloat(r2.yards)||0),0)*10)/10;
+      if(Math.abs(sum2-totY2)>0.26){
+        msg('The loads add up to '+sum2+' yd but the quote is '+totY2+
+          ' yd — fix the per-load yards (or tap Even split).', true);
+        return;
+      }
+      ld = plannerLayout();
+    }else{
+      ld = layoutDays();
+    }
     if(ld && ld.slots.length){
       const wall = SLOT_RULES.MULTI_END_MIN;
       /* Start so late that even slot 1's share cannot finish by 6. */
@@ -7045,7 +7253,7 @@ async function saveQuote(status){
         $('#q_scheddate2').value = (s1 && s1.date!==s0.date) ? s1.date : '';
       $('#q_schedtime2').value = s1 ? s1.time : '';
       syncSlotDurField();
-      if(ld.slots.length > 2){
+      if(ld.slots.length > 2 || (ld.planner && DB.hasSlots!==false && ld.slots.length>1)){
         if(DB.hasSlots===false){
           msg('This project needs '+ld.slots.length+' slots under the 6 PM cutoff, which '+
             'needs the multi-day upgrade — run sql/26_slots.sql in Supabase first.', true);
@@ -7177,6 +7385,7 @@ async function saveQuote(status){
     slots: (layout && layout.nday)
       ? layout.nday.slots.map((sl,i)=>({ crew_id: sl.crew_id, date: sl.date,
           time: sl.time, hours: sl.hours, from: sl.from, to: sl.to,
+          yards: Number(sl.yards)>0 ? sl.yards : undefined,   // planner loads carry theirs
           event_id: (Array.isArray(State.openedSlots) && State.openedSlots[i] &&
                      State.openedSlots[i].event_id) || null }))
       : null
