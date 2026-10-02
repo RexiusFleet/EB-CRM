@@ -1130,7 +1130,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-24-schedwho';   // shown in the header; check it after deploying
+const BUILD = '2026-10-25-pindate2';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4131,6 +4131,26 @@ function layoutDays(opt){
     (crewOf(c1) ? firstStartFor(crewOf(c1), d1) : SLOT_RULES.FIRST_START);
   const per = eq/L;
   const dur = k => Math.min(14, Math.max(0.5, Math.round((per*k+(k-1))*4)/4));
+  /* MANUAL two-day split (field report 2026-10-25): a rep who PICKS a
+     second date — same truck or not — means it. Tomorrow + next week
+     stays tomorrow + next week; the consecutive-day walk below is only
+     for jobs with no second date picked. Day 1 takes what fits by the
+     6 PM cutoff but always leaves at least one load for the picked
+     day 2; day 2 takes the rest. */
+  const d2pick = (($('#q_scheddate2')||{}).value||'').trim();
+  if(d2pick && d2pick!==d1 && !(opt && opt.crew2!==undefined)){
+    const cB = (c2v && c2v!==c1) ? c2v : c1;
+    const crB = crewOf(cB);
+    const t2 = $('#q_schedtime2').value ||
+      (crB ? firstStartFor(crB, d2pick) : SLOT_RULES.FIRST_START);
+    const k1 = Math.min(L-1, Math.max(1, fitLoads(L, eq, t1)));
+    const pinned=[
+      {crew_id:c1, date:d1,     time:t1, loads:k1,   hours:dur(k1)},
+      {crew_id:cB, date:d2pick, time:t2, loads:L-k1, hours:dur(L-k1)}
+    ];
+    let pf=1; pinned.forEach(sl=>{ sl.from=pf; sl.to=pf+sl.loads-1; pf=sl.to+1; });
+    return {L, slots: pinned, crewId: c1, pinned:true};
+  }
   const slots=[];
   let remaining = L, ds = d1, day = 0, guard = 0;
   while(remaining > 0 && ++guard < 14){
