@@ -1127,7 +1127,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-23-schedrich';   // shown in the header; check it after deploying
+const BUILD = '2026-10-23-ghostlabel';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -5199,8 +5199,12 @@ async function renderSchedCal(){
         ';border-radius:4px;cursor:pointer;'+
         'z-index:'+(g.star?4:3)+';color:'+
         (g.star?'var(--star)':g.late?'var(--warn)':'var(--good)')+
-        ';font-weight:700;padding:0 2px;background:'+
-        (g.star?'color-mix(in srgb, var(--star) 12%, transparent)':'transparent')+'">'+
+        ';font-weight:700;padding:1px 2px;background:'+
+        (g.star?'color-mix(in srgb, var(--star) 12%, transparent)':'transparent')+
+        /* label rides the BOTTOM-RIGHT corner so a hold/booking chip
+           underneath keeps its customer/product/address readable
+           (field report: the pill was sitting on the chip's text) */
+        ';display:flex;align-items:flex-end;justify-content:flex-end">'+
         '<span style="background:var(--panel);border-radius:3px;padding:0 3px">'+
         (g.star?'★ ':'')+esc(fmtMin(toMin(x.time)))+'</span></div>';
     });
