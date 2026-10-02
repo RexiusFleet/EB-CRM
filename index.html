@@ -358,6 +358,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                   <input type="text" id="q_address" autocomplete="off"
                          placeholder="Click to browse, or type a new address">
                   <div class="results hide" id="addrresults"></div>
+                  <div id="addrverify" class="small" style="margin-top:4px"></div>
                 </div></div>
               <div><label class="f">City</label><input type="text" id="q_city"></div>
               <div style="max-width:110px"><label class="f">ZIP</label><input type="text" id="q_zip"></div>
@@ -1126,7 +1127,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-22-mapsonly';   // shown in the header; check it after deploying
+const BUILD = '2026-10-23-schedrich';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2465,7 +2466,45 @@ async function applyMapsDrive(){
     }
   }
   if(body) DT.cache.set(key, body);
-  if(my===dtReq) recalc();
+  if(my===dtReq){ recalc(); renderAddrVerify(); }
+}
+/* Google's directions answer carries the RESOLVED address — use it to
+   verify what the rep typed, Maps-style (per Taylor): exact match gets a
+   quiet green check; a different resolution offers itself with one tap;
+   a city fallback warns that the street address was not found. */
+function renderAddrVerify(){
+  const box=$('#addrverify'); if(!box) return;
+  const addr=$('#q_address').value.trim();
+  const m=addr ? mapsDriveFor(addr) : null;
+  if(!m || !addr){ box.innerHTML=''; return; }
+  if(m.approx){
+    box.innerHTML='<span style="color:var(--warn)">⚠ Google Maps could not find '+
+      'this exact address — drive time is to '+esc(m.approx)+'. Check the street address.</span>';
+    return;
+  }
+  const clean=x=>String(x||'').toLowerCase().replace(/[.,#]/g,'').replace(/\s+/g,' ').trim();
+  const resolvedStreet=String(m.resolved||'').split(',')[0];
+  if(!m.resolved || clean(resolvedStreet)===clean(addr)){
+    box.innerHTML = m.resolved
+      ? '<span style="color:var(--good)">✓ address verified by Google Maps</span>' : '';
+    return;
+  }
+  box.innerHTML='<span class="muted">Google Maps found:</span> <b>'+esc(m.resolved.replace(/, USA$/,''))+'</b> '+
+    '<button type="button" class="btn ghost sm" id="addrfix" style="padding:2px 10px">Use this</button>';
+  const b2=$('#addrfix');
+  if(b2) b2.onclick=()=>{
+    const parts=String(m.resolved).replace(/, USA$/,'').split(',').map(x=>x.trim());
+    const street=parts[0]||addr;
+    const city=parts[1]||$('#q_city').value;
+    const zm=(parts[2]||'').match(/\b(\d{5})\b/);
+    DT.cache.set(street.toLowerCase(), m);   // no refetch for the fixed spelling
+    $('#q_address').value=street;
+    if(city) $('#q_city').value=city;
+    if(zm) $('#q_zip').value=zm[1];
+    State.prefill.address=null;
+    recalc(); renderAddrVerify(); renderYardRef();
+    toast('✓ Address updated to Google Maps’ spelling.', false);
+  };
 }
 /* Engine-level override: every caller (suggest, saveQuote's est_basis)
    sees the Maps number when one exists for the current address. */
@@ -4144,7 +4183,7 @@ async function calFetch(from, to){
   const backend = await calendarBackend();
   const [raw, iblocks, allBids] = await Promise.all([
     DB.bookingsBetween(from, to).catch(()=>[]),
-    backend==='internal' ? DB.blocks(from, to).catch(()=>[]) : Promise.resolve([]),
+    DB.blocks(from, to).catch(()=>[]),      // the table, whatever the backend
     (DB.listBids ? DB.listBids().catch(()=>[]) : Promise.resolve([]))
   ]);
   const jobs = [];
@@ -4157,6 +4196,7 @@ async function calFetch(from, to){
     const erpN = [b.account_no, b.so_no, b.project_no].filter(v=>v&&String(v).trim()).length;
     const push = (crew,date,time,hours,lbl,si,y)=>{ if(date) jobs.push({qid:b.id,
       customer:b.customer_name||'', product:b.product||'',
+      addr: b.address_raw||'',
       yards: (y!=null? y : totY), totYards: totY,
       erp: erpN===3 ? 'full' : erpN ? 'partial' : 'none',
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
@@ -4524,16 +4564,13 @@ function setHistoryCollapsed(on){
 /* One blockout writer for the panel AND the calendar chooser: internal
    backend -> the blockouts table; google backend -> the Apps Script. */
 async function createBlockout(o){
-  const backend = await calendarBackend();
-  if(backend==='google' && !GS.configured())
-    throw new Error('Blockouts need the calendar script — set up scheduling first (Rate Card → Check).');
-  if(backend==='internal'){
-    await DB.addBlock({ crew_id: o.crewId || '*', date: o.date,
-      from_time: o.from || null, to_time: o.to || null, reason: o.reason || null });
-  }else{
-    await GS.block({ crewId: o.crewId || '*', date: o.date,
-      from: o.from || null, to: o.to || null, reason: o.reason || '' });
-  }
+  /* ALWAYS the blockouts table (2026-10-23, field report): in google
+     backend mode a block used to become a Google event — invisible now
+     that the overlay is off, so blocking "didn't work". The table is
+     readable by every view and the engine regardless of backend.
+     (Google Calendar itself no longer receives blockouts.) */
+  await DB.addBlock({ crew_id: o.crewId || '*', date: o.date,
+    from_time: o.from || null, to_time: o.to || null, reason: o.reason || null });
   bustCalCache(); bustSuggCache();
   try{ await loadSuggData(true); }catch(e){}
   renderSuggestionsDebounced(); refreshCrewLoad();
@@ -5005,7 +5042,7 @@ async function openCalItem(qid, crewId){
    Suggested slots ride on top as DASHED GHOSTS (★ = best; amber = past
    5 PM) — tapping one books it exactly like the suggestion buttons; the
    picked slot shows solid as "this quote"; empty space books ad hoc. */
-const SC = { START: 6*60, END: 18.5*60, PXH: 26, off: 0, base: null };
+const SC = { START: 6*60, END: 18.5*60, PXH: 38, off: 0, base: null };
 /* The week the rep is LOOKING AT is the week the engine plans for: paging
    the mini calendar forward re-anchors the suggestions there (never before
    tomorrow). SC.base freezes while paging so ‹ › steps are stable even as
@@ -5090,9 +5127,9 @@ async function renderSchedCal(){
     '<button type="button" class="btn ghost sm" id="sc_today" style="flex:0 0 auto;padding:3px 10px">This week</button>'+
     '<button type="button" class="btn ghost sm" id="sc_next" style="flex:0 0 auto;padding:3px 10px">›</button></div>';
   html+='<div style="overflow-x:auto"><div style="display:grid;grid-template-columns:34px repeat('+
-    (days.length*crewList.length)+',minmax(56px,1fr));min-width:'+
-    (34+days.length*crewList.length*60)+'px;border:1px solid var(--line);'+
-    'border-radius:8px;overflow:hidden;font-size:10.5px;line-height:1.25">';
+    (days.length*crewList.length)+',minmax(96px,1fr));min-width:'+
+    (34+days.length*crewList.length*100)+'px;border:1px solid var(--line);'+
+    'border-radius:8px;overflow:hidden;font-size:10.5px;line-height:1.3">';
   html+='<div style="background:var(--panel-2)"></div>';
   days.forEach(date=>{ const dd=new Date(date+'T00:00:00');
     html+='<div class="small" style="grid-column:span '+crewList.length+
@@ -5129,12 +5166,19 @@ async function renderSchedCal(){
       'rgba(150,155,165,.15) 0 6px,transparent 6px 12px)"></div>';
     items.forEach(it=>{
       const col=it.block?'var(--danger)':(it.google||it.internal)?'#9aa2ad':((c.color)||'#888');
-      cell+='<div title="'+esc(it.summary||it.customer||'')+
+      /* Per Taylor: read like the Calendar tab — customer, product +
+         volume, address. The tooltip carries the full text. */
+      const l1=String(it.customer||it.summary||'');
+      const l2=it.yards?(Math.round(it.yards*10)/10)+'yd '+(it.product||''):(it.product||'');
+      const l3=it.addr||'';
+      cell+='<div title="'+esc([l1,l2,l3].filter(Boolean).join(' · '))+
         '" style="position:absolute;left:1px;right:1px;'+pos(it.time,it.hours)+
         'background:'+(it.qid?col+'2e':'rgba(150,155,165,.2)')+
         ';border-left:2px solid '+col+';border-radius:3px;overflow:hidden;'+
-        'padding:0 2px;'+(it.hold?'opacity:.55;':'')+'">'+
-        esc(String(it.customer||it.summary||'').slice(0,12))+'</div>';
+        'padding:0 3px;'+(it.hold?'opacity:.55;':'')+'">'+
+        '<b>'+esc(l1)+'</b>'+
+        (l2?'<br>'+esc(l2):'')+
+        (l3?'<br><span class="muted">'+esc(l3)+'</span>':'')+'</div>';
     });
     ghosts.filter(x=>x.date===date&&x.crew===String(c.id)).forEach(x=>{
       const g=x.g;
@@ -6351,7 +6395,7 @@ async function loadSuggData(force){
   /* Internal mode: blockouts come from the blockouts table (sql/28) and join
      the pool exactly like calendar blocks did, so every engine rule holds. */
   let iblocks = [];
-  if(backend==='internal'){
+  { // the blockouts table blocks the engine in EVERY backend mode now
     try{ iblocks = (await DB.blocks(iso(from), iso(to))) || []; }catch(e){}
     iblocks.forEach(r=>{
       const crewIds = String(r.crew_id)==='*' ? (CREWS||[]).map(c=>String(c.id))
@@ -6371,12 +6415,11 @@ async function loadSuggData(force){
   suggData = { t:Date.now(), bookings, capMap, wantCal, backend,
                mode:(cfg.capacity_mode==='wet'?'wet':'dry'),
                calSeen: calOk, calN: calOk ? busy.length : 0,
-               blocks: backend==='internal'
-                 ? iblocks.map(r=>({date:r.date, crew:String(r.crew_id),
+               blocks: iblocks.map(r=>({date:r.date, crew:String(r.crew_id),
                      time:r.from_time?String(r.from_time).slice(0,5):'',
                      allDay:!r.from_time, summary:'🚫 '+(r.reason||'blocked'),
                      id:r.id, internal:true}))
-                 : (calOk ? busy.filter(e=>e.block) : []),
+                 .concat(backend!=='internal' && calOk ? busy.filter(e=>e.block) : []),
                calErr: busy && busy.err ? String(busy.err) : null };
   try{ renderBlockList(); }catch(e){}
   return suggData;
@@ -7371,6 +7414,7 @@ function wire(){
     const d2c=$('#q_scheddate2'); if(d2c) d2c.value='';
     $('#q_depth').value='2';
     $('#schedmsg').innerHTML=''; $('#savemsg').innerHTML='';
+    const av=$('#addrverify'); if(av) av.innerHTML='';
     $('#savequote').textContent='Save quote';
     renderSchedState(null); refreshCrewLoad();
     SchedUI.forcePick=false; updateSchedMode();
