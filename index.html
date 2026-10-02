@@ -549,6 +549,9 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
         <h3>Schedule <span class="small muted" id="schedstate"></span></h3>
         <div class="body">
             <div id="schedwrap">
+              <!-- Per Taylor: say WHAT is being put on the calendar right
+                   here, so nobody scrolls back up to the quote to check. -->
+              <div id="schedwho" style="margin:0 0 8px"></div>
               <div id="schedcal" style="margin:2px 0 10px"></div>
               <!-- Booked state: the slot as one read-only line + the next
                    moves. Shown when the quote is held or scheduled. -->
@@ -1127,7 +1130,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-23-ghostlabel';   // shown in the header; check it after deploying
+const BUILD = '2026-10-24-schedwho';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2628,8 +2631,37 @@ function renderCompetitor(p){
     '</div>';
 }
 
+/* The booking banner on the Schedule card: customer · yards+product ·
+   address (+ loads), read straight from the form — the rep schedules
+   without scrolling back up (per Taylor 2026-10-24). */
+function renderSchedWho(){
+  const box=$('#schedwho'); if(!box) return;
+  const cust=$('#q_customer').value.trim();
+  const prod=$('#q_product').value;
+  const yards=parseFloat($('#q_yards').value)||0;
+  const addr=$('#q_address').value.trim();
+  const city=$('#q_city').value.trim();
+  if(!cust && !prod && !addr){ box.innerHTML=''; return; }
+  let loads=1; try{ loads=projectLoads().loads||1; }catch(e){}
+  const probs=[];
+  if(!prod) probs.push('no product picked');
+  if(!(yards>0)) probs.push('no volume');
+  box.innerHTML='<div style="border:1px solid '+(probs.length?'var(--warn)':'var(--line)')+
+    ';border-left:4px solid '+(probs.length?'var(--warn)':'var(--accent)')+
+    ';border-radius:8px;padding:7px 11px;background:var(--panel-2)">'+
+    '<span class="small muted" style="margin-right:6px">Booking:</span>'+
+    '<b>'+esc(cust||'(no customer yet)')+'</b>'+
+    ((yards>0&&prod)?' · <b>'+yards+' yd '+esc(prod)+'</b>'+
+      (loads>1?' <span class="muted small">('+loads+' loads)</span>':'')
+     : (prod?' · '+esc(prod):''))+
+    (addr?' · '+esc(addr)+(city?', '+esc(city):''):'')+
+    (probs.length?' <span style="color:var(--warn);font-weight:600">⚠ '+
+      esc(probs.join(' · '))+'</span>':'')+
+    '</div>';
+}
 function recalc(){
   setTimeout(()=>{ syncSlotDurField(); renderSlotHint(); }, 0);
+  renderSchedWho();
   suggest();
   const ctx = estimateCtx();
   const rc = currentRate();
@@ -7319,6 +7351,9 @@ function wire(){
   $('#q_scheddate').addEventListener('change', ()=>{ SC.off=0; SC.base=null;
     renderSchedCalDebounced(); renderSuggestionsDebounced(); });
   $('#q_crew').addEventListener('change', renderSchedCalDebounced);
+  // the booking banner follows typing immediately (recalc covers the rest)
+  ['q_customer','q_address','q_city'].forEach(id=>
+    $('#'+id).addEventListener('input', renderSchedWho));
   /* ---- internal calendar controls ---- */
   const calStep = dir => {
     const a = new Date((Cal.anchor||calFmt(new Date()))+'T00:00:00');
