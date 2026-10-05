@@ -1131,7 +1131,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-26-loadplan';   // shown in the header; check it after deploying
+const BUILD = '2026-10-27-sessionfix';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1323,6 +1323,17 @@ const SB = {
       e.status=0; throw e;
     }
     if(!r.ok){
+      /* Supabase access tokens expire (~1 hour). The app only refreshed
+         at page load, so a long session went 401 on every call and the
+         calendar read as EMPTY (field report 2026-10-27). One refresh +
+         one retry heals it transparently. */
+      if(r.status===401 && !(opts&&opts.__retried)){
+        let ok=false; try{ ok = await SB.restore(); }catch(e2){}
+        if(ok){
+          Diag.end(rec,'401 → refreshed, retrying');
+          return SB.rest(path, Object.assign({}, opts, {__retried:true}));
+        }
+      }
       const body = (await r.text())||r.statusText;
       Diag.end(rec, 'HTTP '+r.status, body);
       const e = new Error(body);
@@ -1958,6 +1969,10 @@ async function boot(){
   renderAuth();
 
   if(LIVE){ try{ await SB.restore(); }catch(e){} }
+  /* Keep the session alive across a whole shift: tokens last ~1 hour,
+     a rep's tab lives all day. */
+  if(LIVE) setInterval(()=>{ if(State.user) SB.restore().catch(()=>{}); },
+    40*60*1000);
   await loadData();       // 2. data load may fail; the app survives it
 }
 
@@ -4418,12 +4433,13 @@ async function calFetch(from, to){
   if(hit && Date.now()-hit.t < 60000) return hit.data;
   const backend = await calendarBackend();
   const [raw, iblocks, allBids] = await Promise.all([
-    DB.bookingsBetween(from, to).catch(()=>[]),
+    DB.bookingsBetween(from, to).catch(e=>({__err:(e&&e.message)||'failed'})),
     DB.blocks(from, to).catch(()=>[]),      // the table, whatever the backend
     (DB.listBids ? DB.listBids().catch(()=>[]) : Promise.resolve([]))
   ]);
   const jobs = [];
-  (raw||[]).forEach(b=>{
+  const bookErr = (raw && raw.__err) ? String(raw.__err) : null;
+  (Array.isArray(raw)?raw:[]).forEach(b=>{
     const hold = b.status==='sent';
     const totY = Number(b.yards)||0;
     /* Per Taylor: each calendar entry shows THAT TRIP's yards, not the
@@ -4485,7 +4501,8 @@ async function calFetch(from, to){
      protection is unchanged; it is only the grey chips that are gone.
      To bring them back, restore the wantCal fetch that lived here
      (2026-10-15-fastboard has the shape). */
-  const data = {jobs, gEvents, backend, calSeen: false, calErr: null};
+  const data = {jobs, gEvents, backend, calSeen: false, calErr: null,
+    bookErr};
   calCache.set(key, {t:Date.now(), data});
   while(calCache.size > 6) calCache.delete(calCache.keys().next().value);
   return data;
@@ -4515,7 +4532,14 @@ async function renderCal(){
   $('#calsrc').textContent = d.backend==='internal'
     ? '· internal — Google not consulted'
     : '· app bookings — Google overlay off';
-  $('#calnote2').innerHTML = d.backend==='google' && d.calErr
+  $('#calnote2').innerHTML = d.bookErr
+    ? '<span class="note bad" style="display:inline-block;padding:6px 10px">⚠ The '+
+      'bookings could not be loaded — this week is NOT really empty. ('+
+      esc(String(d.bookErr).slice(0,90))+') '+
+      (/jwt|401|expired/i.test(d.bookErr)
+        ? 'Your sign-in lapsed — it should recover on its own now; if not, sign out and back in.'
+        : 'Check the connection, then reopen this tab.')+'</span>'
+    : d.backend==='google' && d.calErr
     ? '⚠ Google overlay unavailable — showing app bookings only. '+esc(d.calErr.slice(0,90))
     : (Cal.crew ? 'Tap a job for the address, notes and photos.'
                 : (Cal.view==='week'
