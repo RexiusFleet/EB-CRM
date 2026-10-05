@@ -536,6 +536,9 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                 style="color:var(--danger);flex:0 0 auto">Mark lost</button>
               <div id="savemsg_q" style="flex:1 1 100%"></div>
             </div>
+            <!-- Master project (sql/37): linked site quotes, one combined
+                 customer total, one PN# across the batch. -->
+            <div id="batchpanel" style="margin-top:12px"></div>
 
           </div>
         </div>
@@ -1131,7 +1134,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-27-sessionfix';   // shown in the header; check it after deploying
+const BUILD = '2026-10-28-masterproj';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1510,6 +1513,9 @@ const DemoDB = {
       ((q.scheduled_date>=back && q.scheduled_date<=to) ||
        (q.scheduled_date2 && q.scheduled_date2>=from && q.scheduled_date2<=to)));
   },
+  async listBatch(batchId){
+    return this._quotes.filter(q=>q.batch_id===batchId);
+  },
   async blocks(){ return []; },
   async addBlock(){ throw new Error('Blockouts need live mode.'); },
   async delBlock(){ return null; },
@@ -1759,6 +1765,12 @@ const LiveDB = {
   },
   /* Internal-calendar blockouts (sql/28). In google mode these are unused —
      blockouts live as Google events; in internal mode they ARE the blocks. */
+  async listBatch(batchId){
+    return SB.rest('quotes?select=id,customer_name,address_raw,city,product,yards,'+
+      'status,bid_amount,target_price,project_no,batch_id,crew_id,scheduled_date,'+
+      'scheduled_time,scheduled_hours,archived_at&batch_id=eq.'+
+      encodeURIComponent(batchId)+'&order=created_at&limit=50');
+  },
   async blocks(from,to){
     return SB.rest('blockouts?select=*&date=gte.'+encodeURIComponent(from)+
       '&date=lte.'+encodeURIComponent(to)+'&order=date&limit=200');
@@ -2660,6 +2672,141 @@ function renderCompetitor(p){
     '</div>';
 }
 
+/* ===================== MASTER PROJECTS (sql/37) =====================
+   A batch = quotes sharing batch_id. The panel at the bottom of the
+   Quote card lists the linked sites, the COMBINED customer total, and
+   grows the batch ("new linked site" keeps the customer + the link and
+   clears the site specifics). batchApplyPN fans a PN# out to every
+   member — the one number the office shares across the whole project. */
+function quotePrice(r){
+  return (r.bid_amount!=null && r.bid_amount!=='') ? Number(r.bid_amount)
+       : (r.target_price!=null ? Number(r.target_price) : 0);
+}
+async function renderBatchPanel(){
+  const box=$('#batchpanel'); if(!box) return;
+  if(!State.batchId){
+    box.innerHTML = State.savedQuoteId
+      ? '<button type="button" class="btn ghost sm" id="batchstart">🔗 Make this a '+
+        'master project <span class="muted">— link more site quotes to it</span></button>'
+      : '';
+    const b2=$('#batchstart');
+    if(b2) b2.onclick=async()=>{
+      b2.disabled=true;
+      const id=(crypto.randomUUID ? crypto.randomUUID()
+        : 'b'+Date.now()+'-'+Math.random().toString(16).slice(2));
+      try{
+        await DB.patchQuote(State.savedQuoteId, {batch_id:id});
+        State.batchId=id;
+        toast('🔗 Master project started — add the next site with '+
+          '"New linked site quote".', false);
+        renderBatchPanel();
+      }catch(e){
+        b2.disabled=false;
+        toast(/batch_id/.test(e.message||'')
+          ? 'Master projects need sql/37_batches.sql — run it in Supabase first.'
+          : e.message, true);
+      }
+    };
+    return;
+  }
+  let members=[];
+  try{ members=(await DB.listBatch(State.batchId))||[]; }catch(e){}
+  members=members.filter(m=>!m.archived_at);
+  const tot=members.reduce((a,m)=>a+quotePrice(m),0);
+  const pns=[...new Set(members.map(m=>m.project_no).filter(Boolean))];
+  box.innerHTML='<div style="border:1px solid var(--accent);border-radius:10px;'+
+    'padding:10px 12px;background:var(--panel-2)">'+
+    '<div class="row" style="align-items:center">'+
+    '<b class="small">🔗 Master project · '+members.length+' site'+
+    (members.length===1?'':'s')+'</b>'+
+    '<span style="flex:1 1 auto"></span>'+
+    '<button type="button" class="btn sm" id="batchadd" '+
+    'style="background:var(--accent);color:var(--accent-ink);flex:0 0 auto">'+
+    '+ New linked site quote</button></div>'+
+    members.map(m=>'<div class="kv"><span class="k">'+
+      (String(m.id)===String(State.savedQuoteId)?'▸ ':'')+
+      esc(m.address_raw||'(no address)')+
+      ' <span class="muted">· '+esc((m.yards||0)+' yd '+(m.product||''))+
+      ' · '+esc(m.status==='won'?'scheduled':m.status==='sent'?'on hold':m.status)+
+      (m.project_no?'':' · no PN#')+'</span></span>'+
+      '<span><b>'+money(quotePrice(m))+'</b> '+
+      (String(m.id)===String(State.savedQuoteId)
+        ? '<span class="muted small">this one</span>'
+        : '<button type="button" class="btn ghost sm" data-bopen="'+esc(m.id)+'">Open</button>'+
+          '<button type="button" class="btn ghost sm" data-bunlink="'+esc(m.id)+'" '+
+          'title="Remove this site from the project (the quote itself stays)" '+
+          'style="color:var(--danger)">✕</button>')+
+      '</span></div>').join('')+
+    '<div class="kv" style="border-top:1px solid var(--line-2);margin-top:6px;padding-top:6px">'+
+    '<span class="k"><b>Customer total — all sites combined</b></span>'+
+    '<b style="font-size:16px">'+money(tot)+'</b></div>'+
+    '<div class="small muted" style="margin-top:4px">'+
+    (pns.length===1
+      ? 'PN# <b>'+esc(pns[0])+'</b> is shared across the batch — typing it on any '+
+        'linked quote (or its calendar card) updates all of them.'
+      : pns.length>1
+      ? '<span style="color:var(--warn)">⚠ the linked quotes carry DIFFERENT PN#s ('+
+        esc(pns.join(', '))+') — saving one again will spread it to the rest.</span>'
+      : 'No PN# yet — when the office enters it on any linked quote it spreads to all '+
+        members.length+' sites.')+'</div>'+
+    '</div>';
+  const add=$('#batchadd');
+  if(add) add.onclick=async()=>{
+    if(!State.savedQuoteId){ toast('Save this quote first, then add the next site.', true); return; }
+    const keep={ batch: State.batchId,
+      customer:$('#q_customer').value, phone:$('#q_phone').value,
+      custno:$('#q_custno').value, email:$('#q_email').value,
+      account:$('#q_account').value, pn:$('#q_pn').value };
+    $('#newquote').click();
+    $('#q_customer').value=keep.customer; $('#q_phone').value=keep.phone;
+    $('#q_custno').value=keep.custno; $('#q_email').value=keep.email;
+    $('#q_account').value=keep.account; $('#q_pn').value=keep.pn;
+    State.batchId=keep.batch;
+    renderBatchPanel();
+    toast('🔗 Next site: same customer, same project — type the new address '+
+      'and quote it. Saving links it automatically.', false);
+    try{ $('#q_address').focus(); }catch(e){}
+  };
+  box.querySelectorAll('[data-bopen]').forEach(b2=>b2.onclick=async()=>{
+    let r=null; try{ r=await DB.getQuote(b2.dataset.bopen); }catch(e){}
+    if(r) openQuote(r);
+  });
+  box.querySelectorAll('[data-bunlink]').forEach(b2=>b2.onclick=async()=>{
+    b2.disabled=true;
+    try{ await DB.patchQuote(b2.dataset.bunlink, {batch_id:null});
+      toast('Unlinked — the quote itself is untouched.', false);
+      renderBatchPanel();
+    }catch(e){ toast(e.message, true); b2.disabled=false; }
+  });
+}
+/* A PN# saved on any member is THE project number: spread it to every
+   other linked quote, and refresh booked google-mode events so the
+   number lands on the calendar too. Best-effort per member. */
+async function batchApplyPN(batchId, pn, exceptId){
+  if(!batchId || !pn) return '';
+  let members=[]; try{ members=(await DB.listBatch(batchId))||[]; }catch(e){ return ''; }
+  const targets=members.filter(m=>String(m.id)!==String(exceptId) &&
+    !m.archived_at && m.project_no!==pn);
+  if(!targets.length) return '';
+  let n=0, synced=0;
+  const backend=await calendarBackend();
+  for(const m of targets){
+    try{
+      await DB.patchQuote(m.id, {project_no: pn}); n++;
+      if(backend==='google' && DB.mode!=='demo' && GS.configured() &&
+         (m.status==='sent'||m.status==='won') && m.scheduled_date){
+        try{
+          await GS.sync(m.id, m.crew_id, m.scheduled_date,
+            m.scheduled_time?String(m.scheduled_time).slice(0,5):null,
+            m.scheduled_hours||null, null);
+          synced++;
+        }catch(e){}
+      }
+    }catch(e){}
+  }
+  return n ? ' 🔗 PN# spread to '+n+' linked site'+(n===1?'':'s')+
+    (synced?' ('+synced+' calendar event'+(synced===1?'':'s')+' updated)':'')+'.' : '';
+}
 /* The booking banner on the Schedule card: customer · yards+product ·
    address (+ loads), read straight from the form — the rep schedules
    without scrolling back up (per Taylor 2026-10-24). */
@@ -3799,6 +3946,8 @@ async function openQuote(r){
   }
   renderBidRef();
   autoFill={drive:false,blow:false,prep:false};  // these are the rep's saved numbers
+  State.batchId = r.batch_id || null;
+  try{ renderBatchPanel(); }catch(e){}
   SchedUI.forcePick=false; updateSchedMode();
   renderSchedState(r); recalc(); refreshCrewLoad();
   if(r.site_key) loadSite(r.site_key, {address1:r.address_raw,city:r.city,zip:r.zip},
@@ -5702,7 +5851,9 @@ function calCard(r, rep, focusCrew){
       '<div class="row" style="margin-top:6px;align-items:center">'+
       '<button type="button" class="btn ghost sm" id="cc_saveerp" style="flex:0 0 auto">'+
       'Save #s</button>'+
-      '<span class="small muted" id="cc_msg" style="align-self:center"></span></div>'
+      '<span class="small muted" id="cc_msg" style="align-self:center">'+
+      (r.batch_id?'🔗 master project — the PN# saves to every linked site':'')+
+      '</span></div>'
       :'')+
     (!office&&r.site_notes?'<div style="margin-top:10px"><b class="small">Site notes</b>'+
       '<div>'+esc(r.site_notes)+'</div></div>':'')+
@@ -5729,6 +5880,11 @@ function calCard(r, rep, focusCrew){
                  project_no: $('#cc_pn').value.trim()||null };
     try{
       const upd = await DB.patchQuote(r.id, vals);
+      let ccBatchNote='';
+      if(r.batch_id && vals.project_no){
+        try{ ccBatchNote = await batchApplyPN(r.batch_id, vals.project_no, r.id); }
+        catch(e2){}
+      }
       /* PostgREST reports an empty success when RLS matches 0 rows (the
          office assistant hit this — sql/18's sync-bot failure, again).
          An empty save is a FAILURE and says which sql file fixes it. */
@@ -5753,7 +5909,8 @@ function calCard(r, rep, focusCrew){
         $('#q_so').value=vals.so_no||'';
         $('#q_pn').value=vals.project_no||'';
       }
-      $('#cc_msg').textContent=m;
+      $('#cc_msg').textContent=m+ccBatchNote;
+      if(ccBatchNote) toast('Saved.'+ccBatchNote, false);
       bustCalCache();
     }catch(e){ $('#cc_msg').textContent='⚠ '+e.message; }
     sbtn.disabled=false;
@@ -7438,6 +7595,7 @@ async function saveQuote(status){
   Object.assign(q, svPayload());
   q.bid_id = State.fromBidId || null;
   q.bid_notes = State.bidNotes || null;
+  q.batch_id = State.batchId || null;
   let svWarn = '';
   setSaveBusy(true, status);
   try{
@@ -7452,6 +7610,12 @@ async function saveQuote(status){
         if(++tries<=2 && /bid_(id|notes)/i.test(em)){
           delete q.bid_id; delete q.bid_notes;
           svWarn += ' ⚠ The bid link was NOT saved — run sql/29_bids.sql in Supabase.';
+          continue;
+        }
+        if(++tries<=3 && /batch_id/i.test(em)){
+          delete q.batch_id;
+          svWarn += ' ⚠ The master-project link was NOT saved — run '+
+                    'sql/37_batches.sql in Supabase.';
           continue;
         }
         if(tries<=2 && /site_(notes|measurements|photos)/i.test(em)){
@@ -7555,7 +7719,13 @@ async function saveQuote(status){
       SiteVisit.photos = saved.site_photos.map(p=>Object.assign({}, p, {_url: urls[p.path]}));
       renderPhotos();
     }
-    msg(verb+(DB.mode==='demo'&&!sync?' (demo mode — this browser only)':'')+sync+layoutNote+lateNote+svWarn, false);
+    let batchNote='';
+    if(State.batchId && q.project_no){
+      try{ batchNote = await batchApplyPN(State.batchId, q.project_no, saved && saved.id); }
+      catch(e){}
+    }
+    try{ renderBatchPanel(); }catch(e){}
+    msg(verb+(DB.mode==='demo'&&!sync?' (demo mode — this browser only)':'')+sync+layoutNote+lateNote+svWarn+batchNote, false);
     $('#savequote').textContent = 'Update quote';
     if(State.site && State.site.key===q.site_key){
       State.site.quotes.unshift({quote_date:new Date().toISOString().slice(0,10),product:q.product,yards:q.yards,
@@ -7712,6 +7882,7 @@ function wire(){
     SchedUI.forcePick=false; updateSchedMode();
     setHistoryCollapsed(false);
     State.fromBidId=null; State.bidNotes=null; renderBidRef();
+    State.batchId=null; try{ renderBatchPanel(); }catch(e){}
     svReset();
     autoFill={drive:true,blow:true,prep:true}; renderHistory(); recalc();
   };
