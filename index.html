@@ -1171,7 +1171,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-05-custflow';   // shown in the header; check it after deploying
+const BUILD = '2026-11-06-mastrev';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-03-notes';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1837,7 +1837,8 @@ const LiveDB = {
   async listBatch(batchId){
     return SB.rest('quotes?select=id,customer_name,address_raw,city,product,yards,'+
       'status,bid_amount,target_price,project_no,so_no,batch_id,crew_id,scheduled_date,'+
-      'scheduled_time,scheduled_hours,archived_at&batch_id=eq.'+
+      'scheduled_time,scheduled_hours,archived_at,material_rev,labor_rev,equip_rev,'+
+      'labor_hours,equip_hours&batch_id=eq.'+
       encodeURIComponent(batchId)+'&order=created_at&limit=50');
   },
   async blocks(from,to){
@@ -6237,9 +6238,11 @@ function calCard(r, rep, focusCrew){
           (r.yards?r.yards+' yd'+(r.product?' '+r.product:''):'')],
         ['Labor',     L,  qty(r.labor_hours)],
         ['Equipment', E,  qty(r.equip_hours)]];
-      return '<div style="margin-top:10px;border:1px solid var(--line);'+
+      return '<div id="cc_revbox" style="margin-top:10px;border:1px solid var(--line);'+
         'border-radius:10px;padding:8px 12px">'+
-        '<div class="small" style="font-weight:600;margin-bottom:4px">Revenue</div>'+
+        '<div class="small" style="font-weight:600;margin-bottom:4px">Revenue'+
+        (r.batch_id?' <span class="muted">· this job — loading the master project…</span>':'')+
+        '</div>'+
         m3.map(x=>'<div class="kv"><span class="k">'+x[0]+
           (x[2]?' <span class="muted">· '+esc(x[2])+'</span>':'')+'</span><b>'+
           (x[1]!=null?money(x[1]):'—')+'</b></div>').join('')+
@@ -6346,6 +6349,51 @@ function calCard(r, rep, focusCrew){
     sbtn.disabled=false;
   };
   wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
+  /* Office + master project (per Taylor 2026-11-05): the Revenue box shows
+     the WHOLE project — every linked site combined — and SAYS so, because
+     a single site's split on a multi-site job reads like a wrong number.
+     The single-job box stands when the batch cannot be read or the quote
+     is alone in it. */
+  if(office && r.batch_id) (async()=>{
+    let members=[];
+    try{ members=(await DB.listBatch(r.batch_id))||[]; }catch(e){}
+    members=members.filter(m=>!m.archived_at);
+    const box=document.getElementById('cc_revbox');
+    if(!box) return;
+    if(members.length<2){
+      const h=box.querySelector('.small .muted');
+      if(h) h.remove();              // alone in the batch: plain single-job box
+      return;
+    }
+    const sum=f=>members.reduce((a,m)=>a+(Number(f(m))||0),0);
+    /* Same add-up rule as the single-job box: labor + equipment round to
+       the dollar, material takes the remainder, Total = the lines' sum. */
+    const rawT=sum(m=>m.material_rev)+sum(m=>m.labor_rev)+sum(m=>m.equip_rev);
+    const L=Math.round(sum(m=>m.labor_rev));
+    const E=Math.round(sum(m=>m.equip_rev));
+    const M=Math.round(rawT)-L-E;
+    const tot=M+L+E;
+    const yds=Math.round(sum(m=>m.yards)*10)/10;
+    const prods=[...new Set(members.map(m=>m.product).filter(Boolean))];
+    const qty=h=>h>0?Number(h).toFixed(2).replace(/\.?0+$/,'')+' hr':'';
+    const m3=[
+      ['Material', M, (yds?yds+' yd '+prods.join(', '):'')],
+      ['Labor',     L, qty(sum(m=>m.labor_hours))],
+      ['Equipment', E, qty(sum(m=>m.equip_hours))]];
+    box.style.borderColor='var(--accent)';
+    box.innerHTML=
+      '<div class="small" style="font-weight:600;margin-bottom:4px">'+
+        '🔗 Revenue — MASTER PROJECT · '+members.length+
+        ' sites combined</div>'+
+      m3.map(x=>'<div class="kv"><span class="k">'+x[0]+
+        (x[2]?' <span class="muted">· '+esc(x[2])+'</span>':'')+'</span><b>'+
+        money(x[1])+'</b></div>').join('')+
+      '<div class="kv" style="border-top:1px solid var(--line-2);margin-top:4px;'+
+      'padding-top:4px"><span class="k">Total — all sites</span><b>'+
+      money(tot)+'</b></div>'+
+      '<div class="small muted" style="margin-top:4px">Every linked site of this '+
+      'master project together — not just the job on this calendar event.</div>';
+  })();
   (office?[]:(Array.isArray(r.site_photos)?r.site_photos:[])).forEach(async ph=>{
     const u = await svThumbUrl(Object.assign({}, ph));
     if(!u) return;
