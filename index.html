@@ -1171,7 +1171,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-04-scriptnotes';   // shown in the header; check it after deploying
+const BUILD = '2026-11-05-custflow';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-03-notes';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2318,6 +2318,13 @@ function show(v){
 }
 
 /* ============================ quote builder ============================== */
+/* The ERP account number IS the customer number with a dash after the
+   company prefix: 020104709 -> 02-0104709. One formatter, used by the
+   history fill, the live Customer # field and the save fallback. */
+function acctFromCust(c){
+  c = String(c||'').replace(/\D/g,'');
+  return c.length > 2 ? c.slice(0,2) + '-' + c.slice(2) : '';
+}
 function fillProducts(){
   const sel=$('#q_product'); sel.innerHTML='';
   // An empty <select> with no explanation reads as a broken control. Say which
@@ -3195,10 +3202,12 @@ async function loadSite(key, seed, opts){
   set('q_email', pickEmail(first&&first.email, cu&&cu.email));
   const cid = pick(cu&&cu.cust_id, fo&&fo.cust_id);
   set('q_custno', cid);
-  /* The ERP account number is the customer number with a dash after the
-     company prefix: cust_id 020104709 -> account 02-0104709. Derived, not
-     stored -- and set() keeps anything the rep already typed. */
-  set('q_account', cid && cid.length>2 ? cid.slice(0,2)+'-'+cid.slice(2) : '');
+  /* Derived, not stored -- and set() keeps anything the rep already typed.
+     The auto flag lets a LATER Customer # edit keep flowing down: an
+     auto-derived Account # may be rewritten, a hand-typed one never is. */
+  set('q_account', acctFromCust(cid));
+  if(cid && $('#q_account').value === acctFromCust(cid))
+    $('#q_account').dataset.auto = '1';
   /* Remember what came from the records, so a later edit to it can ask for
      confirmation. Only sites with actual history count -- a brand-new address
      is the rep's own text, and second-guessing that would be noise. And the
@@ -3984,6 +3993,7 @@ async function openQuote(r){
   set('q_customer', r.customer_name); set('q_phone', r.phone); set('q_email', r.email);
   set('q_address', r.address_raw);    set('q_city', r.city);   set('q_zip', r.zip);
   set('q_account', r.account_no); set('q_so', r.so_no); set('q_pn', r.project_no);
+  delete $('#q_account').dataset.auto;
   set('q_yards', r.yards); set('q_prep', r.prep_hours); set('q_drive', r.drive_hours);
   set('q_blow', r.blow_hours); set('q_helpers', r.helpers); set('q_notes', r.notes);
   set('q_bid', r.bid_amount);
@@ -6212,12 +6222,21 @@ function calCard(r, rep, focusCrew){
       /* Each line carries its quantity (per Taylor): Material 15 yd
          Hemlock, Labor 4.5 hr, Equipment 3.75 hr. */
       const qty=h=>h!=null&&!isNaN(h)?Number(h).toFixed(2).replace(/\.?0+$/,'')+' hr':'';
+      /* Whole-dollar lines that ADD UP (per Taylor 2026-11-04: the Total sat
+         $1 off the sum). Labor and equipment round to the dollar; material
+         takes the remainder — the same "material takes the rest" rule the
+         pricing uses — so the three lines always sum to the Total exactly. */
+      const rawT=(Number(r.material_rev)||0)+(Number(r.labor_rev)||0)+
+                 (Number(r.equip_rev)||0);
+      const L=r.labor_rev!=null?Math.round(Number(r.labor_rev)):null;
+      const E=r.equip_rev!=null?Math.round(Number(r.equip_rev)):null;
+      const M=r.material_rev!=null?Math.round(rawT)-(L||0)-(E||0):null;
+      const tot=(M||0)+(L||0)+(E||0);
       const m3=[
-        ['Material', r.material_rev,
+        ['Material', M,
           (r.yards?r.yards+' yd'+(r.product?' '+r.product:''):'')],
-        ['Labor',     r.labor_rev,  qty(r.labor_hours)],
-        ['Equipment', r.equip_rev,  qty(r.equip_hours)]];
-      const tot=m3.reduce((a,x)=>a+(Number(x[1])||0),0);
+        ['Labor',     L,  qty(r.labor_hours)],
+        ['Equipment', E,  qty(r.equip_hours)]];
       return '<div style="margin-top:10px;border:1px solid var(--line);'+
         'border-radius:10px;padding:8px 12px">'+
         '<div class="small" style="font-weight:600;margin-bottom:4px">Revenue</div>'+
@@ -7954,7 +7973,8 @@ async function saveQuote(status){
     material_rev: p.materialRev, labor_rev: p.laborRev, equip_rev: p.equipRev,
     gross_margin: p.grossMargin,
     notes: $('#q_notes').value.trim()||null,
-    account_no: $('#q_account').value.trim()||null,
+    account_no: $('#q_account').value.trim()
+      || acctFromCust($('#q_custno').value) || null,
     so_no: $('#q_so').value.trim()||null,
     project_no: $('#q_pn').value.trim()||null,
     /* The booking lives on the quote like everything else, so one Save carries
@@ -8272,6 +8292,18 @@ function wire(){
   $('#schedquote').onclick=()=>saveQuote('won');
   $('#lostquote').onclick=()=>saveQuote('lost');
   $('#q_custno').addEventListener('change', renderCustJobs);
+  /* Customer # flows DOWN into the quote's Account # as it is typed or
+     filled (per Taylor 2026-11-04: it was not populating into the quote
+     info or the calendar event). A hand-typed Account # always wins. */
+  $('#q_custno').addEventListener('input', ()=>{
+    const acct = acctFromCust($('#q_custno').value);
+    const a = $('#q_account');
+    if(acct && (!a.value.trim() || a.dataset.auto === '1')){
+      a.value = acct; a.dataset.auto = '1';
+    }
+  });
+  $('#q_account').addEventListener('input',
+    ()=>{ delete $('#q_account').dataset.auto; });
   /* Clear ONLY the who-and-where: the rep picked the wrong site, or is
      retargeting a built quote to someone new. Product, volume, pricing, notes
      and the schedule all stay -- Clear (the button by Save) resets everything. */
