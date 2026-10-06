@@ -198,14 +198,13 @@ body.bidmode .bid-convert{display:none}
 body.bidmode #tabs button{display:none}
 body.bidmode #tabs button[data-view="bids"],
 body.bidmode #tabs button[data-view="bidlist"]{display:inline-block}
-/* Office portal (#office): Saved Quotes + Calendar only; the board is
-   look-don't-touch, and the quote piles lose their verb buttons. */
-body.officemode #tabs button{display:none}
-body.officemode #tabs button[data-view="quotes"],
-body.officemode #tabs button[data-view="cal"]{display:inline-block}
+/* Office portal (#office): the CALENDAR only (per Taylor 2026-11-02 —
+   Saved Quotes is hidden from the office). One tab is no menu, so the
+   whole bar goes, like the crew view; the board is look-don't-touch,
+   and tapping a job pops the office card (revenue + ERP numbers). */
+body.officemode #tabs{display:none}
 body.officemode #cal_block,body.officemode #cal_crew,
 body.officemode #cal_import{display:none}
-body.officemode #quoteslist [data-act]:not([data-act="open"]){display:none}
 body.crewmode{font-size:17px}
 body.crewmode .calchip{font-size:15px;white-space:normal}
 body.crewmode #cal_block,body.crewmode #cal_import,
@@ -766,6 +765,9 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             <option value="sent">Holds only</option></select></div>
           <div style="flex:0 1 190px"><label class="f">Truck</label><select id="rp_crew">
             <option value="">All trucks</option></select></div>
+          <div style="flex:0 1 190px"><label class="f">View</label><select id="rp_group">
+            <option value="trips">Each trip</option>
+            <option value="pn">By project # (PN)</option></select></div>
           <button type="button" class="btn ghost sm" id="rp_week"  style="flex:0 0 auto">This week</button>
           <button type="button" class="btn ghost sm" id="rp_month" style="flex:0 0 auto">This month</button>
           <button type="button" class="btn ghost sm" id="rp_last"  style="flex:0 0 auto">Last month</button>
@@ -1169,7 +1171,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-31-batchso';   // shown in the header; check it after deploying
+const BUILD = '2026-11-02-officecal';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2302,7 +2304,7 @@ function show(v){
   if(cur && cur.scrollIntoView) try{ cur.scrollIntoView({block:'nearest',inline:'nearest'}); }catch(e){}
   /* The bid portal never leaves its two views, whatever asks. */
   if(typeof BidPortal!=='undefined' && BidPortal && v!=='bids' && v!=='bidlist') v='bids';
-  if(typeof OfficePortal!=='undefined' && OfficePortal && v!=='quotes' && v!=='cal') v='quotes';
+  if(typeof OfficePortal!=='undefined' && OfficePortal && v!=='cal') v='cal';
   if(typeof Cal!=='undefined' && Cal.crew && v!=='cal') v='cal';
   ['quote','bids','bidlist','quotes','cal','dash','rates','reports'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
@@ -4159,6 +4161,7 @@ function rpApply(){
   const box=$('#rp_table');
   if(!trips.length){
     box.innerHTML='<div class="empty">Nothing scheduled in this range.</div>'; return; }
+  if($('#rp_group') && $('#rp_group').value==='pn'){ rpRenderGroups(trips); return; }
   const erpCell=v=>v&&String(v).trim()?esc(v):'<span class="muted">—</span>';
   box.innerHTML='<table><thead><tr><th>Date</th><th>Truck</th><th>Customer</th>'+
     '<th>PN #</th><th>SO #</th><th>Customer #</th><th>Product</th>'+
@@ -4187,9 +4190,96 @@ function rpApply(){
     'the tiles above count each project once.</div>';
 }
 
+/* GROUP BY PN# (per Taylor 2026-11-01): every trip sharing a project
+   number rolls into one row — a master-project batch whose quotes share
+   one PN# lands together, however many sites and trucks it spans. Trips
+   without a PN# stay one row per QUOTE (keyed on the quote id), flagged
+   "no PN# yet", so nothing silently merges that isn't actually the same
+   project. Per-trip numbers (trips, yards, trip hours) sum over trips;
+   quote-level numbers (labor, equip, bid, revenue) count each quote
+   ONCE, same rule as the tiles. */
+function rpGroups(trips){
+  const g=new Map();
+  trips.forEach(t=>{
+    const q=t.q;
+    const pn=q.project_no&&String(q.project_no).trim();
+    const key=pn ? 'pn:'+pn : 'q:'+q.id;
+    let G=g.get(key);
+    if(!G){ G={ pn:pn||'', trips:0, yards:0, tripHours:0, dates:[],
+      quotes:new Map(), customers:new Set(), products:new Set(), sos:new Set() };
+      g.set(key,G); }
+    G.trips++; G.yards+=Number(t.yards)||0; G.tripHours+=Number(t.hours)||0;
+    G.dates.push(t.date);
+    G.quotes.set(q.id,q);
+    if(q.customer_name) G.customers.add(q.customer_name);
+    if(q.product) G.products.add(q.product);
+    if(q.so_no&&String(q.so_no).trim()) G.sos.add(String(q.so_no).trim());
+  });
+  return [...g.values()].map(G=>{
+    const qs=[...G.quotes.values()];
+    const sum=f=>qs.reduce((s2,q)=>s2+(Number(f(q))||0),0);
+    G.dates.sort();
+    const sts=[...new Set(qs.map(q=>q.status))];
+    return { pn:G.pn, sos:[...G.sos], customers:[...G.customers],
+      products:[...G.products], sites:qs.length, trips:G.trips,
+      yards:Math.round(G.yards*10)/10,
+      tripHours:Math.round(G.tripHours*100)/100,
+      first:G.dates[0], last:G.dates[G.dates.length-1],
+      labor:Math.round(sum(q=>q.labor_hours)*100)/100,
+      equip:Math.round(sum(q=>q.equip_hours)*100)/100,
+      mat:sum(q=>q.material_rev), labRev:sum(q=>q.labor_rev),
+      eqRev:sum(q=>q.equip_rev), bid:sum(q=>q.bid_amount),
+      status: sts.length>1 ? 'Mixed' : (sts[0]==='sent'?'HOLD':'Booked') };
+  }).sort((a,b)=>String(a.first).localeCompare(String(b.first)));
+}
+
+function rpRenderGroups(trips){
+  const G=rpGroups(trips);
+  const box=$('#rp_table');
+  const r1=n=>Math.round(n*10)/10, r2=n=>Math.round(n*100)/100;
+  const tot=f=>G.reduce((s2,x)=>s2+(Number(f(x))||0),0);
+  const span=g=> g.first===g.last ? dfmt(g.first) : dfmt(g.first)+' – '+dfmt(g.last);
+  box.innerHTML='<table><thead><tr><th>PN #</th><th>SO #</th><th>Customer</th>'+
+    '<th>Product</th><th class="num">Sites</th><th class="num">Trips</th>'+
+    '<th>Dates</th><th class="num">Yards</th><th class="num">Trip hr</th>'+
+    '<th class="num">Labor hr</th><th class="num">Equip hr</th>'+
+    '<th class="num">Bid total</th><th>Status</th></tr></thead><tbody>'+
+    G.map(g=>'<tr>'+
+      '<td>'+(g.pn?esc(g.pn):'<span class="muted">— no PN# yet</span>')+'</td>'+
+      '<td>'+(g.sos.length?esc(g.sos.join(', ')):'<span class="muted">—</span>')+
+        (g.sos.length>1?' <span style="color:var(--warn)">⚠</span>':'')+'</td>'+
+      '<td>'+esc(g.customers.join(', '))+'</td>'+
+      '<td>'+esc(g.products.join(', '))+'</td>'+
+      '<td class="num">'+g.sites+'</td>'+
+      '<td class="num">'+g.trips+'</td>'+
+      '<td style="white-space:nowrap">'+esc(span(g))+'</td>'+
+      '<td class="num">'+r1(g.yards)+'</td>'+
+      '<td class="num">'+r2(g.tripHours)+'</td>'+
+      '<td class="num">'+r2(g.labor)+'</td>'+
+      '<td class="num">'+r2(g.equip)+'</td>'+
+      '<td class="num">'+money(g.bid)+'</td>'+
+      '<td>'+esc(g.status)+'</td></tr>').join('')+
+    '</tbody><tfoot><tr style="font-weight:650;border-top:2px solid var(--line)">'+
+      '<td>TOTAL</td><td></td><td></td><td></td>'+
+      '<td class="num">'+tot(g=>g.sites)+'</td>'+
+      '<td class="num">'+tot(g=>g.trips)+'</td><td></td>'+
+      '<td class="num">'+r1(tot(g=>g.yards))+'</td>'+
+      '<td class="num">'+r2(tot(g=>g.tripHours))+'</td>'+
+      '<td class="num">'+r2(tot(g=>g.labor))+'</td>'+
+      '<td class="num">'+r2(tot(g=>g.equip))+'</td>'+
+      '<td class="num">'+money(tot(g=>g.bid))+'</td><td></td></tr></tfoot></table>'+
+    '<div class="small muted" style="margin-top:6px">One row per project number '+
+    '— trips sharing a PN# are rolled together (a master project’s linked '+
+    'sites land on one row); labor, equipment and bid count each quote once. '+
+    'Rows without a PN# stay one per quote.</div>';
+}
+
 /* CSV: every column, flat, Excel-ready. Built as a pure string so the
-   suite can assert the exact bytes without faking a download. */
+   suite can assert the exact bytes without faking a download. The export
+   follows the View switch: trips = one line per trip, By project # =
+   one line per PN# with the aggregate totals plus a TOTAL line. */
 function rpCsvText(){
+  if($('#rp_group') && $('#rp_group').value==='pn') return rpCsvGroupText();
   const H=['Date','Time','Truck','Load','Status','Customer','Customer #','SO #',
     'PN #','Product','Trip yards','Trip hours','Project yards','Labor hours',
     'Equipment hours','Blow hours','Drive hours','Material revenue',
@@ -4210,16 +4300,39 @@ function rpCsvText(){
   });
   return lines.join('\r\n');
 }
+function rpCsvGroupText(){
+  const G=rpGroups(Rp.trips);
+  const cc=v=>{ v=(v==null?'':String(v));
+    return /[",\n\r]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; };
+  const tot=f=>G.reduce((s2,x)=>s2+(Number(f(x))||0),0);
+  const r1=n=>Math.round(n*10)/10, r2=n=>Math.round(n*100)/100;
+  const lines=[['PN #','SO #','Customer','Products','Sites','Trips','First date',
+    'Last date','Yards','Trip hours','Labor hours','Equipment hours',
+    'Material revenue','Labor revenue','Equipment revenue','Bid total',
+    'Status'].join(',')];
+  G.forEach(g=>lines.push([g.pn, g.sos.join(' / '), g.customers.join(' / '),
+    g.products.join(' / '), g.sites, g.trips, g.first, g.last,
+    r1(g.yards), r2(g.tripHours), r2(g.labor), r2(g.equip),
+    g.mat||'', g.labRev||'', g.eqRev||'', g.bid||'', g.status].map(cc).join(',')));
+  lines.push(['TOTAL','','','', tot(g=>g.sites), tot(g=>g.trips), '', '',
+    r1(tot(g=>g.yards)), r2(tot(g=>g.tripHours)), r2(tot(g=>g.labor)),
+    r2(tot(g=>g.equip)), tot(g=>g.mat)||'', tot(g=>g.labRev)||'',
+    tot(g=>g.eqRev)||'', tot(g=>g.bid)||'', ''].map(cc).join(','));
+  return lines.join('\r\n');
+}
 function rpDownloadCsv(){
   if(!Rp.trips.length){ toast('Nothing to export — the table is empty.', true); return; }
   // BOM so Excel opens it as UTF-8 (names with accents survive the trip)
   const blob=new Blob(['\ufeff'+rpCsvText()], {type:'text/csv;charset=utf-8'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
-  a.download='blower-report_'+Rp.from+'_to_'+Rp.to+'.csv';
+  a.download='blower-report_'+Rp.from+'_to_'+Rp.to+
+    ($('#rp_group')&&$('#rp_group').value==='pn'?'_by-PN':'')+'.csv';
   document.body.appendChild(a); a.click();
   setTimeout(()=>{ try{ URL.revokeObjectURL(a.href); a.remove(); }catch(e){} }, 800);
-  toast('✓ Exported '+Rp.trips.length+' row'+(Rp.trips.length===1?'':'s')+' to CSV', false);
+  const grouped=$('#rp_group')&&$('#rp_group').value==='pn';
+  const nRows=grouped?rpGroups(Rp.trips).length:Rp.trips.length;
+  toast('✓ Exported '+nRows+(grouped?' project':' row')+(nRows===1?'':'s')+' to CSV', false);
 }
 
 async function renderDash(){
@@ -6226,14 +6339,16 @@ function exitCrewMode(){
   const b=$('#cal_crew'); if(b) b.textContent='Crew view';
   renderCal();
 }
-/* Office portal (#office in the URL): Saved Quotes + a read-only board.
-   Quotes open as the office CARD (revenue split + ERP numbers), never the
-   builder. sql/33_office_users.sql is the matching database lock. */
+/* Office portal (#office in the URL): the read-only board ONLY (per
+   Taylor 2026-11-02 — Saved Quotes is hidden from the office). Jobs
+   open as the office CARD (revenue split + fillable ERP numbers),
+   never the builder; a #quote=<id> deep link pops the same card over
+   the board. sql/33_office_users.sql is the matching database lock. */
 let OfficePortal = false;
 function enterOfficeMode(){
   OfficePortal = true;
   document.body.classList.add('officemode');
-  show('quotes');
+  show('cal');
 }
 function exitOfficeMode(){
   if(!OfficePortal) return;
@@ -8079,7 +8194,7 @@ function wire(){
   $('#cal_month').onclick = ()=>{ Cal.view='month'; renderCal(); };
   /* ---- reports ---- */
   ['rp_from','rp_to'].forEach(id=>$('#'+id).addEventListener('change', renderReport));
-  ['rp_status','rp_crew'].forEach(id=>$('#'+id).addEventListener('change',
+  ['rp_status','rp_crew','rp_group'].forEach(id=>$('#'+id).addEventListener('change',
     ()=>{ Rp.raw ? rpApply() : renderReport(); }));
   $('#rp_week').onclick  = ()=>{ rpRange('week');  renderReport(); };
   $('#rp_month').onclick = ()=>{ rpRange('month'); renderReport(); };
