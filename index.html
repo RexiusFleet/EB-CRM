@@ -516,11 +516,11 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div id="oldnotes" class="small muted hide" style="margin-top:4px"></div></div>
             <div class="row">
               <div><label class="f">Account #</label>
-                <input type="text" id="q_account" autocomplete="off" placeholder="02-0104761"></div>
+                <input type="text" id="q_account" autocomplete="off"></div>
               <div><label class="f">SO #</label>
-                <input type="text" id="q_so" autocomplete="off" placeholder="0208260049"></div>
+                <input type="text" id="q_so" autocomplete="off"></div>
               <div><label class="f">PN #</label>
-                <input type="text" id="q_pn" autocomplete="off" placeholder="EB20267443"></div>
+                <input type="text" id="q_pn" autocomplete="off"></div>
             </div>
             <div class="small muted" style="margin-top:-6px">Optional — most jobs are
               scheduled before the ERP assigns these. When they arrive, type them here and
@@ -1171,7 +1171,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-02-officecal';   // shown in the header; check it after deploying
+const BUILD = '2026-11-03-erpfast';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -6238,11 +6238,11 @@ function calCard(r, rep, focusCrew){
          (sql/33) allows. */
       '<div class="row" style="margin-top:8px">'+
       '<div><label class="f">Customer #</label><input type="text" id="cc_acct" '+
-        'autocomplete="off" placeholder="02-0104761" value="'+esc(r.account_no||'')+'"></div>'+
+        'autocomplete="off" value="'+esc(r.account_no||'')+'"></div>'+
       '<div><label class="f">SO #</label><input type="text" id="cc_so" '+
-        'autocomplete="off" placeholder="0208260049" value="'+esc(r.so_no||'')+'"></div>'+
+        'autocomplete="off" value="'+esc(r.so_no||'')+'"></div>'+
       '<div><label class="f">PN #</label><input type="text" id="cc_pn" '+
-        'autocomplete="off" placeholder="EB20267443" value="'+esc(r.project_no||'')+'"></div>'+
+        'autocomplete="off" value="'+esc(r.project_no||'')+'"></div>'+
       '</div>'+
       '<div class="row" style="margin-top:6px;align-items:center">'+
       '<button type="button" class="btn ghost sm" id="cc_saveerp" style="flex:0 0 auto">'+
@@ -6269,6 +6269,11 @@ function calCard(r, rep, focusCrew){
   const obtn=$('#crewcard_open');
   if(obtn) obtn.onclick=()=>{ wrap.remove(); openQuote(r); };
   const sbtn=$('#cc_saveerp');
+  /* The card may be closed by the time a background step reports — write
+     the message only if #cc_msg is still in the document. */
+  const ccMsg=t=>{ const e9=$('#cc_msg'); if(e9) e9.textContent=t; };
+  const ccBoard=()=>{ bustCalCache();
+    try{ if(!$('#view-cal').classList.contains('hide')) renderCal(); }catch(e9){} };
   if(sbtn) sbtn.onclick=async()=>{
     sbtn.disabled=true;
     const vals={ account_no: $('#cc_acct').value.trim()||null,
@@ -6276,12 +6281,6 @@ function calCard(r, rep, focusCrew){
                  project_no: $('#cc_pn').value.trim()||null };
     try{
       const upd = await DB.patchQuote(r.id, vals);
-      let ccBatchNote='';
-      if(r.batch_id && (vals.project_no || vals.so_no)){
-        try{ ccBatchNote = await batchApplyPN(r.batch_id,
-          {project_no:vals.project_no, so_no:vals.so_no}, r.id); }
-        catch(e2){}
-      }
       /* PostgREST reports an empty success when RLS matches 0 rows (the
          office assistant hit this — sql/18's sync-bot failure, again).
          An empty save is a FAILURE and says which sql file fixes it. */
@@ -6290,26 +6289,41 @@ function calCard(r, rep, focusCrew){
           'this quote. Run sql/35_office_update.sql in Supabase, and check the '+
           'user is registered in office_users.');
       Object.assign(r, vals);
-      let m='Saved.';
-      const backend=await calendarBackend();
-      if(backend==='google' && DB.mode!=='demo' && GS.configured() &&
-         (r.status==='sent'||r.status==='won')){
-        try{
-          await GS.sync(r.id, r.crew_id, r.scheduled_date,
-            r.scheduled_time?String(r.scheduled_time).slice(0,5):null,
-            r.scheduled_hours||null, null);
-          m='Saved — the calendar event now carries them.';
-        }catch(e){ m='Saved in the app; calendar not updated: '+e.message; }
-      }
       if(State.savedQuoteId===r.id){
         $('#q_account').value=vals.account_no||'';
         $('#q_so').value=vals.so_no||'';
         $('#q_pn').value=vals.project_no||'';
       }
-      $('#cc_msg').textContent=m+ccBatchNote;
-      if(ccBatchNote) toast('Saved.'+ccBatchNote, false);
-      bustCalCache();
-    }catch(e){ $('#cc_msg').textContent='⚠ '+e.message; }
+      /* Confirm and unlock NOW (per Taylor 2026-11-02: the button felt
+         stuck). The slow parts — the Apps Script round trip and, on a
+         master project, the per-member fan-out — run in the background
+         and update this line when they land. The board redraws at once
+         so the ✓#s / no #s badge is current without a page reload. */
+      ccMsg('✓ Saved.'+(r.batch_id&&(vals.project_no||vals.so_no)
+        ? ' Spreading across the master project…' : ''));
+      ccBoard();
+      (async()=>{
+        let m='✓ Saved.', note='';
+        const backend=await calendarBackend();
+        if(backend==='google' && DB.mode!=='demo' && GS.configured() &&
+           (r.status==='sent'||r.status==='won')){
+          try{
+            await GS.sync(r.id, r.crew_id, r.scheduled_date,
+              r.scheduled_time?String(r.scheduled_time).slice(0,5):null,
+              r.scheduled_hours||null, null);
+            m='✓ Saved — the calendar event now carries them.';
+          }catch(e){ m='✓ Saved in the app; calendar not updated: '+e.message; }
+        }
+        if(r.batch_id && (vals.project_no || vals.so_no)){
+          try{ note = await batchApplyPN(r.batch_id,
+            {project_no:vals.project_no, so_no:vals.so_no}, r.id); }
+          catch(e3){}
+        }
+        ccMsg(m+note);
+        if(note) toast('Saved.'+note, false);
+        ccBoard();
+      })();
+    }catch(e){ ccMsg('⚠ '+e.message); }
     sbtn.disabled=false;
   };
   wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
