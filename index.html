@@ -1171,8 +1171,8 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-06-mastrev';   // shown in the header; check it after deploying
-const SCRIPT_WANT = '2026-11-03-notes';  // the deployed script version this app needs
+const BUILD = '2026-11-07-truckline';   // shown in the header; check it after deploying
+const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -6099,8 +6099,12 @@ function renderCalMonth(grid, from, to, d){
         const col = it.block ? 'var(--danger)' : it.bid ? 'var(--warn)'
                   : (it.google||it.internal) ? '#9aa2ad' : ((cr&&cr.color)||'#888');
         const label = it.qid ? it.customer : String(it.summary||'').replace(/^🚫\s*/,'🚫');
+        /* The month wall has no truck columns, so the color alone said which
+           truck — now the number says it (per Taylor 2026-11-06). */
+        const tno = cr ? ((String(cr.name).match(/#\S+/)||[])[0]||'') : '';
         return '<div class="calchip" style="border-left:3px solid '+col+';'+
           ((it.hold||it.google)?'opacity:.65;':'')+'">'+
+          (tno?'<b>'+esc(tno)+'</b> ':'')+
           (it.time?'<b>'+esc(fmtMin(toMin(it.time)))+'</b> ':'')+esc(String(label).slice(0,22))+'</div>';
       }).join('');
       const dim = date.slice(0,7)!==month;
@@ -6168,13 +6172,19 @@ function calCard(r, rep, focusCrew){
         const h2=Number(r.scheduled_hours2)||h1;
         const split=!!(r.crew2_id&&r.scheduled_time2);
         const yA=split?y1_(h1,h2):totY_, yB=split?Math.round((totY_-y1_(h1,h2))*10)/10:0;
+        /* Name the truck on single bookings and two-truck splits too — the
+           N-day slots path above always did (per Taylor 2026-11-06). */
+        const nmA=((CREWS||[]).find(c=>String(c.id)===String(r.crew_id))||{}).name;
+        const nmB=((CREWS||[]).find(c=>String(c.id)===String(r.crew2_id))||{}).name;
         const lineA=esc(dfmt(r.scheduled_date))+
           (r.scheduled_time?' · '+esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5)))):'')+
+          (nmA?' · '+esc(nmA):'')+
           (split&&totY_?' · <b>'+yA+' yd</b>':'');
         const lineB=!split?'':
           (crewView?'':'Load 2: ')+
           esc(dfmt(r.scheduled_date2||r.scheduled_date))+' · '+
           esc(fmtMin(toMin(String(r.scheduled_time2).slice(0,5))))+
+          (nmB?' · '+esc(nmB):'')+
           (totY_?' · <b>'+yB+' yd</b>':'');
         if(crewView && focusCrew && split){
           if(String(focusCrew)===String(r.crew_id)){ crewShare=yA; return lineA; }
