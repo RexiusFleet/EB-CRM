@@ -310,6 +310,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
     <button data-view="bidlist">Saved Bids</button>
     <button data-view="quotes">Saved Quotes</button>
     <button data-view="cal">Calendar</button>
+    <button data-view="reports">Reports</button>
     <button data-view="rates">Rate Card</button>
   </nav>
   <div class="userbox">
@@ -743,6 +744,40 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
       </div></div>
   </section>
 
+  <!-- ============================= REPORTS =============================
+       Export-ready view of the calendar (per Taylor 2026-10-30): one row
+       per truck TRIP in the range — the same expansion the board draws,
+       so a 3-load project is three rows with each trip's own yards — and
+       each row carries the quote's ERP numbers (Customer # / SO # / PN#)
+       and bid economics. Export CSV downloads the full column set
+       (address, revenue split, drive/blow hours included); the on-screen
+       table keeps the width sane. Reps and admins only: the office,
+       crew, driver and bid portals are all clamped away from this view
+       by show(), and their tab bars never offer it. -->
+  <section id="view-reports" class="hide">
+    <div class="card"><h3>Reports <span class="muted small">booked + held calendar events</span></h3>
+      <div class="body">
+        <div class="row" style="align-items:flex-end">
+          <div style="flex:0 1 160px"><label class="f">From</label><input type="date" id="rp_from"></div>
+          <div style="flex:0 1 160px"><label class="f">To</label><input type="date" id="rp_to"></div>
+          <div style="flex:0 1 170px"><label class="f">Status</label><select id="rp_status">
+            <option value="all">Booked + holds</option>
+            <option value="won">Booked only</option>
+            <option value="sent">Holds only</option></select></div>
+          <div style="flex:0 1 190px"><label class="f">Truck</label><select id="rp_crew">
+            <option value="">All trucks</option></select></div>
+          <button type="button" class="btn ghost sm" id="rp_week"  style="flex:0 0 auto">This week</button>
+          <button type="button" class="btn ghost sm" id="rp_month" style="flex:0 0 auto">This month</button>
+          <button type="button" class="btn ghost sm" id="rp_last"  style="flex:0 0 auto">Last month</button>
+          <span style="flex:1 1 auto"></span>
+          <button type="button" class="btn sm" id="rp_csv" style="flex:0 0 auto"
+            title="Download exactly these rows as a spreadsheet-ready .csv">⬇ Export CSV</button>
+        </div>
+        <div class="stat" id="rp_stats" style="margin-top:12px"></div>
+        <div class="scroll" id="rp_table" style="margin-top:10px;overflow-x:auto"></div>
+      </div></div>
+  </section>
+
   <!-- ============================ DASHBOARD ============================ -->
   <section id="view-dash" class="hide">
     <div class="grid" style="gap:16px">
@@ -1134,7 +1169,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-29-backup58';   // shown in the header; check it after deploying
+const BUILD = '2026-10-30-reports';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1516,6 +1551,17 @@ const DemoDB = {
       ((q.scheduled_date>=back && q.scheduled_date<=to) ||
        (q.scheduled_date2 && q.scheduled_date2>=from && q.scheduled_date2<=to)));
   },
+  async reportRows(from,to){
+    /* Same window logic as bookingsBetween (wide enough that a slots
+       span starting before the range still contributes its in-range
+       trips) — the report filters per TRIP after expansion. */
+    const back=(d=>{ const x=new Date(d+'T00:00:00'); x.setDate(x.getDate()-14);
+      return x.toISOString().slice(0,10); })(from);
+    return this._quotes.filter(q=>q.scheduled_date && q.crew_id &&
+      (q.status==='sent'||q.status==='won') &&
+      ((q.scheduled_date>=back && q.scheduled_date<=to) ||
+       (q.scheduled_date2 && q.scheduled_date2>=from && q.scheduled_date2<=to)));
+  },
   async listBatch(batchId){
     return this._quotes.filter(q=>q.batch_id===batchId);
   },
@@ -1761,6 +1807,24 @@ const LiveDB = {
       // sql/25 not run yet either: the pre-spillover column set.
       this.hasDate2 = false; this.hasSlots = false;
       return SB.rest(base+tailOld);
+    }
+  },
+  async reportRows(from,to){
+    /* The report wants EVERYTHING on the quote (revenue split, drive and
+       blow hours, ERP numbers, address), so it selects * — unlike the
+       calendar's deliberately slim field list. Same window logic as
+       bookingsBetween; the fallback covers databases where sql/25's
+       date2 column was never added (the or= filter would 400 there). */
+    const back=(d=>{ const x=new Date(d+'T00:00:00'); x.setDate(x.getDate()-14);
+      return x.toISOString().slice(0,10); })(from);
+    try{
+      return await SB.rest('quotes?select=*&or=(and(scheduled_date.gte.'+back+
+        ',scheduled_date.lte.'+to+'),and(scheduled_date2.gte.'+from+
+        ',scheduled_date2.lte.'+to+'))&status=in.(sent,won)&limit=1000');
+    }catch(e){
+      return SB.rest('quotes?select=*&scheduled_date=gte.'+back+
+        '&scheduled_date=lte.'+encodeURIComponent(to)+
+        '&status=in.(sent,won)&limit=1000');
     }
   },
   async truckCaps(){
@@ -2240,13 +2304,14 @@ function show(v){
   if(typeof BidPortal!=='undefined' && BidPortal && v!=='bids' && v!=='bidlist') v='bids';
   if(typeof OfficePortal!=='undefined' && OfficePortal && v!=='quotes' && v!=='cal') v='quotes';
   if(typeof Cal!=='undefined' && Cal.crew && v!=='cal') v='cal';
-  ['quote','bids','bidlist','quotes','cal','dash','rates'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  ['quote','bids','bidlist','quotes','cal','dash','rates','reports'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
   if(v==='bids')   fillBidProducts();
   if(v==='bidlist') renderBidsList();
   if(v==='cal')    renderCal();
   if(v==='quotes') renderQuotesList();
   if(v==='dash')   renderDash();
+  if(v==='reports') renderReport();
   if(v==='rates'){ renderRates(); renderDataStatus(); }
 }
 
@@ -3960,6 +4025,177 @@ async function openQuote(r){
 }
 
 /* ============================== dashboard =============================== */
+/* ================================ REPORTS ================================
+   One row per truck TRIP — the same expansion the calendar board draws
+   (calFetch): slots split per load with their own yards, a legacy
+   two-truck split goes by each leg's hours, a single booking is one trip.
+   Trips are then filtered to the typed range, so a project whose load 3
+   lands next month shows exactly the trips that belong to THIS month. */
+const Rp = { raw:null, trips:[], from:null, to:null };
+
+function rpTrips(raw, from, to){
+  const trips=[];
+  (Array.isArray(raw)?raw:[]).forEach(b=>{
+    const totY=Number(b.yards)||0;
+    const push=(crew,date,time,hours,lbl,y)=>{
+      if(!date || date<from || date>to) return;
+      trips.push({ q:b, crew_id:String(crew||''), date,
+        time: time?String(time).slice(0,5):null,
+        hours: Number(hours)||null, lbl: lbl||'',
+        yards: (y!=null?y:totY) });
+    };
+    if(Array.isArray(b.slots) && b.slots.length){
+      const L=b.slots.reduce((m,sl)=>Math.max(m,Number(sl.to)||Number(sl.from)||0),0)
+            || b.slots.length;
+      b.slots.forEach(sl=>{
+        const n=(sl.to>sl.from)?(sl.to-sl.from+1):1;
+        push(sl.crew_id||b.crew_id, sl.date, sl.time, sl.hours,
+          (sl.to>sl.from?'loads '+sl.from+'–'+sl.to:'load '+sl.from),
+          Number(sl.yards)>0?Number(sl.yards):Math.round(totY*n/L*10)/10);
+      });
+    }else if(b.crew2_id){
+      const h1=Number(b.scheduled_hours)||1, h2=Number(b.scheduled_hours2)||h1;
+      const y1=Math.round(totY*h1/(h1+h2)*10)/10;
+      push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours,
+        'load 1', y1);
+      push(b.crew2_id, b.scheduled_date2||b.scheduled_date,
+        b.scheduled_time2||b.scheduled_time,
+        b.scheduled_hours2||b.scheduled_hours, 'load 2',
+        Math.round((totY-y1)*10)/10);
+    }else push(b.crew_id, b.scheduled_date, b.scheduled_time,
+               b.scheduled_hours, '', null);
+  });
+  trips.sort((a,b)=> a.date===b.date
+    ? String(a.time||'').localeCompare(String(b.time||''))
+    : String(a.date).localeCompare(String(b.date)));
+  return trips;
+}
+
+function rpRange(kind){
+  const t=new Date(); let a,b;
+  if(kind==='week'){ a=new Date(calWeekStart(calFmt(t))+'T00:00:00');
+    b=new Date(a); b.setDate(b.getDate()+5); }
+  else if(kind==='last'){ a=new Date(t.getFullYear(), t.getMonth()-1, 1);
+    b=new Date(t.getFullYear(), t.getMonth(), 0); }
+  else { a=new Date(t.getFullYear(), t.getMonth(), 1);
+    b=new Date(t.getFullYear(), t.getMonth()+1, 0); }
+  $('#rp_from').value=calFmt(a); $('#rp_to').value=calFmt(b);
+}
+
+function rpStatusTxt(q){ return q.status==='sent' ? 'HOLD' : 'Booked'; }
+function rpCrewName(id){
+  const c=(CREWS||[]).find(x=>String(x.id)===String(id));
+  return c ? crewLabel(c) : ('truck '+id);
+}
+
+async function renderReport(){
+  const box=$('#rp_table'); if(!box) return;
+  if(!$('#rp_from').value || !$('#rp_to').value) rpRange('month');
+  const sel=$('#rp_crew');            // fill the truck filter once crews load
+  if(sel && sel.options.length<2 && (CREWS||[]).length)
+    CREWS.forEach(c=>{ const o=el('option'); o.value=String(c.id);
+      o.textContent=crewLabel(c); sel.appendChild(o); });
+  const from=$('#rp_from').value, to=$('#rp_to').value;
+  if(from>to){ box.innerHTML='<div class="empty">From is after To.</div>';
+    $('#rp_stats').innerHTML=''; return; }
+  box.innerHTML='<div class="empty"><span class="spin"></span> Loading…</div>';
+  let raw;
+  try{ raw=await DB.reportRows(from,to); }
+  catch(e){ box.innerHTML='<div class="note bad">Could not load the report: '+
+    esc(e.message)+'</div>'; return; }
+  Rp.raw=raw; Rp.from=from; Rp.to=to;
+  rpApply();
+}
+
+function rpApply(){
+  const st=$('#rp_status').value, cw=$('#rp_crew').value;
+  let trips=rpTrips(Rp.raw, Rp.from, Rp.to);
+  if(st!=='all') trips=trips.filter(t=>t.q.status===st);
+  if(cw) trips=trips.filter(t=>String(t.crew_id)===String(cw));
+  Rp.trips=trips;
+  /* Tiles: trips are the unit where trips make sense; the quote-level
+     numbers (hours, bid) count each project ONCE, however many trips
+     it spans — otherwise a 3-load job triples its own labor. */
+  const qSeen=new Map(); trips.forEach(t=>qSeen.set(t.q.id, t.q));
+  const qs=[...qSeen.values()];
+  const sum=(arr,f)=>arr.reduce((s2,x)=>s2+(Number(f(x))||0),0);
+  const r1=n=>Math.round(n*10)/10, r2=n=>Math.round(n*100)/100;
+  const stats=[
+    ['Trips', String(trips.length), 'calendar events in range'],
+    ['Projects', String(qs.length), 'each counted once'],
+    ['Yards', r1(sum(trips,t=>t.yards)).toLocaleString(), 'sum of per-trip loads'],
+    ['Equipment hours', r2(sum(qs,q=>q.equip_hours)).toLocaleString(), 'per project, once'],
+    ['Labor hours', r2(sum(qs,q=>q.labor_hours)).toLocaleString(), 'per project, once'],
+    ['Bid total', money(sum(qs,q=>q.bid_amount)), 'per project, once'],
+  ];
+  $('#rp_stats').innerHTML=stats.map(x=>'<div class="s"><div class="l">'+x[0]+
+    '</div><div class="v">'+x[1]+'</div><div class="sub">'+x[2]+'</div></div>').join('');
+  const box=$('#rp_table');
+  if(!trips.length){
+    box.innerHTML='<div class="empty">Nothing scheduled in this range.</div>'; return; }
+  const erpCell=v=>v&&String(v).trim()?esc(v):'<span class="muted">—</span>';
+  box.innerHTML='<table><thead><tr><th>Date</th><th>Truck</th><th>Customer</th>'+
+    '<th>PN #</th><th>SO #</th><th>Customer #</th><th>Product</th>'+
+    '<th class="num">Trip yd</th><th class="num">Trip hr</th>'+
+    '<th class="num">Labor hr</th><th class="num">Equip hr</th>'+
+    '<th class="num">Bid</th><th>Status</th></tr></thead><tbody>'+
+    trips.map(t=>{ const q=t.q; return '<tr>'+
+      '<td style="white-space:nowrap">'+esc(dfmt(t.date))+
+        (t.time?' <span class="muted small">'+esc(t.time)+'</span>':'')+'</td>'+
+      '<td style="white-space:nowrap">'+esc(rpCrewName(t.crew_id))+
+        (t.lbl?' <span class="muted small">'+esc(t.lbl)+'</span>':'')+'</td>'+
+      '<td>'+esc(q.customer_name||'')+'</td>'+
+      '<td>'+erpCell(q.project_no)+'</td>'+
+      '<td>'+erpCell(q.so_no)+'</td>'+
+      '<td>'+erpCell(q.account_no)+'</td>'+
+      '<td>'+esc(q.product||'')+'</td>'+
+      '<td class="num">'+(t.yards?r1(t.yards):'—')+'</td>'+
+      '<td class="num">'+(t.hours!=null?t.hours:'—')+'</td>'+
+      '<td class="num">'+(q.labor_hours!=null?q.labor_hours:'—')+'</td>'+
+      '<td class="num">'+(q.equip_hours!=null?q.equip_hours:'—')+'</td>'+
+      '<td class="num">'+money(q.bid_amount)+'</td>'+
+      '<td>'+rpStatusTxt(q)+'</td></tr>'; }).join('')+
+    '</tbody></table>'+
+    '<div class="small muted" style="margin-top:6px">Labor hr, Equip hr and Bid '+
+    'are the whole project’s numbers, repeated on each of its trips — '+
+    'the tiles above count each project once.</div>';
+}
+
+/* CSV: every column, flat, Excel-ready. Built as a pure string so the
+   suite can assert the exact bytes without faking a download. */
+function rpCsvText(){
+  const H=['Date','Time','Truck','Load','Status','Customer','Customer #','SO #',
+    'PN #','Product','Trip yards','Trip hours','Project yards','Labor hours',
+    'Equipment hours','Blow hours','Drive hours','Material revenue',
+    'Labor revenue','Equipment revenue','Bid total','Address','City','Quote id'];
+  const cc=v=>{ v=(v==null?'':String(v));
+    return /[",\n\r]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; };
+  const n0=v=>v!=null&&v!==''&&!isNaN(v)?v:'';
+  const lines=[H.join(',')];
+  Rp.trips.forEach(t=>{ const q=t.q;
+    lines.push([t.date, t.time||'', rpCrewName(t.crew_id), t.lbl||'',
+      rpStatusTxt(q), q.customer_name||'', q.account_no||'', q.so_no||'',
+      q.project_no||'', q.product||'',
+      t.yards!=null?Math.round(t.yards*10)/10:'', n0(t.hours),
+      n0(q.yards), n0(q.labor_hours), n0(q.equip_hours),
+      n0(q.blow_hours), n0(q.drive_hours),
+      n0(q.material_rev), n0(q.labor_rev), n0(q.equip_rev), n0(q.bid_amount),
+      q.address_raw||'', q.city||'', q.id].map(cc).join(','));
+  });
+  return lines.join('\r\n');
+}
+function rpDownloadCsv(){
+  if(!Rp.trips.length){ toast('Nothing to export — the table is empty.', true); return; }
+  // BOM so Excel opens it as UTF-8 (names with accents survive the trip)
+  const blob=new Blob(['\ufeff'+rpCsvText()], {type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='blower-report_'+Rp.from+'_to_'+Rp.to+'.csv';
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ try{ URL.revokeObjectURL(a.href); a.remove(); }catch(e){} }, 800);
+  toast('✓ Exported '+Rp.trips.length+' row'+(Rp.trips.length===1?'':'s')+' to CSV', false);
+}
+
 async function renderDash(){
   const [orders, qh] = await Promise.all([DB.ordersAll(), DB.quoteHistoryAll()]);
   const blow = qh.filter(q=>q.blow_hours!=null && q.yards>0);
@@ -7813,6 +8049,14 @@ function wire(){
   $('#cal_import').onclick = ()=>calImportCard();
   $('#cal_week').onclick = ()=>{ Cal.view='week'; renderCal(); };
   $('#cal_month').onclick = ()=>{ Cal.view='month'; renderCal(); };
+  /* ---- reports ---- */
+  ['rp_from','rp_to'].forEach(id=>$('#'+id).addEventListener('change', renderReport));
+  ['rp_status','rp_crew'].forEach(id=>$('#'+id).addEventListener('change',
+    ()=>{ Rp.raw ? rpApply() : renderReport(); }));
+  $('#rp_week').onclick  = ()=>{ rpRange('week');  renderReport(); };
+  $('#rp_month').onclick = ()=>{ rpRange('month'); renderReport(); };
+  $('#rp_last').onclick  = ()=>{ rpRange('last');  renderReport(); };
+  $('#rp_csv').onclick = rpDownloadCsv;
   /* Toggling Crew view must NOT leave '#crew' in the browser history —
      the Back button was walking into it later and re-entering crew mode
      (tabs gone, per Taylor: "I lose the entire top menu"). replaceState
