@@ -1134,7 +1134,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-28-masterproj';   // shown in the header; check it after deploying
+const BUILD = '2026-10-29-backup58';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-09-21-sitevisit';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1501,7 +1501,10 @@ const DemoDB = {
   async quoteHistoryAll(){ return this.B.quote_history; },
   async crews(){
     return [{id:'1',name:'Truck #17',color:'#a8620f',max_equip_hours:8,max_jobs:4,calendar_id:null},
-            {id:'2',name:'Truck #56',color:'#2f6b3c',max_equip_hours:8,max_jobs:4,calendar_id:null}];
+            {id:'2',name:'Truck #56',color:'#2f6b3c',max_equip_hours:8,max_jobs:4,calendar_id:null},
+            /* Backup truck (per Taylor 2026-10-29): manually selectable,
+               never auto-suggested, board column only when in use. */
+            {id:'3',name:'Truck #58',color:'#6b5b95',max_equip_hours:8,max_jobs:4,calendar_id:null,backup:true}];
   },
   async appConfig(){ return Object.assign({capacity_mode:'dry'}, this._cfg||{}); },
   async setConfig(key, value){ (this._cfg=this._cfg||{})[key]=value; return {key, value}; },
@@ -2328,6 +2331,8 @@ function isRockProduct(product){
   const rc=((State.ref&&State.ref.rate_card)||[]).find(r=>r.product===product);
   return !!(rc && rc.category==='rock');
 }
+/* "Truck #58 — backup" wherever a truck is picked by hand. */
+function crewLabel(c){ return c ? c.name+(c.backup?' — backup':'') : ''; }
 function crewCanPlace(crewId, product){
   if(!isRockProduct(product)) return true;
   if(!suggData.capMap) return true;           // capacities not loaded yet
@@ -2348,7 +2353,7 @@ function updateCrewEligibility(){
       const ok=crewCanPlace(o.value, product);
       if(o.disabled!==!ok) o.disabled=!ok;
       const c=(CREWS||[]).find(x=>String(x.id)===String(o.value));
-      const txt=(c?c.name:o.value)+(ok?'':' — can’t place rock');
+      const txt=(c?crewLabel(c):o.value)+(ok?'':' — can’t place rock');
       if(o.textContent!==txt) o.textContent=txt;
     });
     if(sel.value && !crewCanPlace(sel.value, product)) sel.value='';
@@ -4136,7 +4141,7 @@ async function loadCrews(){
   const fill=(el, first)=>{
     if(!el) return;
     const html='<option value="">'+first+'</option>' +
-      CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('');
+      CREWS.map(c=>'<option value="'+esc(c.id)+'">'+esc(crewLabel(c))+'</option>').join('');
     const write=()=>{ const v=el.value; el.innerHTML=html;
       if(v && [...el.options].some(o=>o.value===v)) el.value=v; };
     /* mid-pick on a phone: rebuild after the wheel closes, not under it */
@@ -4460,7 +4465,7 @@ function lpBuild(){
   const crewOpts=sel=>'<option value="">— truck —</option>'+
     (CREWS||[]).map(c=>'<option value="'+esc(c.id)+'"'+
       (String(sel)===String(c.id)?' selected':'')+
-      (crewCanPlace(c.id,$('#q_product').value)?'':' disabled')+'>'+esc(c.name)+'</option>').join('');
+      (crewCanPlace(c.id,$('#q_product').value)?'':' disabled')+'>'+esc(crewLabel(c))+'</option>').join('');
   box.innerHTML='<div style="border:1px solid var(--line);border-radius:10px;'+
     'padding:10px 12px;margin-bottom:10px;background:var(--panel-2)">'+
     '<div class="row" style="align-items:center;margin-bottom:2px">'+
@@ -4773,9 +4778,19 @@ function tgBanner(it, crew){
     (it.qid ? col+'22' : 'rgba(150,155,165,.16)')+';border-left:3px solid '+col+
     '" title="'+esc(lbl)+'">'+esc(String(lbl).slice(0,28))+'</div>';
 }
+/* A backup truck keeps the board clean: its column appears only when
+   something is actually scheduled/blocked on it in the visible range. */
+function visibleCrews(d, days){
+  return (CREWS||[]).filter(c=>{
+    if(!c.backup) return true;
+    const id=String(c.id);
+    return (d.jobs||[]).some(j=>String(j.crew_id)===id && days.includes(j.date)) ||
+           (d.gEvents||[]).some(g=>String(g.crew_id)===id && days.includes(g.date));
+  });
+}
 function renderCalWeek(grid, days, d){
   const today = calFmt(new Date());
-  const crewList = (CREWS||[]).slice();
+  const crewList = visibleCrews(d, days);
   const nT = Math.max(1, crewList.length);
   const H = (TG.END-TG.START)/60*TG.PXH;
   const brd = ti => 'border-left:'+(ti===0?'2px solid var(--line)':'1px solid var(--line-2)')+';';
@@ -5196,7 +5211,7 @@ async function calBlockCard(){
     '<div><label class="f">Date</label><input type="date" id="bl_date"></div>'+
     '<div><label class="f">Truck</label><select id="bl_crew">'+
     '<option value="*">All trucks</option>'+
-    (CREWS||[]).map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('')+
+    (CREWS||[]).map(c=>'<option value="'+esc(c.id)+'">'+esc(crewLabel(c))+'</option>').join('')+
     '</select></div>'+
     '<div style="max-width:110px"><label class="f">From <span class="small muted">blank = all day</span></label>'+
     '<input type="time" id="bl_from" step="900"></div>'+
@@ -5498,7 +5513,7 @@ function renderSchedCalDebounced(){
 }
 async function renderSchedCal(){
   const box = $('#schedcal'); if(!box) return;
-  const crewList = CREWS||[];
+  const crewList = (CREWS||[]).slice();
   if(!crewList.length){ box.innerHTML=''; return; }
   /* Anchor: the picked date; else the best suggestion's week (so the
      ghosts are on screen, not one ‹›-tap away); else today. While the rep
@@ -5523,6 +5538,12 @@ async function renderSchedCal(){
   }).filter(x=>x.date>=from && x.date<=to && x.time);
   const selDate=$('#q_scheddate').value, selCrew=$('#q_crew').value,
         selTime=$('#q_schedtime').value;
+  const crewVis = visibleCrews(d, days).slice();
+  if(selCrew && !crewVis.some(c=>String(c.id)===String(selCrew))){
+    const picked=(CREWS||[]).find(c=>String(c.id)===String(selCrew));
+    if(picked) crewVis.push(picked);   // the rep just chose the backup truck
+  }
+  crewList.length=0; crewVis.forEach(c=>crewList.push(c));
   const H=(SC.END-SC.START)/60*SC.PXH;
   const today=calFmt(new Date());
   const pos=(t,hrsN)=>{ const s0=Math.max(SC.START,toMin(t));
@@ -6514,6 +6535,7 @@ function secondTruckTip(ld){
   const product = $('#q_product').value;
   let best = null;
   (CREWS||[]).forEach(c=>{
+    if(c.backup) return;   // the backup truck is never volunteered
     if(String(c.id)===String(c1) || !crewCanPlace(c.id, product)) return;
     const alt = layoutDays({crew2: String(c.id)});
     if(!alt || !alt.slots.length) return;
@@ -6940,7 +6962,7 @@ async function renderSuggestions(){
       /* Rock rides only rock-capable trucks: plans are built over the
          ELIGIBLE fleet, so a rock project never gets a "both trucks" plan
          when only Truck #17 can carry it. */
-      const FLEET = (CREWS||[]).filter(c=>crewCanPlace(c.id, product));
+      const FLEET = (CREWS||[]).filter(c=>!c.backup && crewCanPlace(c.id, product));
       /* Plans show when their longest slot ENDS; one past 5 PM is offered
          with a warning rather than hidden -- the rep decides. */
       const planEnd=(startHM,hrs)=> toMin(startHM)+Math.round(hrs*60);
@@ -7047,7 +7069,7 @@ async function renderSuggestions(){
     }
 
     const res = suggestSlots(product, yards, pool, d.capMap, d.mode,
-                             CREWS||[], anchor,
+                             (CREWS||[]).filter(c=>!c.backup), anchor,
                              Math.round((slotDuration()||2)*60));
     const rock = isRockProduct(product);
     const ranked = res.filter(r=>r.best && !(rock && !r.hasCap)).sort((a,b)=>
