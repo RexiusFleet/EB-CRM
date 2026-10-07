@@ -361,7 +361,12 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                   <div id="addrverify" class="small" style="margin-top:4px"></div>
                 </div></div>
               <div><label class="f">City</label><input type="text" id="q_city"></div>
-              <div style="max-width:110px"><label class="f">ZIP</label><input type="text" id="q_zip"></div>
+              <!-- ZIP hidden from the Job site card (per Taylor 2026-11-10)
+                   but the field stays in the DOM: it still auto-fills from
+                   the typed address, picked sites and Maps corrections, and
+                   it still anchors the drive-time lookup, saves on the
+                   quote and prints in the event's location. -->
+              <div class="hide"><input type="text" id="q_zip"></div>
             </div>
             <div id="sitebanner"></div>
           </div>
@@ -1171,7 +1176,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-10-route';   // shown in the header; check it after deploying
+const BUILD = '2026-11-11-nozip';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
