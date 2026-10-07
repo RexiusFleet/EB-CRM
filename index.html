@@ -77,6 +77,7 @@
   .qf-h { margin:0; font-size:15px; padding-bottom:8px; border-bottom:1px solid var(--line); }
   .qf-foot { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
   @media (max-width:900px){ .qf-grid { grid-template-columns:1fr; } }
+  .pill-asap { color:#b3261e; }
   .qgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:12px; }
   .qcard { border:1px solid var(--line); border-radius:10px; padding:12px; background:#fff; display:grid; gap:8px; cursor:grab; align-content:start; }
   .qcard-hard { border-color:#c0392b; box-shadow:inset 3px 0 0 #c0392b; }
@@ -365,6 +366,7 @@
     renderDateCalendar(fieldPrefix);
   }
   function quoteDatePick(fieldPrefix, iso) {
+    if (el(fieldPrefix).getAttribute("data-week") === "1") iso = dispatchWeekRange(iso)[0];
     el(fieldPrefix).value = iso;
     var disp = el(fieldPrefix + "-display");
     if (disp) disp.value = formatDateDisplay(iso);
@@ -1486,7 +1488,7 @@
       customerId: r.customerId, customerName: customerName(r.customerId),
       containerId: r.containerId, containerType: "",
       shipToAddress: r.shipToAddress || "", pickupAddress: "",
-      amount: r.monthlyRate, requestedDate: reqDate, scheduledDate: "", dateNote: "", hardDate: false,
+      amount: r.monthlyRate, requestedDate: reqDate, scheduledDate: "", dateType: "", dateNote: "", hardDate: false,
       driver: "", released: false, notes: ""
     };
     state.rentals = state.rentals.map(function (x) { return x.id === id ? Object.assign({}, x, { requestedReturnDate: reqDate }) : x; });
@@ -2541,7 +2543,7 @@
       containerType: TYPES[0], monthlyRate: "", serviceFee: "",
       salesContainerId: "", salePrice: "",
       pickupAddress: "", haulAmount: "",
-      requestedDate: "", dateNote: "", hardDate: false, shipToAddress: "", poNumber: "", paymentMethod: "", doorOrientation: "", email: "",
+      requestedDate: "", dateType: "", dateNote: "", hardDate: false, shipToAddress: "", poNumber: "", paymentMethod: "", doorOrientation: "", email: "",
       salesSpecType: "", salesSpecCondition: "", salesSpecColor: ""
     };
     var readOnly = editing && editing.status === "Declined";
@@ -2619,13 +2621,7 @@
       '<div class="fld"><label>Haul amount ($)</label><input class="in mono" id="q-haul-amount" type="number" min="0" value="' + esc(q.haulAmount) + '"' + dis + "></div>" +
       "</div>" +
 
-      '<div class="fld" id="q-reqdate-fld"><label>Requested delivery / service date (optional)</label>' +
-      '<div class="combo-wrap"><input type="hidden" id="q-reqdate" value="' + esc(q.requestedDate || "") + '">' +
-      '<input class="in" id="q-reqdate-display" readonly placeholder="Click to pick a date" value="' + esc(formatDateDisplay(q.requestedDate)) + '"' + dis + (dis ? "" : ' data-act="quote-date-toggle" data-field="q-reqdate" style="cursor:pointer"') + '>' +
-      '<div class="combo-list cal-panel" id="q-reqdate-cal"></div></div>' +
-      '<input class="in" id="q-datenote" list="date-note-opts" placeholder="Delivery date notes \u2014 e.g. ASAP, week of 10/12, waiting for info" style="margin-top:8px" value="' + esc(q.dateNote || "") + '"' + dis + '>' +
-      '<label class="chk-line" style="margin-top:6px"><input type="checkbox" id="q-harddate"' + (q.hardDate ? " checked" : "") + dis + '> Hard date \u2014 must happen on the date above</label>' +
-      '<datalist id="date-note-opts"><option value="ASAP"><option value="Week of "><option value="Specific date"><option value="Waiting for info"></datalist></div>' +
+      '<div class="quote-group" id="q-reqdate-fld">' + dateTimingHtml({ type: "q-dtype", date: "q-reqdate", hard: "q-harddate", note: "q-datenote" }, q, dis) + "</div>" +
       '<div class="fld" id="q-shipto-shared-wrap"><label>Ship-to / delivery address</label><div class="combo-wrap"><input class="in addr-input verify-addr" id="q-shipto" value="' + esc(q.shipToAddress) + '"' + dis + '><div class="combo-list" id="q-shipto-list"></div></div><div class="subline" id="q-shipto-hint" style="color:var(--warn)"></div></div>' +
       (editing ? "" : '<div class="fld" id="q-sameaddr-wrap" style="display:none;margin-top:-6px">' +
         '<label style="display:flex;align-items:center;gap:6px;font-weight:500;text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink)">' +
@@ -2720,6 +2716,64 @@
     else if (genericSameAddr && QUOTE_LINE_ITEMS.length) genericSameAddr.style.display = "block";
   }
 
+  var DELIVERY_TIMINGS = ["ASAP", "Specific Date", "Week of"];
+  function dateTimingHtml(ids, v, dis) {
+    dis = dis || "";
+    var t = v.dateType || (v.requestedDate ? "Specific Date" : "");
+    var showDate = t === "Specific Date" || t === "Week of";
+    var dateLabel = t === "Week of" ? "Week of (pick any day that week)" : "Delivery date";
+    return '<div class="fld"><label>Delivery timing</label><select class="in dtype-sel" id="' + ids.type + '" data-date="' + ids.date + '" data-hard="' + ids.hard + '"' + dis + '>' +
+        opt([{ v: "", t: "Not set yet" }].concat(DELIVERY_TIMINGS), t) + "</select></div>" +
+      '<div class="fld" id="' + ids.date + '-wrap" style="' + (showDate ? "" : "display:none") + '"><label id="' + ids.date + '-lbl">' + dateLabel + "</label>" +
+        '<div class="combo-wrap"><input type="hidden" id="' + ids.date + '" value="' + esc(v.requestedDate || "") + '"' + (t === "Week of" ? ' data-week="1"' : "") + ">" +
+        '<input class="in" id="' + ids.date + '-display" readonly placeholder="Click to pick a date" value="' + esc(formatDateDisplay(v.requestedDate)) + '"' + dis + (dis ? "" : ' data-act="quote-date-toggle" data-field="' + ids.date + '" style="cursor:pointer"') + ">" +
+        '<div class="combo-list cal-panel" id="' + ids.date + '-cal"></div></div></div>' +
+      '<label class="chk-line" id="' + ids.hard + '-wrap" style="' + (t === "Specific Date" ? "" : "display:none") + '"><input type="checkbox" id="' + ids.hard + '"' + (v.hardDate ? " checked" : "") + dis + "> Hard delivery date — must be delivered on this date</label>" +
+      '<div class="fld"><label>Delivery window notes</label><textarea class="in" id="' + ids.note + '" rows="2" placeholder="e.g. morning only, call 30 min before, gate code 1234"' + dis + ">" + esc(v.dateNote || "") + "</textarea></div>";
+  }
+  function dtypeApply(sel) {
+    var t = sel.value, dateId = sel.getAttribute("data-date"), hardId = sel.getAttribute("data-hard");
+    var wrap = el(dateId + "-wrap"), hardWrap = el(hardId + "-wrap"), hidden = el(dateId);
+    var showDate = t === "Specific Date" || t === "Week of";
+    if (wrap) wrap.style.display = showDate ? "" : "none";
+    if (hardWrap) hardWrap.style.display = t === "Specific Date" ? "" : "none";
+    if (hidden) {
+      if (!showDate) { hidden.value = ""; var d = el(dateId + "-display"); if (d) d.value = ""; }
+      if (t === "Week of") { hidden.setAttribute("data-week", "1"); if (hidden.value) quoteDatePick(dateId, hidden.value); }
+      else hidden.removeAttribute("data-week");
+    }
+    if (t !== "Specific Date" && el(hardId)) el(hardId).checked = false;
+    var lbl = el(dateId + "-lbl"); if (lbl) lbl.textContent = t === "Week of" ? "Week of (pick any day that week)" : "Delivery date";
+    if (el("dc-hard-warn")) dispatchHardWarnRefresh();
+  }
+  function timingReadFields(ids) {
+    var t = el(ids.type) ? el(ids.type).value : "";
+    var showDate = t === "Specific Date" || t === "Week of";
+    return {
+      dateType: t, requestedDate: showDate && el(ids.date) ? (el(ids.date).value || "") : "",
+      hardDate: t === "Specific Date" && !!(el(ids.hard) && el(ids.hard).checked),
+      dateNote: el(ids.note) ? el(ids.note).value.trim() : ""
+    };
+  }
+  function timingFillFields(ids, v) {
+    var t = v.dateType || (v.requestedDate ? "Specific Date" : "");
+    if (el(ids.type)) { el(ids.type).value = t; dtypeApply(el(ids.type)); }
+    if (el(ids.date)) el(ids.date).value = v.requestedDate || "";
+    if (el(ids.date + "-display")) el(ids.date + "-display").value = formatDateDisplay(v.requestedDate);
+    if (el(ids.hard)) el(ids.hard).checked = !!v.hardDate && t === "Specific Date";
+    if (el(ids.note)) el(ids.note).value = v.dateNote || "";
+  }
+  function timingLabel(c) {
+    if (c.dateType === "ASAP") return "ASAP";
+    if (c.dateType === "Week of" && c.requestedDate) return "Week of " + fmtDate(c.requestedDate);
+    if (c.requestedDate) return weekdayLabel(c.requestedDate) + " " + fmtDate(c.requestedDate);
+    return "";
+  }
+  function weekdayLabel(iso) {
+    if (!iso) return "";
+    var pd = parts(iso);
+    return new Date(pd.y, pd.m - 1, pd.d).toLocaleDateString("en-US", { weekday: "short" });
+  }
   var QS_SEQ = 0;
   function quoteSectionHtml(n, v) {
     function lab(t) { return "<label>" + t + "</label>"; }
@@ -2732,28 +2786,21 @@
       '<div class="row2"><div class="fld">' + lab("Delivery / Pick-up fee ($)") + '<input class="in mono" id="qs-fee-' + n + '" type="number" min="0" value="' + esc(v.fee) + '"></div>' +
       '<div class="fld">' + lab("Door orientation") + '<select class="in" id="qs-door-' + n + '">' + opt([""].concat(DOOR_ORIENTATIONS), v.door) + "</select></div></div>" +
       '<div class="fld">' + lab("Ship-to / delivery address") + '<div class="combo-wrap"><input class="in addr-input verify-addr" id="qs-ship-' + n + '" value="' + esc(v.ship) + '"><div class="combo-list" id="qs-ship-' + n + '-list"></div></div><div class="subline" id="qs-ship-' + n + '-hint" style="color:var(--warn)"></div></div>' +
-      '<div class="row2"><div class="fld">' + lab("Requested delivery date") + '<div class="combo-wrap"><input type="hidden" id="qs-date-' + n + '" value="' + esc(v.date) + '">' +
-      '<input class="in" id="qs-date-' + n + '-display" readonly placeholder="Click to pick a date" value="' + esc(formatDateDisplay(v.date)) + '" data-act="quote-date-toggle" data-field="qs-date-' + n + '" style="cursor:pointer">' +
-      '<div class="combo-list cal-panel" id="qs-date-' + n + '-cal"></div></div></div>' +
-      '<div class="fld">' + lab("Delivery date notes") + '<input class="in" id="qs-datenote-' + n + '" list="date-note-opts" placeholder="e.g. ASAP, week of 10/12, waiting for info" value="' + esc(v.dateNote || "") + '"></div></div>' +
-      '<label class="chk-line"><input type="checkbox" id="qs-hard-' + n + '"' + (v.hardDate ? " checked" : "") + '> Hard delivery date \u2014 must be delivered on the date above</label>' +
+      dateTimingHtml({ type: "qs-dtype-" + n, date: "qs-date-" + n, hard: "qs-hard-" + n, note: "qs-datenote-" + n }, { dateType: v.dateType, requestedDate: v.date, hardDate: v.hardDate, dateNote: v.dateNote }) +
       "</div>";
   }
   function quoteSectionRead(n) {
     var g = function (id) { var e2 = el(id + n); return e2 ? e2.value : ""; };
-    return {
+    return Object.assign({
       category: "Rental", containerType: g("qs-type-"), monthlyRate: Number(g("qs-rate-")) || 0, serviceFee: Number(g("qs-fee-")) || 0,
-      shipToAddress: g("qs-ship-").trim(), requestedDate: g("qs-date-") || "", doorOrientation: g("qs-door-"),
-      dateNote: g("qs-datenote-").trim(), hardDate: !!(el("qs-hard-" + n) && el("qs-hard-" + n).checked),
-      qty: 1
-    };
+      shipToAddress: g("qs-ship-").trim(), doorOrientation: g("qs-door-"), qty: 1
+    }, timingReadFields({ type: "qs-dtype-" + n, date: "qs-date-" + n, hard: "qs-hard-" + n, note: "qs-datenote-" + n }));
   }
   function quoteSectionFill(n, v) {
     var set = function (id, val) { var e2 = el(id + n); if (e2) e2.value = val == null ? "" : val; };
     set("qs-type-", v.containerType); set("qs-rate-", v.monthlyRate || ""); set("qs-fee-", v.serviceFee || "");
-    set("qs-ship-", v.shipToAddress); set("qs-date-", v.requestedDate); set("qs-door-", v.doorOrientation); set("qs-datenote-", v.dateNote);
-    if (el("qs-hard-" + n)) el("qs-hard-" + n).checked = !!v.hardDate;
-    var d = el("qs-date-" + n + "-display"); if (d) d.value = formatDateDisplay(v.requestedDate);
+    set("qs-ship-", v.shipToAddress); set("qs-door-", v.doorOrientation);
+    timingFillFields({ type: "qs-dtype-" + n, date: "qs-date-" + n, hard: "qs-hard-" + n, note: "qs-datenote-" + n }, v);
   }
   function quoteSectionsRelabel() {
     var secs = document.querySelectorAll("#q-rental-sections .csec");
@@ -2770,7 +2817,7 @@
     var v;
     if (copyPrev && secs.length) {
       v = quoteSectionRead(secs[secs.length - 1].getAttribute("data-n"));
-      v = { type: v.containerType, rate: v.monthlyRate || "", fee: v.serviceFee || "", ship: v.shipToAddress, date: v.requestedDate, door: v.doorOrientation, dateNote: v.dateNote, hardDate: v.hardDate, qty: 1 };
+      v = { type: v.containerType, rate: v.monthlyRate || "", fee: v.serviceFee || "", ship: v.shipToAddress, date: v.requestedDate, door: v.doorOrientation, dateType: v.dateType, dateNote: v.dateNote, hardDate: v.hardDate, qty: 1 };
     } else {
       var rc = rateForType(TYPES[0]) || {};
       v = { type: TYPES[0], rate: rc.monthlyRate || "", fee: rc.serviceFee || "", ship: "", date: "", door: "", qty: 1 };
@@ -2796,13 +2843,16 @@
     quoteSectionsRelabel();
   }
   function quoteSectionItems() {
-    var out = [], bad = null;
+    var out = [], bad = null, msg = "";
     Array.prototype.forEach.call(document.querySelectorAll("#q-rental-sections .csec"), function (sec, i) {
       var it = quoteSectionRead(sec.getAttribute("data-n"));
-      if (it.monthlyRate > 0) { for (var k = 0; k < it.qty; k++) out.push(Object.assign({}, it)); }
-      else if (it.serviceFee > 0 || it.shipToAddress || it.requestedDate || it.doorOrientation || it.dateNote) { if (bad === null) bad = i + 1; }
+      if (it.monthlyRate > 0) {
+        if ((it.dateType === "Specific Date" || it.dateType === "Week of") && !it.requestedDate) { if (bad === null) { bad = i + 1; msg = "Container " + (i + 1) + ": pick the " + (it.dateType === "Week of" ? "week" : "delivery date") + " (or change the delivery timing)"; } }
+        for (var k = 0; k < it.qty; k++) out.push(Object.assign({}, it));
+      }
+      else if (it.serviceFee > 0 || it.shipToAddress || it.requestedDate || it.doorOrientation || it.dateNote || it.dateType) { if (bad === null) { bad = i + 1; msg = "Container " + (i + 1) + " needs a monthly rate"; } }
     });
-    return { items: out, badIndex: bad };
+    return { items: out, badIndex: bad, badMsg: msg };
   }
   function quoteSetSalesMode(mode) {
     var specificWrap = el("q-sales-specific-wrap"), criteriaWrap = el("q-sales-criteria-wrap");
@@ -2904,23 +2954,22 @@
   }
   function quoteReadCurrentLineItem() {
     var category = el("q-category").value;
-    return {
+    return Object.assign({
       category: category,
       containerType: el(quoteContainerTypeFieldId()).value, monthlyRate: Number(el("q-monthly-rate").value) || 0, serviceFee: Number(el("q-service-fee").value) || 0,
       salesContainerId: el("q-salescont").value || "", salePrice: Number(el("q-sale-price").value) || 0,
       salesSpecType: el("q-sales-spec-type") ? el("q-sales-spec-type").value : "", salesSpecCondition: el("q-sales-spec-condition") ? el("q-sales-spec-condition").value : "", salesSpecColor: el("q-sales-spec-color") ? el("q-sales-spec-color").value.trim() : "",
       pickupAddress: el("q-pickup").value.trim(), haulAmount: Number(el("q-haul-amount").value) || 0,
-      requestedDate: el("q-reqdate").value || "", shipToAddress: el(quoteShipToFieldId()).value.trim(),
-      dateNote: el("q-datenote").value.trim(), hardDate: el("q-harddate").checked
-    };
+      shipToAddress: el(quoteShipToFieldId()).value.trim()
+    }, timingReadFields({ type: "q-dtype", date: "q-reqdate", hard: "q-harddate", note: "q-datenote" }));
   }
   function quoteClearLineItemFields() {
     el("q-monthly-rate").value = ""; el("q-service-fee").value = "";
     el("q-salescont").value = ""; el("q-salescont-search").value = ""; el("q-sale-price").value = "";
     el("q-bookvalue-wrap").style.display = "none";
     el("q-pickup").value = ""; el("q-haul-amount").value = "";
-    el("q-datenote").value = ""; el("q-harddate").checked = false;
-    el("q-reqdate").value = ""; el("q-reqdate-display").value = ""; el("q-shipto").value = ""; if (el("q-haul-shipto")) el("q-haul-shipto").value = "";
+    timingFillFields({ type: "q-dtype", date: "q-reqdate", hard: "q-harddate", note: "q-datenote" }, {});
+     el("q-shipto").value = ""; if (el("q-haul-shipto")) el("q-haul-shipto").value = "";
   }
   function renderQuoteContactsList() {
     var wrap = el("q-contacts-wrap");
@@ -3028,9 +3077,7 @@
     }
     el("q-pickup").value = item.pickupAddress || "";
     el("q-haul-amount").value = item.haulAmount || "";
-    el("q-reqdate").value = item.requestedDate || "";
-    el("q-reqdate-display").value = formatDateDisplay(item.requestedDate);
-    el("q-datenote").value = item.dateNote || ""; el("q-harddate").checked = !!item.hardDate;
+    timingFillFields({ type: "q-dtype", date: "q-reqdate", hard: "q-harddate", note: "q-datenote" }, item);
     el("q-shipto").value = item.shipToAddress || "";
     if (el("q-haul-shipto")) el("q-haul-shipto").value = item.shipToAddress || "";
     QUOTE_LINE_ITEM_EDIT_INDEX = index;
@@ -3072,10 +3119,10 @@
         salesContainerId: el("q-salescont").value || "", salePrice: Number(el("q-sale-price").value) || 0,
         salesSpecType: el("q-sales-spec-type") ? el("q-sales-spec-type").value : "", salesSpecCondition: el("q-sales-spec-condition") ? el("q-sales-spec-condition").value : "", salesSpecColor: el("q-sales-spec-color") ? el("q-sales-spec-color").value.trim() : "",
         pickupAddress: el("q-pickup").value.trim(), haulAmount: Number(el("q-haul-amount").value) || 0,
-        requestedDate: el("q-reqdate").value || "", shipToAddress: el(quoteShipToFieldId()).value.trim(), poNumber: el("q-po").value.trim(),
-        dateNote: el("q-datenote").value.trim(), hardDate: el("q-harddate").checked,
+        shipToAddress: el(quoteShipToFieldId()).value.trim(), poNumber: el("q-po").value.trim(),
         contacts: quoteCollectContacts(), paymentMethod: el("q-payment-method").value, doorOrientation: el("q-door-orientation").value, email: el("q-email").value.trim()
       };
+      Object.assign(obj, timingReadFields({ type: "q-dtype", date: "q-reqdate", hard: "q-harddate", note: "q-datenote" }));
       var priorSalesId = prior.category === "Sales" ? prior.salesContainerId : null;
       if (priorSalesId && priorSalesId !== obj.salesContainerId) {
         state.salescontainers = state.salescontainers.map(function (c) { return c.id === priorSalesId ? Object.assign({}, c, { status: "Available", reservedByQuoteId: null, reservedAt: null }) : c; });
@@ -3095,7 +3142,7 @@
             shipToAddress: category === "Contract Haul" ? "" : obj.shipToAddress,
             pickupAddress: category === "Contract Haul" ? obj.pickupAddress : "",
             containerType: (category === "Rental" || category === "Contract Haul") ? obj.containerType : "",
-            requestedDate: obj.requestedDate || "", dateNote: obj.dateNote || "", hardDate: !!obj.hardDate
+            requestedDate: obj.requestedDate || "", dateType: obj.dateType || "", dateNote: obj.dateNote || "", hardDate: !!obj.hardDate
           });
         });
       }
@@ -3110,7 +3157,7 @@
     var items;
     if (category === "Rental" && el("q-rental-sections")) {
       var sr = quoteSectionItems();
-      if (sr.badIndex !== null) return flash("Container " + sr.badIndex + " needs a monthly rate");
+      if (sr.badIndex !== null) return flash(sr.badMsg, true);
       items = sr.items;
       if (!items.length) return flash("Fill in at least one container (monthly rate) before saving");
     } else {
@@ -3141,7 +3188,7 @@
         salesSpecType: item.salesSpecType || "", salesSpecCondition: item.salesSpecCondition || "", salesSpecColor: item.salesSpecColor || "",
         pickupAddress: item.pickupAddress || "", haulAmount: item.haulAmount || 0,
         requestedDate: item.requestedDate || "", shipToAddress: item.shipToAddress || "", poNumber: po,
-        dateNote: item.dateNote || "", hardDate: !!item.hardDate,
+        dateType: item.dateType || "", dateNote: item.dateNote || "", hardDate: !!item.hardDate,
         contacts: contacts, paymentMethod: paymentMethod, doorOrientation: item.doorOrientation != null ? item.doorOrientation : doorOrientation, email: email
       };
       state.quotes.unshift(newObj);
@@ -3193,7 +3240,7 @@
       shipToAddress: q.category === "Contract Haul" ? "" : (q.shipToAddress || ""),
       pickupAddress: q.category === "Contract Haul" ? (q.pickupAddress || "") : "",
       amount: quoteAmount(q),
-      requestedDate: q.requestedDate || "", scheduledDate: "", dateNote: q.dateNote || "", hardDate: !!q.hardDate,
+      requestedDate: q.requestedDate || "", scheduledDate: "", dateType: q.dateType || "", dateNote: q.dateNote || "", hardDate: !!q.hardDate,
       driver: "", released: false, notes: q.notes || "",
       specType: (q.category === "Sales" && !q.salesContainerId) ? (q.salesSpecType || "") : "",
       specCondition: (q.category === "Sales" && !q.salesContainerId) ? (q.salesSpecCondition || "") : "",
@@ -3766,29 +3813,26 @@
     flash("Confirmed — sent to billing");
     commit();
   }
-  function weekdayLabel(iso) {
-    if (!iso) return "";
-    var pd = parts(iso);
-    return new Date(pd.y, pd.m - 1, pd.d).toLocaleDateString("en-US", { weekday: "short" });
-  }
   function dispatchQueueCardHtml(c) {
     var city = dispatchPillCity(c);
     var size = dispatchPillSize(c);
     var dateHtml;
-    if (c.requestedDate) {
-      dateHtml = '<div class="qcard-dateval">' + esc(weekdayLabel(c.requestedDate)) + " " + esc(fmtDate(c.requestedDate)) +
+    if (c.dateType === "ASAP") {
+      dateHtml = '<div class="qcard-dateval"><span class="badge b-danger">ASAP</span></div>';
+    } else if (c.requestedDate) {
+      dateHtml = '<div class="qcard-dateval">' + esc(timingLabel(c)) +
         (c.hardDate ? ' <span class="badge b-danger">HARD DATE</span>' : "") + "</div>";
     } else {
-      dateHtml = '<div class="qcard-dateval muted">No date requested</div>';
+      dateHtml = '<div class="qcard-dateval muted">No date set yet</div>';
     }
     var tentative = (c.scheduledDate && !c.driver) ? '<div class="qcard-note">Tentative: ' + esc(fmtDate(c.scheduledDate)) + " \u2014 needs a driver</div>" : "";
-    var noteHtml = c.dateNote ? '<div class="qcard-note"><strong>Date note:</strong> ' + esc(c.dateNote) + "</div>" : "";
+    var noteHtml = c.dateNote ? '<div class="qcard-note"><strong>Delivery window:</strong> ' + esc(c.dateNote) + "</div>" : "";
     return '<div class="qcard drag-card' + (c.hardDate ? " qcard-hard" : "") + '" draggable="true" data-id="' + esc(c.id) + '">' +
       '<div class="qcard-top"><span class="badge ' + dispatchCatClass(c.category) + '">' + esc(c.category) + "</span>" +
       '<span class="money">' + money(c.amount, 0) + "</span></div>" +
       '<div class="qcard-cust">' + esc(c.customerName) + (city ? ' <span class="dcard-city">\u00B7 ' + esc(city) + "</span>" : "") + "</div>" +
       '<div class="qcard-sum">' + (size ? esc(size) + " \u2014 " : "") + esc(dispatchCardSummary(c)) + "</div>" +
-      '<div class="qcard-date"><div class="qcard-datelbl">Requested date</div>' + dateHtml + noteHtml + tentative + "</div>" +
+      '<div class="qcard-date"><div class="qcard-datelbl">Delivery timing</div>' + dateHtml + noteHtml + tentative + "</div>" +
       '<div class="qcard-actions"><button class="btn sm primary" data-act="dispatch-schedule" data-id="' + esc(c.id) + '">Schedule</button> ' +
       (c.sourceType === "quote" && quoteById(c.sourceId) ? '<button class="btn sm" data-act="quote-edit" data-id="' + esc(c.sourceId) + '">View quote</button> ' : "") +
       '<button class="btn sm ghost danger" data-act="dispatch-delete-prompt" data-id="' + esc(c.id) + '">Delete</button></div></div>';
@@ -3904,7 +3948,7 @@
   function dispatchCardPillHtml(c) {
     var flagged = c.scanStatus === "mismatch" || c.scanStatus === "unrecognized";
     var pillCity = dispatchPillCity(c);
-    var label = (flagged ? "⚠ " : "") + (c.released ? "👁 " : "") + driverBadgeHtml(c.driver) + esc(dispatchPillLabel(c)) + (pillCity ? ' <span class="dcard-city">· ' + esc(pillCity) + "</span>" : "");
+    var label = (flagged ? "⚠ " : "") + (c.released ? "👁 " : "") + driverBadgeHtml(c.driver) + (c.dateType === "ASAP" ? '<strong class="pill-asap">ASAP</strong> ' : "") + esc(dispatchPillLabel(c)) + (pillCity ? ' <span class="dcard-city">· ' + esc(pillCity) + "</span>" : "");
     return '<div class="dcard drag-card ' + dispatchPillClass(c.category) + (c.released ? " dcard-released" : "") + '" draggable="true" data-act="dispatch-manage" data-id="' + esc(c.id) + '" title="' + esc(c.category) + ": " + esc(c.customerName) + (c.driver ? " — " + esc(c.driver) : " — unassigned") + (c.released ? " — released to driver" : "") + (flagged ? " — SCAN FLAGGED: " + esc(c.scannedValue || "") : "") + '">' + label + "</div>";
   }
   function renderDispatchCalendar() {
@@ -4033,13 +4077,7 @@
       scanInfo +
       jobDetailFieldsHtml(card) +
       (needsContainer ? '<div class="fld"><label>Container ID</label><input class="in mono" id="confirm-container" value="' + esc(card.containerId || "") + '" placeholder="Not yet captured"></div>' : "") +
-      '<div class="fld"><label>Requested date</label>' +
-      '<div class="combo-wrap"><input type="hidden" id="dc-req" value="' + esc(card.requestedDate || "") + '">' +
-      '<input class="in" id="dc-req-display" readonly placeholder="Click to pick a date" value="' + esc(formatDateDisplay(card.requestedDate)) + '" data-act="quote-date-toggle" data-field="dc-req" style="cursor:pointer">' +
-      '<div class="combo-list cal-panel" id="dc-req-cal"></div></div>' +
-      '<input class="in" id="dc-datenote" list="date-note-opts" placeholder="Delivery date notes \u2014 e.g. ASAP, week of 10/12, waiting for info" style="margin-top:8px" value="' + esc(card.dateNote || "") + '">' +
-      '<datalist id="date-note-opts"><option value="ASAP"><option value="Week of "><option value="Specific date"><option value="Waiting for info"></datalist>' +
-      '<label class="chk-line" style="margin-top:6px"><input type="checkbox" id="dc-hard"' + (card.hardDate ? " checked" : "") + '> Hard delivery date \u2014 must happen on the requested date</label></div>' +
+      dateTimingHtml({ type: "dc-dtype", date: "dc-req", hard: "dc-hard", note: "dc-datenote" }, card) +
       '<div class="fld"><label>Scheduled date</label>' +
       '<div class="combo-wrap"><input type="hidden" id="dc-date" value="' + esc(card.scheduledDate || "") + '">' +
       '<input class="in" id="dc-date-display" readonly placeholder="Click to pick a date" value="' + esc(formatDateDisplay(card.scheduledDate)) + '" data-act="quote-date-toggle" data-field="dc-date" style="cursor:pointer">' +
@@ -4083,7 +4121,7 @@
       if (warnEl.scrollIntoView) warnEl.scrollIntoView({ block: "center" });
       return flash("Hard delivery date doesn\u2019t match \u2014 click Save again to schedule it anyway", true);
     }
-    var patch = { scheduledDate: date, driver: driver, released: released, requestedDate: el("dc-req").value || "", dateNote: el("dc-datenote").value.trim(), hardDate: el("dc-hard").checked };
+    var patch = Object.assign({ scheduledDate: date, driver: driver, released: released }, timingReadFields({ type: "dc-dtype", date: "dc-req", hard: "dc-hard", note: "dc-datenote" }));
     var containerField = el("confirm-container");
     if (containerField) {
       var newContainerId = containerField.value.trim();
@@ -4554,6 +4592,7 @@
     else if (e.target.classList.contains("coll-stage-select")) { setCollectionStage(e.target.getAttribute("data-id"), e.target.value); renderCollections(el("view")); }
     else if (e.target.id === "q-category") { quoteShowGroup(e.target.value); }
     else if (e.target.id === "dc-hard") { dispatchHardWarnRefresh(); }
+    else if (e.target.classList.contains("dtype-sel")) { dtypeApply(e.target); }
     else if (e.target.id === "q-cust-account" || e.target.id === "q-cust-search") {
       if (!el("q-customer").value) {
         var tv = e.target.value.trim().toLowerCase();
