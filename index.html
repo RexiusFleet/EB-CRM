@@ -1176,7 +1176,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-11-nozip';   // shown in the header; check it after deploying
+const BUILD = '2026-11-12-fastmaps';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1572,6 +1572,8 @@ const DemoDB = {
   async listBatch(batchId){
     return this._quotes.filter(q=>q.batch_id===batchId);
   },
+  async driveCache(){ return null; },
+  async driveCachePut(){ return null; },
   async blocks(){ return []; },
   async addBlock(){ throw new Error('Blockouts need live mode.'); },
   async delBlock(){ return null; },
@@ -1833,6 +1835,15 @@ const LiveDB = {
         '&scheduled_date=lte.'+encodeURIComponent(to)+
         '&status=in.(sent,won)&limit=1000');
     }
+  },
+  async driveCache(key){
+    const r = await SB.rest('drive_cache?select=*&key=eq.'+
+      encodeURIComponent(key)+'&limit=1');
+    return r && r[0];
+  },
+  async driveCachePut(row){
+    return SB.rest('drive_cache?on_conflict=key', {method:'POST',
+      headers:{Prefer:'resolution=merge-duplicates'}, body:JSON.stringify(row)});
   },
   async truckCaps(){
     return SB.rest('truck_capacity?select=crew_id,product,dry_yards,wet_yards&limit=500');
@@ -2569,13 +2580,25 @@ async function fetchDriveTime(dest){
     body.query = dest;   // what we ASKED for — shown on the route line
     return body;
   };
-  try{ return await once(45000); }
+  try{ return await once(25000); }
   catch(e){
     /* a COLD Apps Script can blow the first timeout; the retry usually
        lands on the instance the first call woke up */
     if(e.status!=='timeout') throw e;
-    return await once(45000);
+    return await once(30000);
   }
+}
+/* Wake the drive-time script BEFORE the rep finishes typing: focusing
+   the customer or address field fires a throttled ping, so by the time
+   the address blurs, Google's side is warm and the lookup lands in a
+   couple of seconds instead of a cold 10-20 (per Taylor 2026-11-11:
+   "asking google maps request is taking a long time to load"). */
+let dtWarmT = 0;
+function dtWarm(){
+  if(!DT.url || DB.mode==='demo') return;
+  if(Date.now()-dtWarmT < 5*60*1000) return;
+  dtWarmT = Date.now();
+  try{ fetch(DT.url, {redirect:'follow'}).catch(()=>{}); }catch(e){}
 }
 /* The cache key is address + city + zip, so typing the city AFTER the
    street re-queries instead of serving the street-only answer (which,
@@ -2600,6 +2623,20 @@ async function applyMapsDrive(){
   const key=dtKey();
   const my=++dtReq;
   if(DT.cache.has(key)){ recalc(); renderAddrVerify(); return; }
+  /* Shared cache (sql/39): an address ANY rep has quoted before answers
+     straight from Supabase — the slow part is only ever paid once. */
+  try{
+    const hit = DB.driveCache ? await DB.driveCache(key) : null;
+    if(hit && hit.out_min!=null &&
+       Date.now()-new Date(hit.updated_at||0).getTime() < 90*86400000){
+      DT.cache.set(key, { ok:true,
+        out_min:Number(hit.out_min), back_min:Number(hit.back_min),
+        miles:hit.miles!=null?Number(hit.miles):null,
+        resolved:hit.resolved||null, yard:hit.yard||null, query:key });
+      if(my===dtReq){ recalc(); renderAddrVerify(); }
+      return;
+    }
+  }catch(e0){ /* table missing (sql/39 not run) or offline: just ask Google */ }
   const dest=[addr, city, zip&&zip.length===5 ? 'OR '+zip : (city?'OR':'')]
     .filter(Boolean).join(', ');
   let body=null;
@@ -2639,6 +2676,15 @@ async function applyMapsDrive(){
     }
   }
   if(body) DT.cache.set(key, body);
+  /* Write-through, best-effort: only REAL routes land in the shared
+     cache — a city fallback or rejected far match must never serve as
+     this address's answer for the next rep. */
+  if(body && !body.approx && !body.farMatch && DB.driveCachePut){
+    try{ DB.driveCachePut({ key, out_min:body.out_min, back_min:body.back_min,
+      miles:body.miles!=null?body.miles:null, resolved:body.resolved||null,
+      yard:body.yard||null, updated_at:new Date().toISOString() })
+      .catch(()=>{}); }catch(e6){}
+  }
   if(my===dtReq){ recalc(); renderAddrVerify(); }
 }
 /* Google's directions answer carries the RESOLVED address — use it to
@@ -2717,7 +2763,7 @@ function renderAddrVerify(){
           detail:'Google Maps unreachable ('+String(DT.err).slice(0,60)+
             ') — type the round trip' };
         return { hours:0, basis:'gmaps_wait', n:0,
-          detail:'asking Google Maps…' };
+          detail:'asking Google Maps… (a cold first lookup can take ~15 s)' };
       }
     }catch(e){}
     return zoneEst(ctx);
@@ -8403,6 +8449,8 @@ function wire(){
   /* City and ZIP anchor the Maps lookup — editing them re-queries (the
      street alone can match the wrong state; field report 2026-11-08). */
   ['q_city','q_zip'].forEach(id=>$('#'+id).addEventListener('change', applyMapsDrive));
+  ['q_customer','q_address'].forEach(id=>
+    $('#'+id).addEventListener('focus', dtWarm));
   /* Save/Update quote PRESERVES the quote's current status. It used to force
      'draft', which silently pulled a booked job off the calendar when a rep
      reopened it just to add the SO/PN and pressed Update -- the label said
