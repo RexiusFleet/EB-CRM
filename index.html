@@ -1171,7 +1171,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-09-farfix';   // shown in the header; check it after deploying
+const BUILD = '2026-11-10-route';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2465,6 +2465,19 @@ function suggest(){
   $('#drivebasis').innerHTML = basisLabel(d.basis) + esc(d.detail) +
     (proj.loads>1 ? ' <b>× '+proj.loads+' loads</b> (one round trip each)' : '') +
     (autoFill.drive?'':' <span class="tag">overridden</span>') +
+    /* The exact route, spelled out (per Taylor 2026-11-09: "show the from
+       and to address to double check it is pulling the right information").
+       To = the address Google actually RESOLVED (its answer), falling back
+       to what we asked; From = the yard as the service reports it. */
+    (d.basis==='gmaps' ? (function(){
+      const m=mapsDriveFor($('#q_address').value);
+      if(!m) return '';
+      const from=String(m.yard||'92574 N. Coburg Rd, Eugene (yard)')
+        .replace(/, USA$/,'');
+      const to=String(m.resolved||m.query||'').replace(/, USA$/,'');
+      return to ? '<div class="small muted" style="margin-top:3px">Route: '+
+        esc(from)+' → <b>'+esc(to)+'</b> → back</div>' : '';
+    })() : '') +
     ((DT.url && DT.err && d.basis!=='gmaps' && $('#q_address').value.trim())
       ? '<div class="small muted" style="margin-top:3px">⚠ Google Maps lookup '+
         'failed ('+esc(String(DT.err).slice(0,70))+') — using the estimate above.</div>'
@@ -2548,6 +2561,7 @@ async function fetchDriveTime(dest){
     let body=null; try{ body=JSON.parse(await r.text()); }catch(e){}
     if(!body || !body.ok) throw new Error((body&&body.error)||
       'not the service\u2019s JSON \u2014 is the deployment\u2019s access set to "Anyone"?');
+    body.query = dest;   // what we ASKED for — shown on the route line
     return body;
   };
   try{ return await once(45000); }
