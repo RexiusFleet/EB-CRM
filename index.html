@@ -517,9 +517,9 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             <div class="row">
               <div><label class="f">Account #</label>
                 <input type="text" id="q_account" autocomplete="off"></div>
-              <div><label class="f">SO #</label>
+              <div><label class="f">Order Nbr</label>
                 <input type="text" id="q_so" autocomplete="off"></div>
-              <div><label class="f">PN #</label>
+              <div><label class="f">Project</label>
                 <input type="text" id="q_pn" autocomplete="off"></div>
             </div>
             <div class="small muted" style="margin-top:-6px">Optional — most jobs are
@@ -767,7 +767,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             <option value="">All trucks</option></select></div>
           <div style="flex:0 1 190px"><label class="f">View</label><select id="rp_group">
             <option value="trips">Each trip</option>
-            <option value="pn">By project # (PN)</option></select></div>
+            <option value="pn">By Project</option></select></div>
           <button type="button" class="btn ghost sm" id="rp_week"  style="flex:0 0 auto">This week</button>
           <button type="button" class="btn ghost sm" id="rp_month" style="flex:0 0 auto">This month</button>
           <button type="button" class="btn ghost sm" id="rp_last"  style="flex:0 0 auto">Last month</button>
@@ -1171,7 +1171,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-07-truckline';   // shown in the header; check it after deploying
+const BUILD = '2026-11-09-farfix';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2558,9 +2558,19 @@ async function fetchDriveTime(dest){
     return await once(45000);
   }
 }
+/* The cache key is address + city + zip, so typing the city AFTER the
+   street re-queries instead of serving the street-only answer (which,
+   unanchored, can match a same-named street in another state). Parts
+   left blank stay out of the key, so an address-only lookup keys as
+   just the address. */
+function dtKey(){
+  return [$('#q_address').value, $('#q_city').value, $('#q_zip').value]
+    .map(x=>String(x||'').trim().toLowerCase()).filter(Boolean).join('|');
+}
 function mapsDriveFor(addr){
-  const k=String(addr||'').trim().toLowerCase();
-  return (k && DT.cache.has(k)) ? DT.cache.get(k) : null;
+  if(!String(addr||'').trim()) return null;
+  const k=dtKey();
+  return DT.cache.has(k) ? DT.cache.get(k) : null;
 }
 let dtReq=0;
 async function applyMapsDrive(){
@@ -2568,15 +2578,35 @@ async function applyMapsDrive(){
   const city=$('#q_city').value.trim();
   const zip=$('#q_zip').value.trim();
   if(!DT.url || !addr || DB.mode==='demo') return;
-  const key=addr.toLowerCase();
+  const key=dtKey();
   const my=++dtReq;
-  if(DT.cache.has(key)){ recalc(); return; }
+  if(DT.cache.has(key)){ recalc(); renderAddrVerify(); return; }
   const dest=[addr, city, zip&&zip.length===5 ? 'OR '+zip : (city?'OR':'')]
     .filter(Boolean).join(', ');
   let body=null;
   try{
     DT.err=null;
     body = await fetchDriveTime(dest);
+    /* SANITY (field report 2026-11-08: a same-named street ~2,000 mi away
+       produced a 62-hour round trip). Nothing this department serves is
+       4+ hours out, so a huge answer means Maps matched the WRONG PLACE,
+       not a long drive: fall back to the city — marked, with the far
+       match named — or, without a city, ask for the round trip. */
+    if(body && (Number(body.miles)>400 ||
+        (Number(body.out_min)||0)+(Number(body.back_min)||0)>480)){
+      const far=body; body=null;
+      if(city){
+        try{ body = await fetchDriveTime(city+', OR'); }catch(e4){}
+        if(body && (Number(body.miles)>400 ||
+            (Number(body.out_min)||0)+(Number(body.back_min)||0)>480)) body=null;
+        if(body){ body.approx=city;
+          body.farMatch=far.resolved||null; body.farMiles=far.miles||null; }
+      }
+      if(!body) DT.err='Maps matched an address '+
+        (far.miles?Math.round(far.miles)+' mi':'far')+' away'+
+        (far.resolved?' ('+String(far.resolved).replace(/, USA$/,'')+')':'')+
+        ' — check the street address and city, or type the round trip';
+    }
   }catch(e){
     /* Per Taylor: an address Maps cannot find falls back to the CITY as
        the reference point — marked approximate on the basis line. */
@@ -2601,6 +2631,13 @@ function renderAddrVerify(){
   const addr=$('#q_address').value.trim();
   const m=addr ? mapsDriveFor(addr) : null;
   if(!m || !addr){ box.innerHTML=''; return; }
+  if(m.farMatch){
+    box.innerHTML='<span style="color:var(--warn)">⚠ Google Maps matched a far-away '+
+      'address'+(m.farMiles?' ('+Math.round(m.farMiles)+' mi round trip — ':' (')+
+      esc(String(m.farMatch).replace(/, USA$/,''))+'). Drive time is to '+
+      esc(m.approx)+' instead — check the street address.</span>';
+    return;
+  }
   if(m.approx){
     box.innerHTML='<span style="color:var(--warn)">⚠ Google Maps could not find '+
       'this exact address — drive time is to '+esc(m.approx)+'. Check the street address.</span>';
@@ -2608,7 +2645,12 @@ function renderAddrVerify(){
   }
   const clean=x=>String(x||'').toLowerCase().replace(/[.,#]/g,'').replace(/\s+/g,' ').trim();
   const resolvedStreet=String(m.resolved||'').split(',')[0];
-  if(!m.resolved || clean(resolvedStreet)===clean(addr)){
+  /* The green check needs the CITY to agree too — a same-named street in
+     another town (or state) is exactly the wrong-match case above. */
+  const typedCity=clean($('#q_city').value);
+  const cityOk = !m.resolved || !typedCity ||
+    clean(m.resolved).indexOf(typedCity)>=0;
+  if((!m.resolved || clean(resolvedStreet)===clean(addr)) && cityOk){
     box.innerHTML = m.resolved
       ? '<span style="color:var(--good)">✓ address verified by Google Maps</span>' : '';
     return;
@@ -2621,10 +2663,10 @@ function renderAddrVerify(){
     const street=parts[0]||addr;
     const city=parts[1]||$('#q_city').value;
     const zm=(parts[2]||'').match(/\b(\d{5})\b/);
-    DT.cache.set(street.toLowerCase(), m);   // no refetch for the fixed spelling
     $('#q_address').value=street;
     if(city) $('#q_city').value=city;
     if(zm) $('#q_zip').value=zm[1];
+    DT.cache.set(dtKey(), m);   // no refetch for the fixed spelling
     State.prefill.address=null;
     recalc(); renderAddrVerify(); renderYardRef();
     toast('✓ Address updated to Google Maps’ spelling.', false);
@@ -2809,7 +2851,7 @@ async function renderBatchPanel(){
       esc(m.address_raw||'(no address)')+
       ' <span class="muted">· '+esc((m.yards||0)+' yd '+(m.product||''))+
       ' · '+esc(m.status==='won'?'scheduled':m.status==='sent'?'on hold':m.status)+
-      (m.project_no?'':' · no PN#')+(m.so_no?'':' · no SO#')+'</span></span>'+
+      (m.project_no?'':' · no Project')+(m.so_no?'':' · no Order Nbr')+'</span></span>'+
       '<span><b>'+money(quotePrice(m))+'</b> '+
       (String(m.id)===String(State.savedQuoteId)
         ? '<span class="muted small">this one</span>'
@@ -2823,21 +2865,21 @@ async function renderBatchPanel(){
     '<b style="font-size:16px">'+money(tot)+'</b></div>'+
     '<div class="small muted" style="margin-top:4px">'+
     (pns.length===1
-      ? 'PN# <b>'+esc(pns[0])+'</b> is shared across the batch — typing it on any '+
+      ? 'Project <b>'+esc(pns[0])+'</b> is shared across the batch — typing it on any '+
         'linked quote (or its calendar card) updates all of them.'
       : pns.length>1
-      ? '<span style="color:var(--warn)">⚠ the linked quotes carry DIFFERENT PN#s ('+
+      ? '<span style="color:var(--warn)">⚠ the linked quotes carry DIFFERENT Projects ('+
         esc(pns.join(', '))+') — saving one again will spread it to the rest.</span>'
-      : 'No PN# yet — when the office enters it on any linked quote it spreads to all '+
+      : 'No Project yet — when the office enters it on any linked quote it spreads to all '+
         members.length+' sites.')+
     '<br>'+
     (sos.length===1
-      ? 'SO# <b>'+esc(sos[0])+'</b> is shared across the batch — one sales order for '+
+      ? 'Order Nbr <b>'+esc(sos[0])+'</b> is shared across the batch — one sales order for '+
         'the whole project.'
       : sos.length>1
-      ? '<span style="color:var(--warn)">⚠ the linked quotes carry DIFFERENT SO#s ('+
+      ? '<span style="color:var(--warn)">⚠ the linked quotes carry DIFFERENT Order Nbrs ('+
         esc(sos.join(', '))+') — saving one again will spread it to the rest.</span>'
-      : 'No SO# yet — entered on any linked quote it spreads to all '+
+      : 'No Order Nbr yet — entered on any linked quote it spreads to all '+
         members.length+' sites.')+'</div>'+
     '</div>';
   const add=$('#batchadd');
@@ -2909,7 +2951,8 @@ async function batchApplyPN(batchId, nums, exceptId){
       }
     }catch(e){}
   }
-  const what = spread.pn && spread.so ? 'PN# + SO#' : spread.so ? 'SO#' : 'PN#';
+  const what = spread.pn && spread.so ? 'Project + Order Nbr'
+             : spread.so ? 'Order Nbr' : 'Project';
   return n ? ' 🔗 '+what+' spread to '+n+' linked site'+(n===1?'':'s')+
     (synced?' ('+synced+' calendar event'+(synced===1?'':'s')+' updated)':'')+'.' : '';
 }
@@ -4175,7 +4218,7 @@ function rpApply(){
   if($('#rp_group') && $('#rp_group').value==='pn'){ rpRenderGroups(trips); return; }
   const erpCell=v=>v&&String(v).trim()?esc(v):'<span class="muted">—</span>';
   box.innerHTML='<table><thead><tr><th>Date</th><th>Truck</th><th>Customer</th>'+
-    '<th>PN #</th><th>SO #</th><th>Customer #</th><th>Product</th>'+
+    '<th>Project</th><th>Order Nbr</th><th>Customer #</th><th>Product</th>'+
     '<th class="num">Trip yd</th><th class="num">Trip hr</th>'+
     '<th class="num">Labor hr</th><th class="num">Equip hr</th>'+
     '<th class="num">Bid</th><th>Status</th></tr></thead><tbody>'+
@@ -4250,13 +4293,13 @@ function rpRenderGroups(trips){
   const r1=n=>Math.round(n*10)/10, r2=n=>Math.round(n*100)/100;
   const tot=f=>G.reduce((s2,x)=>s2+(Number(f(x))||0),0);
   const span=g=> g.first===g.last ? dfmt(g.first) : dfmt(g.first)+' – '+dfmt(g.last);
-  box.innerHTML='<table><thead><tr><th>PN #</th><th>SO #</th><th>Customer</th>'+
+  box.innerHTML='<table><thead><tr><th>Project</th><th>Order Nbr</th><th>Customer</th>'+
     '<th>Product</th><th class="num">Sites</th><th class="num">Trips</th>'+
     '<th>Dates</th><th class="num">Yards</th><th class="num">Trip hr</th>'+
     '<th class="num">Labor hr</th><th class="num">Equip hr</th>'+
     '<th class="num">Bid total</th><th>Status</th></tr></thead><tbody>'+
     G.map(g=>'<tr>'+
-      '<td>'+(g.pn?esc(g.pn):'<span class="muted">— no PN# yet</span>')+'</td>'+
+      '<td>'+(g.pn?esc(g.pn):'<span class="muted">— no Project yet</span>')+'</td>'+
       '<td>'+(g.sos.length?esc(g.sos.join(', ')):'<span class="muted">—</span>')+
         (g.sos.length>1?' <span style="color:var(--warn)">⚠</span>':'')+'</td>'+
       '<td>'+esc(g.customers.join(', '))+'</td>'+
@@ -4280,9 +4323,9 @@ function rpRenderGroups(trips){
       '<td class="num">'+r2(tot(g=>g.equip))+'</td>'+
       '<td class="num">'+money(tot(g=>g.bid))+'</td><td></td></tr></tfoot></table>'+
     '<div class="small muted" style="margin-top:6px">One row per project number '+
-    '— trips sharing a PN# are rolled together (a master project’s linked '+
+    '— trips sharing a Project are rolled together (a master project’s linked '+
     'sites land on one row); labor, equipment and bid count each quote once. '+
-    'Rows without a PN# stay one per quote.</div>';
+    'Rows without a Project stay one per quote.</div>';
 }
 
 /* CSV: every column, flat, Excel-ready. Built as a pure string so the
@@ -4291,8 +4334,8 @@ function rpRenderGroups(trips){
    one line per PN# with the aggregate totals plus a TOTAL line. */
 function rpCsvText(){
   if($('#rp_group') && $('#rp_group').value==='pn') return rpCsvGroupText();
-  const H=['Date','Time','Truck','Load','Status','Customer','Customer #','SO #',
-    'PN #','Product','Trip yards','Trip hours','Project yards','Labor hours',
+  const H=['Date','Time','Truck','Load','Status','Customer','Customer #','Order Nbr',
+    'Project','Product','Trip yards','Trip hours','Project yards','Labor hours',
     'Equipment hours','Blow hours','Drive hours','Material revenue',
     'Labor revenue','Equipment revenue','Bid total','Address','City','Quote id'];
   const cc=v=>{ v=(v==null?'':String(v));
@@ -4317,7 +4360,7 @@ function rpCsvGroupText(){
     return /[",\n\r]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; };
   const tot=f=>G.reduce((s2,x)=>s2+(Number(f(x))||0),0);
   const r1=n=>Math.round(n*10)/10, r2=n=>Math.round(n*100)/100;
-  const lines=[['PN #','SO #','Customer','Products','Sites','Trips','First date',
+  const lines=[['Project','Order Nbr','Customer','Products','Sites','Trips','First date',
     'Last date','Yards','Trip hours','Labor hours','Equipment hours',
     'Material revenue','Labor revenue','Equipment revenue','Bid total',
     'Status'].join(',')];
@@ -6271,16 +6314,16 @@ function calCard(r, rep, focusCrew){
       '<div class="row" style="margin-top:8px">'+
       '<div><label class="f">Customer #</label><input type="text" id="cc_acct" '+
         'autocomplete="off" value="'+esc(r.account_no||'')+'"></div>'+
-      '<div><label class="f">SO #</label><input type="text" id="cc_so" '+
+      '<div><label class="f">Order Nbr</label><input type="text" id="cc_so" '+
         'autocomplete="off" value="'+esc(r.so_no||'')+'"></div>'+
-      '<div><label class="f">PN #</label><input type="text" id="cc_pn" '+
+      '<div><label class="f">Project</label><input type="text" id="cc_pn" '+
         'autocomplete="off" value="'+esc(r.project_no||'')+'"></div>'+
       '</div>'+
       '<div class="row" style="margin-top:6px;align-items:center">'+
       '<button type="button" class="btn ghost sm" id="cc_saveerp" style="flex:0 0 auto">'+
       'Save #s</button>'+
       '<span class="small muted" id="cc_msg" style="align-self:center">'+
-      (r.batch_id?'🔗 master project — the PN# and SO# save to every linked site':'')+
+      (r.batch_id?'🔗 master project — the Project and Order Nbr save to every linked site':'')+
       '</span></div>'
       :'')+
     (!office&&r.site_notes?'<div style="margin-top:10px"><b class="small">Site notes</b>'+
@@ -8338,6 +8381,9 @@ function wire(){
                    {keepTyped:true});
     applyMapsDrive();
   });
+  /* City and ZIP anchor the Maps lookup — editing them re-queries (the
+     street alone can match the wrong state; field report 2026-11-08). */
+  ['q_city','q_zip'].forEach(id=>$('#'+id).addEventListener('change', applyMapsDrive));
   /* Save/Update quote PRESERVES the quote's current status. It used to force
      'draft', which silently pulled a booked job off the calendar when a rep
      reopened it just to add the SO/PN and pressed Update -- the label said
