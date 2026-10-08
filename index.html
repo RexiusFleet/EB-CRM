@@ -1176,7 +1176,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-13-rateseditor';   // shown in the header; check it after deploying
+const BUILD = '2026-11-14-closeout';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1809,6 +1809,12 @@ const LiveDB = {
     const base='quotes?select=id,product,yards,customer_name,address_raw,status,crew_id,'+
       'scheduled_date,scheduled_time,scheduled_hours,equip_hours,crew2_id,scheduled_time2,'+
       'account_no,so_no,project_no';
+    try{
+      // first choice: everything incl. closed_out_at (sql/41)
+      const r = await SB.rest(base+',closed_out_at,scheduled_date2,scheduled_hours2,slots'+tail);
+      this.hasDate2 = true; this.hasSlots = true;
+      return r;
+    }catch(e41){}
     try{
       const r = await SB.rest(base+',scheduled_date2,scheduled_hours2,slots'+tail);
       this.hasDate2 = true; this.hasSlots = true;
@@ -5110,6 +5116,7 @@ async function calFetch(from, to){
       addr: b.address_raw||'',
       yards: (y!=null? y : totY), totYards: totY,
       erp: erpN===3 ? 'full' : erpN ? 'partial' : 'none',
+      closed: !!b.closed_out_at,
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
       hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
@@ -5255,6 +5262,7 @@ function tgEvent(it, crew){
     'background:'+col+'22;border-left:3px solid '+col+';'+
     (it.hold?'border-style:dashed;opacity:.75;':'')+'">'+
     '<b>'+esc(timeTxt)+'</b>'+(it.hold?' <span class="muted">HOLD</span>':'')+
+    (it.closed?' <span style="color:var(--good);font-weight:700">✅ closed</span>':'')+
     '<br>'+esc(it.customer)+
     ((it.yards || (!Cal.crew && it.erp))
       ?'<div class="muted" style="font-size:10.5px">'+
@@ -6223,6 +6231,7 @@ function renderCalMonth(grid, from, to, d){
         const tno = cr ? ((String(cr.name).match(/#\S+/)||[])[0]||'') : '';
         return '<div class="calchip" style="border-left:3px solid '+col+';'+
           ((it.hold||it.google)?'opacity:.65;':'')+'">'+
+          (it.closed?'✅ ':'')+
           (tno?'<b>'+esc(tno)+'</b> ':'')+
           (it.time?'<b>'+esc(fmtMin(toMin(it.time)))+'</b> ':'')+esc(String(label).slice(0,22))+'</div>';
       }).join('');
@@ -6322,6 +6331,15 @@ function calCard(r, rep, focusCrew){
     '<b style="font-size:18px">'+esc(r.customer_name||'')+'</b>'+
     '<span style="display:flex;gap:6px;align-items:center">'+statusTag+
     '<button type="button" class="btn ghost sm" id="crewcard_x">✕</button></span></div>'+
+    /* Closed-out banner on EVERY flavor (per Taylor 2026-11-13): once the
+       order is closed in the internal system, the event says so loudly. */
+    (r.closed_out_at
+      ? '<div style="margin-top:8px;border:1px solid var(--good);border-left:5px solid '+
+        'var(--good);border-radius:8px;padding:6px 10px;font-weight:600;color:var(--good)">'+
+        '✅ Project closed out — '+esc(dfmt(String(r.closed_out_at).slice(0,10)))+
+        (r.closed_out_by?' <span class="muted" style="font-weight:400">· by '+
+          esc(r.closed_out_by)+'</span>':'')+'</div>'
+      : '')+
     (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" href="https://maps.google.com/?q='+
       encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
     /* Phone shows on EVERY flavor of the card (per Taylor 2026-10-21:
@@ -6400,7 +6418,18 @@ function calCard(r, rep, focusCrew){
       'Save #s</button>'+
       '<span class="small muted" id="cc_msg" style="align-self:center">'+
       (r.batch_id?'🔗 master project — the Project and Order Nbr save to every linked site':'')+
-      '</span></div>'
+      '</span></div>'+
+      /* Project closeout (per Taylor 2026-11-13): pressed AFTER the order
+         is closed out in the internal system. One click, undoable. */
+      '<div class="row" style="margin-top:8px;align-items:center">'+
+      (r.closed_out_at
+        ? '<button type="button" class="btn ghost sm" id="cc_reopen" style="flex:0 0 auto" '+
+          'title="Un-mark — the project shows as open again">↩ Reopen project</button>'
+        : '<button type="button" class="btn sm" id="cc_closeout" style="flex:0 0 auto;'+
+          'background:var(--good);color:#fff" '+
+          'title="Press after the order is closed out in the internal system">'+
+          '✅ Project closeout</button>')+
+      '<span class="small muted" id="cc_comsg" style="align-self:center"></span></div>'
       :'')+
     (!office&&r.site_notes?'<div style="margin-top:10px"><b class="small">Site notes</b>'+
       '<div>'+esc(r.site_notes)+'</div></div>':'')+
@@ -6476,6 +6505,35 @@ function calCard(r, rep, focusCrew){
       })();
     }catch(e){ ccMsg('⚠ '+e.message); }
     sbtn.disabled=false;
+  };
+  const coMsg=t=>{ const e9=$('#cc_comsg'); if(e9) e9.textContent=t; };
+  const coPatch=async(patch, done)=>{
+    try{
+      const upd=await DB.patchQuote(r.id, patch);
+      if(DB.mode!=='demo' && !upd)
+        throw new Error('Nothing saved — this sign-in is not allowed to update '+
+          'this quote. Run sql/35_office_update.sql and sql/41_closeout.sql.');
+      Object.assign(r, patch);
+      bustCalCache();
+      try{ if(!$('#view-cal').classList.contains('hide')) renderCal(); }catch(e8){}
+      toast(done, false);
+      calCard(r, rep, focusCrew);            // redraw with the new state
+    }catch(e){
+      coMsg('⚠ '+(/closed_out_at/.test(String(e.message))
+        ? 'The closeout columns are missing — run sql/41_closeout.sql in Supabase.'
+        : e.message));
+    }
+  };
+  const cobtn=$('#cc_closeout');
+  if(cobtn) cobtn.onclick=()=>{
+    cobtn.disabled=true; coMsg('saving…');
+    coPatch({ closed_out_at:new Date().toISOString(),
+      closed_out_by:(State.user&&State.user.email)||null }, '✅ Project closed out.');
+  };
+  const robtn=$('#cc_reopen');
+  if(robtn) robtn.onclick=()=>{
+    robtn.disabled=true; coMsg('saving…');
+    coPatch({ closed_out_at:null, closed_out_by:null }, '↩ Project reopened.');
   };
   wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
   /* Office + master project (per Taylor 2026-11-05): the Revenue box shows
