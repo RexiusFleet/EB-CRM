@@ -1182,7 +1182,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-19-repchip';   // shown in the header; check it after deploying
+const BUILD = '2026-11-19-repcard';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -6427,6 +6427,9 @@ function wireCalChips(grid){
 function crewCard(r, focusCrew){ calCard(r, false, focusCrew); }
 function calCard(r, rep, focusCrew){
   const office = (typeof OfficePortal!=='undefined' && OfficePortal);
+  /* Crew-reported shortfall — drives every strikethrough on this card. */
+  const cardShort = Number(r.feedback_vol)>0 && Number(r.yards)>0 &&
+    Number(r.feedback_vol)<Number(r.yards);
   if(office) rep = false;   // office is its own flavor, never the rep card
   const crewView = !rep && !office;   // crew or driver: THEIR truck only
   const old=$('#crewcard'); if(old) old.remove();
@@ -6531,8 +6534,8 @@ function calCard(r, rep, focusCrew){
       : (function(){
           /* Driver + reported shortfall: old volume struck, new in blue. */
           const fbV=Number(r.feedback_vol)>0?Number(r.feedback_vol):null;
-          if(crewView && DriverView && fbV!=null && Number(r.yards)>0 &&
-             fbV<Number(r.yards))
+          if((rep || office || (crewView && DriverView)) && fbV!=null &&
+             Number(r.yards)>0 && fbV<Number(r.yards))
             return '<s style="opacity:.6">'+esc((r.yards||0)+' yd')+'</s> '+
               '<b style="color:var(--accent)">'+fbV+' yd</b> of '+esc(r.product||'');
           return esc((r.yards||0)+' yd of '+(r.product||''));
@@ -6552,7 +6555,7 @@ function calCard(r, rep, focusCrew){
     (loads?'<div class="small" style="margin-top:4px">'+loads+'</div>':'')+
     /* Office money box (per Taylor): the three revenue lines + their
        total, and NOTHING else — no bid amount, costs, margins or notes. */
-    (office?(function(){
+    ((office || (rep && cardShort))?(function(){
       /* Each line carries its quantity (per Taylor): Material 15 yd
          Hemlock, Labor 4.5 hr, Equipment 3.75 hr. */
       const qty=h=>h!=null&&!isNaN(h)?Number(h).toFixed(2).replace(/\.?0+$/,'')+' hr':'';
@@ -6606,7 +6609,13 @@ function calCard(r, rep, focusCrew){
         '</div>';
     })():'')+
     (rep?'<div style="margin-top:8px"><b>'+
-      (r.bid_amount!=null?money(r.bid_amount):(r.target_price!=null?money(r.target_price)+
+      (r.bid_amount!=null
+        ? (cardShort && prodCostYd(r.product)!=null
+            ? '<s style="opacity:.6">'+money(r.bid_amount)+'</s> '+
+              '<b style="color:var(--accent)">'+money(Math.round((Number(r.bid_amount)-
+              (Number(r.yards)-Number(r.feedback_vol))*prodCostYd(r.product))*100)/100)+'</b>'
+            : money(r.bid_amount))
+        : (r.target_price!=null?money(r.target_price)+
         ' <span class="small muted">(target — no bid typed)</span>':'—'))+'</b></div>':'')+
     /* Drivers see the job TOTAL (per Taylor 2026-11-17) — struck through
        with the adjusted amount beside it when less volume was used. */
