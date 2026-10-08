@@ -208,6 +208,7 @@ body.officemode #cal_import{display:none}
 body.crewmode{font-size:17px}
 body.crewmode .calchip{font-size:15px;white-space:normal}
 body.crewmode #cal_block,body.crewmode #cal_import,
+body.crewmode #calsearchwrap,
 body.drivermode #cal_crew{display:none}
 .kv.total .v{font-size:19px}
 .basis{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.4}
@@ -742,6 +743,11 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           <button type="button" class="btn ghost sm" id="cal_import" style="flex:0 0 auto"
             title="Copy manual Google-calendar events into the app calendar">⇪ Import Google</button>
         </div>
+        <div class="addrwrap" id="calsearchwrap" style="margin-top:8px;max-width:440px">
+          <input type="text" id="calsearch" autocomplete="off"
+                 placeholder="Search the calendar — customer, Order Nbr or Project…">
+          <div class="results hide" id="calsearchresults"></div>
+        </div>
         <div class="small muted" id="calnote2" style="margin-top:6px"></div>
         <div id="calmsg"></div>
         <div id="calgrid" style="margin-top:10px;overflow-x:auto"></div>
@@ -1176,7 +1182,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-14-closeout';   // shown in the header; check it after deploying
+const BUILD = '2026-11-16-jobtrack';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1574,6 +1580,38 @@ const DemoDB = {
   },
   async driveCache(){ return null; },
   async driveCachePut(){ return null; },
+  _feedback: [],
+  async addFeedback(row){
+    const f=Object.assign({id:'fb'+Date.now(), created_at:new Date().toISOString()}, row);
+    this._feedback.push(f);
+    const q=this._quotes.find(x=>String(x.id)===String(row.quote_id));
+    if(q){ q.feedback_open=true;
+      if(Number(row.actual_yards)>0) q.feedback_vol=Number(row.actual_yards);
+      saveLocalQuotes(this._quotes); }
+    return f;
+  },
+  async listFeedback(qid){
+    return this._feedback.filter(f=>String(f.quote_id)===String(qid))
+      .slice().reverse();
+  },
+  async ackFeedback(qid, who){
+    this._feedback.forEach(f=>{ if(String(f.quote_id)===String(qid) && !f.acked_at){
+      f.acked_at=new Date().toISOString(); f.acked_by=who||null; } });
+    return this.patchQuote(qid, {feedback_open:false});
+  },
+  async listCompares(qid){
+    return this._quotes.filter(q=>String(q.compare_of)===String(qid));
+  },
+  async searchBooked(q){
+    const t=String(q).toLowerCase();
+    return this._quotes.filter(r=>r.scheduled_date &&
+      (r.status==='sent'||r.status==='won') &&
+      ((r.customer_name||'').toLowerCase().indexOf(t)>=0 ||
+       (r.so_no||'').toLowerCase().indexOf(t)>=0 ||
+       (r.project_no||'').toLowerCase().indexOf(t)>=0))
+      .sort((a,b)=>String(b.scheduled_date).localeCompare(String(a.scheduled_date)))
+      .slice(0,30);
+  },
   async blocks(){ return []; },
   async addBlock(){ throw new Error('Blockouts need live mode.'); },
   async delBlock(){ return null; },
@@ -1810,7 +1848,14 @@ const LiveDB = {
       'scheduled_date,scheduled_time,scheduled_hours,equip_hours,crew2_id,scheduled_time2,'+
       'account_no,so_no,project_no';
     try{
-      // first choice: everything incl. closed_out_at (sql/41)
+      // first choice: the whole job-tracking column set (sql/42)
+      const r = await SB.rest(base+',closed_out_at,invoice_sent_at,feedback_open,'+
+        'scheduled_date2,scheduled_hours2,slots'+tail);
+      this.hasDate2 = true; this.hasSlots = true;
+      return r;
+    }catch(e42){}
+    try{
+      // sql/41 only: closed_out_at without the invoice/feedback columns
       const r = await SB.rest(base+',closed_out_at,scheduled_date2,scheduled_hours2,slots'+tail);
       this.hasDate2 = true; this.hasSlots = true;
       return r;
@@ -1848,6 +1893,39 @@ const LiveDB = {
         '&scheduled_date=lte.'+encodeURIComponent(to)+
         '&status=in.(sent,won)&limit=1000');
     }
+  },
+  async addFeedback(row){
+    const r = await SB.rest('job_feedback', {method:'POST',
+      headers:{Prefer:'return=representation'}, body:JSON.stringify(row)});
+    return r && r[0];
+  },
+  async listFeedback(qid){
+    return SB.rest('job_feedback?select=*&quote_id=eq.'+encodeURIComponent(qid)+
+      '&order=created_at.desc&limit=20');
+  },
+  async ackFeedback(qid, who){
+    try{ await SB.rest('job_feedback?quote_id=eq.'+encodeURIComponent(qid)+
+      '&acked_at=is.null', {method:'PATCH',
+      body:JSON.stringify({acked_at:new Date().toISOString(), acked_by:who||null})});
+    }catch(e){}
+    return this.patchQuote(qid, {feedback_open:false});
+  },
+  async listCompares(qid){
+    return SB.rest('quotes?select=id,yards,bid_amount,compare_note,created_at'+
+      '&compare_of=eq.'+encodeURIComponent(qid)+'&order=created_at.desc&limit=10');
+  },
+  async searchBooked(q){
+    /* Everything ON the calendar (booked or held, any date) matching a
+       customer, Order Nbr or Project fragment. closed_out_at rides along
+       when sql/41 is in; without it, the fallback select still answers. */
+    const t = encodeURIComponent('*'+String(q).replace(/[,()*%\\]/g,' ').trim()+'*');
+    const base='quotes?select=id,customer_name,product,yards,so_no,project_no,'+
+      'scheduled_date,scheduled_time,crew_id,status,address_raw';
+    const tail='&or=(customer_name.ilike.'+t+',so_no.ilike.'+t+
+      ',project_no.ilike.'+t+')&scheduled_date=not.is.null'+
+      '&status=in.(sent,won)&order=scheduled_date.desc&limit=30';
+    try{ return await SB.rest(base+',closed_out_at'+tail); }
+    catch(e){ return SB.rest(base+tail); }
   },
   async driveCache(key){
     const r = await SB.rest('drive_cache?select=*&key=eq.'+
@@ -5116,7 +5194,7 @@ async function calFetch(from, to){
       addr: b.address_raw||'',
       yards: (y!=null? y : totY), totYards: totY,
       erp: erpN===3 ? 'full' : erpN ? 'partial' : 'none',
-      closed: !!b.closed_out_at,
+      closed: !!b.closed_out_at, inv: !!b.invoice_sent_at, fb: !!b.feedback_open,
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
       hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
@@ -5172,6 +5250,43 @@ async function calFetch(from, to){
   calCache.set(key, {t:Date.now(), data});
   while(calCache.size > 6) calCache.delete(calCache.keys().next().value);
   return data;
+}
+/* Calendar search (per Taylor 2026-11-14): customer / Order Nbr /
+   Project, across every booked or held quote on ANY week. A hit jumps
+   the board to its week and pops the job's card (office sign-ins get
+   the office card — calCard routes by portal). */
+let csReq=0;
+async function calSearchRun(){
+  const box=$('#calsearchresults'); if(!box) return;
+  const q=$('#calsearch').value.trim();
+  if(q.length<2){ box.classList.add('hide'); box.innerHTML=''; return; }
+  const my=++csReq;
+  let rows=[];
+  try{ rows=(await DB.searchBooked(q))||[]; }catch(e){ rows=[]; }
+  if(my!==csReq || q!==$('#calsearch').value.trim()) return;
+  box.innerHTML = rows.length
+    ? '<div class="rhead">'+rows.length+' on the calendar</div>'+rows.map(r=>{
+        const nm=((CREWS||[]).find(c=>String(c.id)===String(r.crew_id))||{}).name||'';
+        return '<button type="button" data-csr="'+esc(r.id)+'">'+
+          '<div class="a">'+esc(r.customer_name||'(no name)')+
+          (r.closed_out_at?' <span style="color:var(--good)">✅ closed</span>':'')+
+          (r.status==='sent'?' <span class="tag w">HOLD</span>':'')+'</div>'+
+          '<div class="b">'+esc(dfmt(r.scheduled_date))+
+          (nm?' · '+esc(nm):'')+
+          ' · '+esc((r.yards||0)+' yd '+(r.product||''))+
+          (r.so_no?' · Order '+esc(r.so_no):'')+
+          (r.project_no?' · '+esc(r.project_no):'')+'</div></button>';
+      }).join('')
+    : '<div class="rhead">nothing on the calendar matches</div>';
+  box.classList.remove('hide');
+  box.querySelectorAll('[data-csr]').forEach(b2=>b2.onclick=async()=>{
+    box.classList.add('hide');
+    let r=null; try{ r=await DB.getQuote(b2.dataset.csr); }catch(e){}
+    if(!r){ toast('Could not open that quote.', true); return; }
+    Cal.view='week'; Cal.anchor=r.scheduled_date;
+    try{ await renderCal(); }catch(e){}
+    calCard(r, true);
+  });
 }
 async function renderCal(){
   const grid = $('#calgrid'); if(!grid) return;
@@ -5262,7 +5377,9 @@ function tgEvent(it, crew){
     'background:'+col+'22;border-left:3px solid '+col+';'+
     (it.hold?'border-style:dashed;opacity:.75;':'')+'">'+
     '<b>'+esc(timeTxt)+'</b>'+(it.hold?' <span class="muted">HOLD</span>':'')+
-    (it.closed?' <span style="color:var(--good);font-weight:700">✅ closed</span>':'')+
+    (it.fb?' <span style="color:var(--warn);font-weight:700" title="Crew feedback needs review">⚠ feedback</span>':'')+
+    (it.closed?' <span style="color:var(--good);font-weight:700" title="Updated in Front End">✅ FE</span>':'')+
+    (it.inv?' <span style="color:var(--good);font-weight:700" title="Invoice sent">💲</span>':'')+
     '<br>'+esc(it.customer)+
     ((it.yards || (!Cal.crew && it.erp))
       ?'<div class="muted" style="font-size:10.5px">'+
@@ -6231,7 +6348,7 @@ function renderCalMonth(grid, from, to, d){
         const tno = cr ? ((String(cr.name).match(/#\S+/)||[])[0]||'') : '';
         return '<div class="calchip" style="border-left:3px solid '+col+';'+
           ((it.hold||it.google)?'opacity:.65;':'')+'">'+
-          (it.closed?'✅ ':'')+
+          (it.fb?'⚠ ':it.closed?'✅ ':'')+
           (tno?'<b>'+esc(tno)+'</b> ':'')+
           (it.time?'<b>'+esc(fmtMin(toMin(it.time)))+'</b> ':'')+esc(String(label).slice(0,22))+'</div>';
       }).join('');
@@ -6331,14 +6448,27 @@ function calCard(r, rep, focusCrew){
     '<b style="font-size:18px">'+esc(r.customer_name||'')+'</b>'+
     '<span style="display:flex;gap:6px;align-items:center">'+statusTag+
     '<button type="button" class="btn ghost sm" id="crewcard_x">✕</button></span></div>'+
-    /* Closed-out banner on EVERY flavor (per Taylor 2026-11-13): once the
-       order is closed in the internal system, the event says so loudly. */
+    /* Status banners on EVERY flavor (per Taylor 2026-11-13/15): the
+       event says loudly where the job stands in the back office. */
     (r.closed_out_at
       ? '<div style="margin-top:8px;border:1px solid var(--good);border-left:5px solid '+
         'var(--good);border-radius:8px;padding:6px 10px;font-weight:600;color:var(--good)">'+
-        '✅ Project closed out — '+esc(dfmt(String(r.closed_out_at).slice(0,10)))+
+        '✅ Updated in Front End — '+esc(dfmt(String(r.closed_out_at).slice(0,10)))+
         (r.closed_out_by?' <span class="muted" style="font-weight:400">· by '+
           esc(r.closed_out_by)+'</span>':'')+'</div>'
+      : '')+
+    (r.invoice_sent_at
+      ? '<div style="margin-top:8px;border:1px solid var(--good);border-left:5px solid '+
+        'var(--good);border-radius:8px;padding:6px 10px;font-weight:600;color:var(--good)">'+
+        '💲 Invoice sent — '+esc(dfmt(String(r.invoice_sent_at).slice(0,10)))+
+        (r.invoice_no?' · #'+esc(r.invoice_no):'')+
+        (r.invoice_sent_by?' <span class="muted" style="font-weight:400">· by '+
+          esc(r.invoice_sent_by)+'</span>':'')+'</div>'
+      : '')+
+    ((rep||office) && r.feedback_open
+      ? '<div style="margin-top:8px;border:1px solid var(--warn);border-left:5px solid '+
+        'var(--warn);border-radius:8px;padding:6px 10px;font-weight:600;color:var(--warn)">'+
+        '⚠ Crew feedback needs review — see below.</div>'
       : '')+
     (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" href="https://maps.google.com/?q='+
       encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
@@ -6419,22 +6549,56 @@ function calCard(r, rep, focusCrew){
       '<span class="small muted" id="cc_msg" style="align-self:center">'+
       (r.batch_id?'🔗 master project — the Project and Order Nbr save to every linked site':'')+
       '</span></div>'+
-      /* Project closeout (per Taylor 2026-11-13): pressed AFTER the order
-         is closed out in the internal system. One click, undoable. */
+      /* Back-office verbs (per Taylor 2026-11-13/15): "Updated in Front
+         End" after the order is updated in the internal system, then
+         "Invoice sent" with the externally-generated invoice number.
+         One click each, undoable. */
       '<div class="row" style="margin-top:8px;align-items:center">'+
       (r.closed_out_at
         ? '<button type="button" class="btn ghost sm" id="cc_reopen" style="flex:0 0 auto" '+
-          'title="Un-mark — the project shows as open again">↩ Reopen project</button>'
+          'title="Un-mark — the project shows as not yet updated">↩ Undo front-end update</button>'
         : '<button type="button" class="btn sm" id="cc_closeout" style="flex:0 0 auto;'+
           'background:var(--good);color:#fff" '+
-          'title="Press after the order is closed out in the internal system">'+
-          '✅ Project closeout</button>')+
-      '<span class="small muted" id="cc_comsg" style="align-self:center"></span></div>'
+          'title="Press after the order is updated in the internal system">'+
+          '✅ Updated in Front End</button>')+
+      '<span class="small muted" id="cc_comsg" style="align-self:center"></span></div>'+
+      '<div class="row" style="margin-top:8px;align-items:flex-end">'+
+      '<div style="flex:0 1 180px"><label class="f">Invoice #</label>'+
+      '<input type="text" id="cc_invno" autocomplete="off" value="'+esc(r.invoice_no||'')+'"></div>'+
+      (r.invoice_sent_at
+        ? '<button type="button" class="btn ghost sm" id="cc_invsave" style="flex:0 0 auto">'+
+          'Save invoice #</button>'+
+          '<button type="button" class="btn ghost sm" id="cc_invundo" style="flex:0 0 auto">'+
+          '↩ Undo invoice sent</button>'
+        : '<button type="button" class="btn sm" id="cc_invsent" style="flex:0 0 auto;'+
+          'background:var(--accent);color:var(--accent-ink)" '+
+          'title="Press once the invoice has gone out — type its number first">'+
+          '💲 Invoice sent</button>')+
+      '</div>'+
+      '<div id="cc_fbrev"></div>'
       :'')+
     (!office&&r.site_notes?'<div style="margin-top:10px"><b class="small">Site notes</b>'+
       '<div>'+esc(r.site_notes)+'</div></div>':'')+
     (!office&&r.notes?'<div style="margin-top:10px"><b class="small">Notes from the quote</b>'+
       '<div>'+esc(r.notes)+'</div></div>':'')+
+    (crewView
+      ? '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">'+
+        '<b class="small">Job feedback — goes straight to the rep</b>'+
+        '<textarea id="cc_fbnote" rows="2" style="margin-top:6px" '+
+        'placeholder="Anything the rep should know — site problems, access, extra work…"></textarea>'+
+        '<div class="row" style="margin-top:6px;align-items:flex-end">'+
+        '<div style="flex:0 1 200px"><label class="f">Volume actually used (yd)</label>'+
+        '<input type="number" step="0.5" id="cc_fbyards" class="num mono"></div>'+
+        '<button type="button" class="btn ghost sm" id="cc_fbphoto" style="flex:0 0 auto">📷 Add photos</button>'+
+        '<input type="file" id="cc_fbfile" accept="image/*" multiple class="hide">'+
+        '<button type="button" class="btn sm" id="cc_fbsend" '+
+        'style="flex:0 0 auto;background:var(--good);color:#fff">Send to the rep</button>'+
+        '</div>'+
+        '<div class="small" id="cc_fbprice" style="margin-top:4px"></div>'+
+        '<div class="small muted" id="cc_fbmsg" style="margin-top:2px"></div>'+
+        '<div id="cc_fbph" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>'+
+        '</div>'
+      : '')+
     '<div id="crewcard_ph" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>'+
     (rep?'<div class="row" style="margin-top:14px">'+
       '<button type="button" class="btn" id="crewcard_open" style="background:var(--good)">'+
@@ -6519,8 +6683,9 @@ function calCard(r, rep, focusCrew){
       toast(done, false);
       calCard(r, rep, focusCrew);            // redraw with the new state
     }catch(e){
-      coMsg('⚠ '+(/closed_out_at/.test(String(e.message))
-        ? 'The closeout columns are missing — run sql/41_closeout.sql in Supabase.'
+      coMsg('⚠ '+(/closed_out_at|invoice_|feedback_|compare_/.test(String(e.message))
+        ? 'The job-tracking columns are missing — run sql/41_closeout.sql and '+
+          'sql/42_jobtrack.sql in Supabase.'
         : e.message));
     }
   };
@@ -6528,13 +6693,214 @@ function calCard(r, rep, focusCrew){
   if(cobtn) cobtn.onclick=()=>{
     cobtn.disabled=true; coMsg('saving…');
     coPatch({ closed_out_at:new Date().toISOString(),
-      closed_out_by:(State.user&&State.user.email)||null }, '✅ Project closed out.');
+      closed_out_by:(State.user&&State.user.email)||null }, '✅ Updated in Front End.');
   };
   const robtn=$('#cc_reopen');
   if(robtn) robtn.onclick=()=>{
     robtn.disabled=true; coMsg('saving…');
-    coPatch({ closed_out_at:null, closed_out_by:null }, '↩ Project reopened.');
+    coPatch({ closed_out_at:null, closed_out_by:null }, '↩ Front-end update undone.');
   };
+  /* ---- invoice sent + the invoice # reference cell ---- */
+  const ivbtn=$('#cc_invsent');
+  if(ivbtn) ivbtn.onclick=()=>{
+    ivbtn.disabled=true; coMsg('saving…');
+    coPatch({ invoice_sent_at:new Date().toISOString(),
+      invoice_sent_by:(State.user&&State.user.email)||null,
+      invoice_no: ($('#cc_invno').value.trim()||null) }, '💲 Invoice sent.');
+  };
+  const ivsv=$('#cc_invsave');
+  if(ivsv) ivsv.onclick=()=>{
+    ivsv.disabled=true; coMsg('saving…');
+    coPatch({ invoice_no: ($('#cc_invno').value.trim()||null) }, '✓ Invoice # saved.');
+  };
+  const ivun=$('#cc_invundo');
+  if(ivun) ivun.onclick=()=>{
+    ivun.disabled=true; coMsg('saving…');
+    coPatch({ invoice_sent_at:null, invoice_sent_by:null }, '↩ Invoice-sent undone.');
+  };
+  /* ---- crew feedback: note + photos + actual volume + live price ---- */
+  const fbCostYd=()=>{
+    const rc=((State.ref&&State.ref.rate_card)||[]).find(x=>x.product===r.product);
+    return rc && rc.cost_per_yard!=null ? Number(rc.cost_per_yard) : null;
+  };
+  const fbPhotos=[];
+  const fbPrice=()=>{
+    const box=$('#cc_fbprice'); if(!box) return;
+    const act=parseFloat($('#cc_fbyards').value);
+    const quoted=Number(r.yards)||0;
+    if(!(act>0) || !quoted){ box.innerHTML=''; return; }
+    if(act>quoted){
+      box.innerHTML='<span style="color:var(--warn)">⚠ more than the '+quoted+
+        ' yd quoted — the rep will review this.</span>';
+      return;
+    }
+    if(act===quoted){ box.innerHTML='<span class="muted">matches the quote</span>'; return; }
+    const cpy=fbCostYd();
+    if(cpy==null || r.bid_amount==null){ box.innerHTML=''; return; }
+    /* Per Taylor: a per-yard adjustment on the PRODUCT'S COST alone. */
+    const adj=Math.round((Number(r.bid_amount)-(quoted-act)*cpy)*100)/100;
+    box.innerHTML='Updated invoice amount: <b>'+money(adj)+'</b> '+
+      '<span class="muted">(−'+(Math.round((quoted-act)*10)/10)+' yd × '+
+      money2(cpy)+'/yd product cost)</span>';
+  };
+  const fby=$('#cc_fbyards'); if(fby) fby.addEventListener('input', fbPrice);
+  const fbp=$('#cc_fbphoto');
+  if(fbp) fbp.onclick=()=>{
+    if(DB.mode==='demo'){ $('#cc_fbmsg').textContent='demo mode — no photo storage'; return; }
+    $('#cc_fbfile').click();
+  };
+  const fbf=$('#cc_fbfile');
+  if(fbf) fbf.addEventListener('change', async e=>{
+    const files=[...(e.target.files||[])]; e.target.value='';
+    for(const f of files){
+      try{
+        const ph=await svUploadPhoto(f);
+        fbPhotos.push(ph);
+        const img=document.createElement('img');
+        img.style.cssText='width:64px;height:64px;object-fit:cover;border-radius:6px;'+
+          'border:1px solid var(--line)';
+        svThumbUrl(ph).then(u=>{ if(u) img.src=u; });
+        $('#cc_fbph').appendChild(img);
+      }catch(e2){ $('#cc_fbmsg').textContent='⚠ '+e2.message; }
+    }
+  });
+  const fbs=$('#cc_fbsend');
+  if(fbs) fbs.onclick=async()=>{
+    const note=$('#cc_fbnote').value.trim();
+    const act=parseFloat($('#cc_fbyards').value);
+    if(!note && !(act>0) && !fbPhotos.length){
+      $('#cc_fbmsg').textContent='Type a note, a volume, or add a photo first.'; return;
+    }
+    fbs.disabled=true; $('#cc_fbmsg').textContent='sending…';
+    try{
+      await DB.addFeedback({ quote_id:r.id,
+        author:(State.user&&State.user.email)||null,
+        note: note||null,
+        actual_yards: act>0?act:null,
+        photos: fbPhotos.length?fbPhotos.map(p=>({path:p.path,name:p.name})):null });
+      r.feedback_open=true; if(act>0) r.feedback_vol=act;
+      bustCalCache();
+      try{ if(!$('#view-cal').classList.contains('hide')) renderCal(); }catch(e9){}
+      toast('✓ Sent to the rep.', false);
+      $('#cc_fbmsg').textContent='✓ Sent — the rep sees it flagged on this job.';
+      $('#cc_fbnote').value=''; $('#cc_fbyards').value=''; fbPrice();
+    }catch(e){
+      fbs.disabled=false;
+      $('#cc_fbmsg').textContent='⚠ '+(/job_feedback/.test(String(e.message))
+        ? 'The feedback table is missing — ask the office to run sql/42_jobtrack.sql.'
+        : e.message);
+    }
+  };
+  /* ---- rep/office: review feedback + Ian's linked comparison ---- */
+  async function renderFbRev(){
+    const box=$('#cc_fbrev'); if(!box) return;
+    let rows=[]; try{ rows=(await DB.listFeedback(r.id))||[]; }catch(e){}
+    let comps=[]; try{ comps=(await DB.listCompares(r.id))||[]; }catch(e){}
+    if(!rows.length && !comps.length && !r.feedback_open){ box.innerHTML=''; return; }
+    const quoted=Number(r.yards)||0;
+    const latestVol=(rows.find(x=>Number(x.actual_yards)>0)||{}).actual_yards
+      || (Number(r.feedback_vol)>0?r.feedback_vol:null);
+    const cpy=fbCostYd();
+    const adj=(latestVol && quoted && latestVol<quoted && cpy!=null && r.bid_amount!=null)
+      ? Math.round((Number(r.bid_amount)-(quoted-latestVol)*cpy)*100)/100 : null;
+    box.innerHTML='<div style="margin-top:10px;border:1px solid var(--line);'+
+      'border-radius:10px;padding:8px 12px">'+
+      '<div class="small" style="font-weight:600">Crew feedback'+
+      (r.feedback_open?' <span class="tag w">needs review</span>':'')+'</div>'+
+      (rows.length?rows.map(f=>'<div class="small" style="margin-top:6px;'+
+        'border-top:1px solid var(--line-2);padding-top:6px">'+
+        '<span class="muted">'+esc(dfmt(String(f.created_at||'').slice(0,10)))+
+        (f.author?' · '+esc(f.author):'')+'</span>'+
+        (f.actual_yards!=null?' · <b>'+f.actual_yards+' yd used</b>'+
+          (quoted?' <span class="muted">(quoted '+quoted+')</span>':''):'')+
+        (f.note?'<br>'+esc(f.note):'')+
+        (Array.isArray(f.photos)&&f.photos.length
+          ?'<div class="fbphx" data-fbi="'+esc(f.id||'')+'" style="display:flex;gap:6px;'+
+           'flex-wrap:wrap;margin-top:4px"></div>':'')+
+        '</div>').join('')
+        :'<div class="small muted" style="margin-top:4px">No notes yet.</div>')+
+      ((latestVol && quoted && Number(latestVol)!==quoted)
+        ? '<div class="small" style="margin-top:8px;border-top:1px solid var(--line-2);'+
+          'padding-top:6px"><b>Volume: quoted '+quoted+' yd → used '+latestVol+' yd.</b>'+
+          (adj!=null?' Adjusted invoice: <b>'+money(adj)+'</b> <span class="muted">(bid '+
+            money(r.bid_amount)+' − '+(Math.round((quoted-latestVol)*10)/10)+
+            ' yd × '+money2(cpy)+'/yd product cost)</span>':'')+
+          ((rep)?'<div style="margin-top:6px"><textarea id="cc_cmpnote" rows="2" '+
+            'placeholder="Why the difference — for the record…"></textarea>'+
+            '<button type="button" class="btn ghost sm" id="cc_cmpmake" '+
+            'style="margin-top:4px">⚖ Save linked comparison quote at '+latestVol+' yd</button>'+
+            '<span class="small muted" id="cc_cmpmsg"></span></div>':'')+
+          '</div>'
+        : '')+
+      (comps.length?'<div class="small" style="margin-top:8px;border-top:1px solid '+
+        'var(--line-2);padding-top:6px"><b>⚖ Linked comparisons</b>'+
+        comps.map(c2=>'<div style="margin-top:4px">'+esc(dfmt(String(c2.created_at||'').slice(0,10)))+
+          ' · '+c2.yards+' yd · '+money(c2.bid_amount)+
+          (c2.compare_note?' — <span class="muted">'+esc(c2.compare_note)+'</span>':'')+
+          ' <button type="button" class="btn ghost sm" data-cmpopen="'+esc(c2.id)+'" '+
+          'style="padding:2px 10px">Open</button></div>').join('')+'</div>':'')+
+      (r.feedback_open
+        ? '<div style="margin-top:8px"><button type="button" class="btn ghost sm" '+
+          'id="cc_fback">✓ Mark feedback reviewed</button></div>'
+        : '')+
+      '</div>';
+    rows.forEach(f=>{
+      if(!Array.isArray(f.photos)||!f.photos.length) return;
+      const ph=box.querySelector('.fbphx[data-fbi="'+String(f.id||'')+'"]');
+      if(!ph) return;
+      f.photos.forEach(p2=>svThumbUrl(Object.assign({},p2)).then(u=>{
+        if(!u) return;
+        const img=document.createElement('img');
+        img.src=u; img.style.cssText='width:64px;height:64px;object-fit:cover;'+
+          'border-radius:6px;border:1px solid var(--line);cursor:pointer';
+        img.onclick=()=>{ try{ window.open(u,'_blank'); }catch(e3){} };
+        ph.appendChild(img);
+      }));
+    });
+    const ak=box.querySelector('#cc_fback');
+    if(ak) ak.onclick=async()=>{
+      ak.disabled=true;
+      try{
+        await DB.ackFeedback(r.id, (State.user&&State.user.email)||null);
+        r.feedback_open=false;
+        bustCalCache();
+        try{ if(!$('#view-cal').classList.contains('hide')) renderCal(); }catch(e9){}
+        toast('✓ Feedback marked reviewed.', false);
+        renderFbRev();
+      }catch(e){ ak.disabled=false; toast(e.message, true); }
+    };
+    const mk=box.querySelector('#cc_cmpmake');
+    if(mk) mk.onclick=async()=>{
+      mk.disabled=true;
+      const msg=box.querySelector('#cc_cmpmsg');
+      try{
+        const q2={ customer_name:r.customer_name, phone:r.phone, email:r.email,
+          address_raw:r.address_raw, city:r.city, zip:r.zip, site_key:r.site_key,
+          product:r.product, yards:Number(latestVol), depth_in:r.depth_in,
+          account_no:r.account_no, so_no:r.so_no, project_no:r.project_no,
+          bid_amount: adj!=null?adj:r.bid_amount, status:'draft',
+          site_notes:'⚖ Comparison of quote '+r.id+' at the volume the crew reported.',
+          compare_of:r.id,
+          compare_note: (box.querySelector('#cc_cmpnote').value.trim()||null) };
+        let saved=null;
+        try{ saved=await DB.saveQuote(q2); }
+        catch(ec){
+          if(/compare_of|compare_note/.test(String(ec.message)))
+            throw new Error('Run sql/42_jobtrack.sql first — the comparison link '+
+              'columns are missing.');
+          throw ec;
+        }
+        toast('⚖ Comparison quote saved and linked.', false);
+        if(msg) msg.textContent=' ✓ saved';
+        renderFbRev();
+      }catch(e){ mk.disabled=false; if(msg) msg.textContent=' ⚠ '+e.message; }
+    };
+    box.querySelectorAll('[data-cmpopen]').forEach(b2=>b2.onclick=async()=>{
+      let q3=null; try{ q3=await DB.getQuote(b2.dataset.cmpopen); }catch(e){}
+      if(q3){ wrap.remove(); openQuote(q3); }
+    });
+  }
+  if(rep||office) renderFbRev();
   wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
   /* Office + master project (per Taylor 2026-11-05): the Revenue box shows
      the WHOLE project — every linked site combined — and SAYS so, because
@@ -8460,6 +8826,13 @@ function wire(){
   $('#cal_block').onclick = ()=>calBlockCard();
   $('#cal_import').onclick = ()=>calImportCard();
   $('#cal_week').onclick = ()=>{ Cal.view='week'; renderCal(); };
+  $('#calsearch').addEventListener('input', debounce(calSearchRun, 250));
+  $('#calsearch').addEventListener('focus', ()=>{
+    if($('#calsearch').value.trim().length>=2) calSearchRun(); });
+  document.addEventListener('click', e=>{
+    const w=$('#calsearchwrap');
+    if(w && !w.contains(e.target)) $('#calsearchresults').classList.add('hide');
+  });
   $('#cal_month').onclick = ()=>{ Cal.view='month'; renderCal(); };
   /* ---- reports ---- */
   ['rp_from','rp_to'].forEach(id=>$('#'+id).addEventListener('change', renderReport));
