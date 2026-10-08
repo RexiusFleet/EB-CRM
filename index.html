@@ -1182,7 +1182,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-18-driverprice2';   // shown in the header; check it after deploying
+const BUILD = '2026-11-19-repchip';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1850,7 +1850,8 @@ const LiveDB = {
     try{
       // first choice: the whole job-tracking column set (sql/42)
       const r = await SB.rest(base+',closed_out_at,invoice_sent_at,feedback_open,'+
-        'bid_amount,feedback_vol,scheduled_date2,scheduled_hours2,slots'+tail);
+        'bid_amount,feedback_vol,material_rev,labor_rev,equip_rev,'+
+        'scheduled_date2,scheduled_hours2,slots'+tail);
       this.hasDate2 = true; this.hasSlots = true;
       return r;
     }catch(e42){}
@@ -5202,6 +5203,9 @@ async function calFetch(from, to){
       /* bidAmt, NOT 'bid' — it.bid already flags penciled BID chips. */
       bidAmt: b.bid_amount!=null?Number(b.bid_amount):null,
       fbVol: Number(b.feedback_vol)>0?Number(b.feedback_vol):null,
+      mat: b.material_rev!=null?Number(b.material_rev):null,
+      lab: b.labor_rev!=null?Number(b.labor_rev):null,
+      eqr: b.equip_rev!=null?Number(b.equip_rev):null,
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
       hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
@@ -5397,7 +5401,7 @@ function tgEvent(it, crew){
          struck through with the updated ones beside them in blue. */
       (it.yards?(function(){
         const yd=Math.round(it.yards*10)/10;
-        const disc=DriverView && it.fbVol!=null && it.totYards &&
+        const disc=(DriverView || !Cal.crew) && it.fbVol!=null && it.totYards &&
           it.fbVol<it.totYards && it.totYards===it.yards;
         return disc
           ? '<s style="opacity:.6">'+yd+'yd</s> <b style="color:var(--accent)">'+
@@ -5426,6 +5430,20 @@ function tgEvent(it, crew){
           ? '<s style="opacity:.6">'+money(it.bidAmt)+'</s> <b style="color:var(--accent)">'+
             money(adj)+'</b>'
           : '<b>'+money(it.bidAmt)+'</b>');
+      })() : '')+
+      /* Rep/office chip on a SHORTFALL (per Taylor 2026-11-18): the three
+         revenue lines right on the chip, material struck through with the
+         adjusted figure — what the office keys into the system. */
+      (!Cal.crew && it.fbVol!=null && it.totYards && it.fbVol<it.totYards &&
+       it.mat!=null ? (function(){
+        const cpy=prodCostYd(it.product);
+        if(cpy==null) return '';
+        const delta=Math.round((it.totYards-it.fbVol)*cpy);
+        const M=Math.round(it.mat);
+        return '<div style="font-size:10px">M <s style="opacity:.6">'+money(M)+
+          '</s> <b style="color:var(--accent)">'+money(M-delta)+'</b>'+
+          (it.lab!=null?' · L '+money(Math.round(it.lab)):'')+
+          (it.eqr!=null?' · E '+money(Math.round(it.eqr)):'')+'</div>';
       })() : '')+
       '</div>':'')+'</div>';
 }
@@ -6813,9 +6831,9 @@ function calCard(r, rep, focusCrew){
     if(cpy==null || r.bid_amount==null){ box.innerHTML=''; return; }
     /* Per Taylor: a per-yard adjustment on the PRODUCT'S COST alone. */
     const adj=Math.round((Number(r.bid_amount)-(quoted-act)*cpy)*100)/100;
-    box.innerHTML='Updated invoice amount: <b>'+money(adj)+'</b> '+
-      '<span class="muted">(−'+(Math.round((quoted-act)*10)/10)+' yd × '+
-      money2(cpy)+'/yd product cost)</span>';
+    /* Amount only — the per-yard math stays off the crew's screen
+       (per Taylor 2026-11-18). */
+    box.innerHTML='Updated invoice amount: <b>'+money(adj)+'</b>';
   };
   const fby=$('#cc_fbyards'); if(fby) fby.addEventListener('input', fbPrice);
   const fbp=$('#cc_fbphoto');
