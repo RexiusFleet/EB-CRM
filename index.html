@@ -1176,7 +1176,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-12-fastmaps';   // shown in the header; check it after deploying
+const BUILD = '2026-11-13-rateseditor';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1283,7 +1283,7 @@ function extractCity(a){
 
 /* ============================ data adapters ============================== */
 const LIVE = !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
-const State = { user:null, token:null, isAdmin:false, ref:null, site:null, comps:[],
+const State = { user:null, token:null, isAdmin:false, ratesEditor:false, ref:null, site:null, comps:[],
                 index:null, indexErr:null, savedQuoteId:null, scheduled:false,
                 qstatus:'draft', prefill:{customer:null, address:null} };
 
@@ -1425,7 +1425,7 @@ const SB = {
     try{ localStorage.setItem('rx_tok', JSON.stringify({t:j.access_token,r:j.refresh_token,u:j.user})); }catch(e){}
     return true;
   },
-  signOut(){ State.token=null; State.user=null; State.isAdmin=false;
+  signOut(){ State.token=null; State.user=null; State.isAdmin=false; State.ratesEditor=false;
     try{ localStorage.removeItem('rx_tok'); }catch(e){} }
 };
 
@@ -1673,8 +1673,15 @@ const LiveDB = {
     ]);
     const settings={}; settingsRows.forEach(r=>settings[r.key]=Number(r.value));
     if(State.user){
-      try{ const p=await SB.rest('profiles?select=is_admin&id=eq.'+State.user.id);
-           State.isAdmin=!!(p&&p[0]&&p[0].is_admin); }catch(e){}
+      try{
+        let p=null;
+        /* rates_editor arrives with sql/40 — a database without it must
+           not break admin detection, so fall back to the old select. */
+        try{ p=await SB.rest('profiles?select=is_admin,rates_editor&id=eq.'+State.user.id); }
+        catch(e40){ p=await SB.rest('profiles?select=is_admin&id=eq.'+State.user.id); }
+        State.isAdmin=!!(p&&p[0]&&p[0].is_admin);
+        State.ratesEditor=!!(p&&p[0]&&p[0].rates_editor);
+      }catch(e){}
     }
     return {rate_card,markup_curve,settings,blow_benchmarks,drive_zones};
   },
@@ -4565,12 +4572,16 @@ async function renderDataStatus(){
 
 function renderRates(){
   renderCapTable();
-  const canEdit = DB.mode==='demo' || State.isAdmin;
+  /* Admins and named RATES EDITORS (profiles.rates_editor, sql/40 — per
+     Taylor 2026-11-12: "allow ian wheeler to edit the rate card") can
+     type costs; everyone else reads. */
+  const canEdit = DB.mode==='demo' || State.isAdmin || State.ratesEditor;
   $('#ratesadminnote').innerHTML = canEdit
     ? (DB.mode==='demo'
         ? '<div class="note">Demo mode — edits here stay in this browser and are not saved to Supabase.</div>'
         : '')
-    : '<div class="note">You can see the rate card but only an admin can change it.</div>';
+    : '<div class="note">You can see the rate card but only an admin or a '+
+      'rates editor can change it.</div>';
 
   const rows = State.ref.rate_card.slice().sort((a,b)=>
     (a.needs_cost===b.needs_cost) ? a.product.localeCompare(b.product) : (a.needs_cost?-1:1));
