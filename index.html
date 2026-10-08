@@ -1182,7 +1182,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-16-jobtrack';   // shown in the header; check it after deploying
+const BUILD = '2026-11-18-driverprice2';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1850,7 +1850,7 @@ const LiveDB = {
     try{
       // first choice: the whole job-tracking column set (sql/42)
       const r = await SB.rest(base+',closed_out_at,invoice_sent_at,feedback_open,'+
-        'scheduled_date2,scheduled_hours2,slots'+tail);
+        'bid_amount,feedback_vol,scheduled_date2,scheduled_hours2,slots'+tail);
       this.hasDate2 = true; this.hasSlots = true;
       return r;
     }catch(e42){}
@@ -2515,6 +2515,10 @@ function isRockProduct(product){
 }
 /* "Truck #58 — backup" wherever a truck is picked by hand. */
 function crewLabel(c){ return c ? c.name+(c.backup?' — backup':'') : ''; }
+function prodCostYd(product){
+  const rc=((State.ref&&State.ref.rate_card)||[]).find(x=>x.product===product);
+  return rc && rc.cost_per_yard!=null ? Number(rc.cost_per_yard) : null;
+}
 function crewCanPlace(crewId, product){
   if(!isRockProduct(product)) return true;
   if(!suggData.capMap) return true;           // capacities not loaded yet
@@ -5195,6 +5199,9 @@ async function calFetch(from, to){
       yards: (y!=null? y : totY), totYards: totY,
       erp: erpN===3 ? 'full' : erpN ? 'partial' : 'none',
       closed: !!b.closed_out_at, inv: !!b.invoice_sent_at, fb: !!b.feedback_open,
+      /* bidAmt, NOT 'bid' — it.bid already flags penciled BID chips. */
+      bidAmt: b.bid_amount!=null?Number(b.bid_amount):null,
+      fbVol: Number(b.feedback_vol)>0?Number(b.feedback_vol):null,
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
       hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
@@ -5377,13 +5384,26 @@ function tgEvent(it, crew){
     'background:'+col+'22;border-left:3px solid '+col+';'+
     (it.hold?'border-style:dashed;opacity:.75;':'')+'">'+
     '<b>'+esc(timeTxt)+'</b>'+(it.hold?' <span class="muted">HOLD</span>':'')+
-    (it.fb?' <span style="color:var(--warn);font-weight:700" title="Crew feedback needs review">⚠ feedback</span>':'')+
-    (it.closed?' <span style="color:var(--good);font-weight:700" title="Updated in Front End">✅ FE</span>':'')+
-    (it.inv?' <span style="color:var(--good);font-weight:700" title="Invoice sent">💲</span>':'')+
+    (it.fb && !Cal.crew ? ' <span style="color:var(--warn);font-weight:700" title="Crew feedback needs review">⚠ feedback</span>':'')+
+    /* FE / invoice marks are BACK-OFFICE status — never on the crew or
+       driver board (per Taylor 2026-11-17). */
+    (it.closed && !Cal.crew ? ' <span style="color:var(--good);font-weight:700" title="Updated in Front End">✅ FE</span>':'')+
+    (it.inv && !Cal.crew ? ' <span style="color:var(--good);font-weight:700" title="Invoice sent">💲</span>':'')+
     '<br>'+esc(it.customer)+
-    ((it.yards || (!Cal.crew && it.erp))
+    ((it.yards || (!Cal.crew && it.erp) || (DriverView && it.bidAmt!=null))
       ?'<div class="muted" style="font-size:10.5px">'+
-      (it.yards?(Math.round(it.yards*10)/10)+'yd '+esc(it.product||''):'')+
+      /* Driver view (per Taylor 2026-11-17): the event shows the job's
+         total $. A reported volume shortfall draws BOTH old numbers
+         struck through with the updated ones beside them in blue. */
+      (it.yards?(function(){
+        const yd=Math.round(it.yards*10)/10;
+        const disc=DriverView && it.fbVol!=null && it.totYards &&
+          it.fbVol<it.totYards && it.totYards===it.yards;
+        return disc
+          ? '<s style="opacity:.6">'+yd+'yd</s> <b style="color:var(--accent)">'+
+            (Math.round(it.fbVol*10)/10)+'yd</b> '+esc(it.product||'')
+          : yd+'yd '+esc(it.product||'');
+      })():'')+
       /* Crew/driver: THEIR trip only — no cross-truck load labels, no
          project total (per Taylor: "just display what is relevant"). */
       (it.yards && it.lbl && !Cal.crew ? ' · '+esc(it.lbl):'')+
@@ -5397,6 +5417,16 @@ function tgEvent(it, crew){
         ? ' <span style="color:var(--good);font-weight:700">✓#s</span>'
         : ' <span style="color:var(--warn);font-weight:700">'+
           (it.erp==='partial'?'#s…':'no #s')+'</span>') : '')+
+      (DriverView && it.bidAmt!=null ? (function(){
+        const disc=it.fbVol!=null && it.totYards && it.fbVol<it.totYards;
+        const cpy=disc?prodCostYd(it.product):null;
+        const adj=(disc && cpy!=null)
+          ? Math.round((it.bidAmt-(it.totYards-it.fbVol)*cpy)*100)/100 : null;
+        return ' · '+(adj!=null
+          ? '<s style="opacity:.6">'+money(it.bidAmt)+'</s> <b style="color:var(--accent)">'+
+            money(adj)+'</b>'
+          : '<b>'+money(it.bidAmt)+'</b>');
+      })() : '')+
       '</div>':'')+'</div>';
 }
 function tgBanner(it, crew){
@@ -6348,7 +6378,7 @@ function renderCalMonth(grid, from, to, d){
         const tno = cr ? ((String(cr.name).match(/#\S+/)||[])[0]||'') : '';
         return '<div class="calchip" style="border-left:3px solid '+col+';'+
           ((it.hold||it.google)?'opacity:.65;':'')+'">'+
-          (it.fb?'⚠ ':it.closed?'✅ ':'')+
+          ((it.fb&&!Cal.crew)?'⚠ ':(it.closed&&!Cal.crew)?'✅ ':'')+
           (tno?'<b>'+esc(tno)+'</b> ':'')+
           (it.time?'<b>'+esc(fmtMin(toMin(it.time)))+'</b> ':'')+esc(String(label).slice(0,22))+'</div>';
       }).join('');
@@ -6450,14 +6480,14 @@ function calCard(r, rep, focusCrew){
     '<button type="button" class="btn ghost sm" id="crewcard_x">✕</button></span></div>'+
     /* Status banners on EVERY flavor (per Taylor 2026-11-13/15): the
        event says loudly where the job stands in the back office. */
-    (r.closed_out_at
+    ((rep||office) && r.closed_out_at
       ? '<div style="margin-top:8px;border:1px solid var(--good);border-left:5px solid '+
         'var(--good);border-radius:8px;padding:6px 10px;font-weight:600;color:var(--good)">'+
         '✅ Updated in Front End — '+esc(dfmt(String(r.closed_out_at).slice(0,10)))+
         (r.closed_out_by?' <span class="muted" style="font-weight:400">· by '+
           esc(r.closed_out_by)+'</span>':'')+'</div>'
       : '')+
-    (r.invoice_sent_at
+    ((rep||office) && r.invoice_sent_at
       ? '<div style="margin-top:8px;border:1px solid var(--good);border-left:5px solid '+
         'var(--good);border-radius:8px;padding:6px 10px;font-weight:600;color:var(--good)">'+
         '💲 Invoice sent — '+esc(dfmt(String(r.invoice_sent_at).slice(0,10)))+
@@ -6480,7 +6510,15 @@ function calCard(r, rep, focusCrew){
     '<div style="margin-top:6px">'+
     (crewShare!=null
       ? esc(crewShare+' yd of '+(r.product||''))
-      : esc((r.yards||0)+' yd of '+(r.product||'')))+
+      : (function(){
+          /* Driver + reported shortfall: old volume struck, new in blue. */
+          const fbV=Number(r.feedback_vol)>0?Number(r.feedback_vol):null;
+          if(crewView && DriverView && fbV!=null && Number(r.yards)>0 &&
+             fbV<Number(r.yards))
+            return '<s style="opacity:.6">'+esc((r.yards||0)+' yd')+'</s> '+
+              '<b style="color:var(--accent)">'+fbV+' yd</b> of '+esc(r.product||'');
+          return esc((r.yards||0)+' yd of '+(r.product||''));
+        })())+
     (Number(r.depth_in)>0?' at '+Number(r.depth_in)+'&Prime;':'')+
     (crewShare!=null
       ? ' <span class="muted small">(your truck’s share)</span>'
@@ -6510,26 +6548,62 @@ function calCard(r, rep, focusCrew){
       const E=r.equip_rev!=null?Math.round(Number(r.equip_rev)):null;
       const M=r.material_rev!=null?Math.round(rawT)-(L||0)-(E||0):null;
       const tot=(M||0)+(L||0)+(E||0);
+      /* Crew-reported SHORTFALL (per Taylor 2026-11-17): the Material line
+         and the Total show the adjusted numbers beside the originals —
+         struck through, new figures in blue — because the office keys
+         THESE into the system. Adjustment = yards short × the product's
+         rate-card cost/yd, the same rule the driver sees. */
+      const fbV=Number(r.feedback_vol)>0?Number(r.feedback_vol):null;
+      const lessV=fbV!=null && Number(r.yards)>0 && fbV<Number(r.yards);
+      const cpyO=lessV?prodCostYd(r.product):null;
+      const delta=(lessV && cpyO!=null && M!=null)
+        ? Math.round((Number(r.yards)-fbV)*cpyO) : 0;
+      const strike=(oldV,newV)=>'<s style="opacity:.6">'+money(oldV)+'</s> '+
+        '<b style="color:var(--accent)">'+money(newV)+'</b>';
+      const matQty = r.yards
+        ? (delta
+            ? '<s style="opacity:.6">'+esc(r.yards+' yd')+'</s> '+
+              '<b style="color:var(--accent)">'+fbV+' yd</b>'+
+              (r.product?' '+esc(r.product):'')
+            : esc(r.yards+' yd'+(r.product?' '+r.product:'')))
+        : '';
       const m3=[
-        ['Material', M,
-          (r.yards?r.yards+' yd'+(r.product?' '+r.product:''):'')],
-        ['Labor',     L,  qty(r.labor_hours)],
-        ['Equipment', E,  qty(r.equip_hours)]];
+        ['Material', M!=null?(delta?strike(M,M-delta):money(M)):'—', matQty],
+        ['Labor',     L!=null?money(L):'—',  esc(qty(r.labor_hours))],
+        ['Equipment', E!=null?money(E):'—',  esc(qty(r.equip_hours))]];
       return '<div id="cc_revbox" style="margin-top:10px;border:1px solid var(--line);'+
         'border-radius:10px;padding:8px 12px">'+
         '<div class="small" style="font-weight:600;margin-bottom:4px">Revenue'+
         (r.batch_id?' <span class="muted">· this job — loading the master project…</span>':'')+
         '</div>'+
         m3.map(x=>'<div class="kv"><span class="k">'+x[0]+
-          (x[2]?' <span class="muted">· '+esc(x[2])+'</span>':'')+'</span><b>'+
-          (x[1]!=null?money(x[1]):'—')+'</b></div>').join('')+
+          (x[2]?' <span class="muted">· '+x[2]+'</span>':'')+'</span><b>'+
+          x[1]+'</b></div>').join('')+
         '<div class="kv" style="border-top:1px solid var(--line-2);margin-top:4px;'+
-        'padding-top:4px"><span class="k">Total</span><b>'+money(tot)+'</b></div>'+
+        'padding-top:4px"><span class="k">Total</span><b>'+
+        (delta?strike(tot,tot-delta):money(tot))+'</b></div>'+
+        (delta?'<div class="small" style="color:var(--accent);margin-top:2px">− '+
+          money(delta)+' product cost: crew reported '+fbV+' yd used of the '+
+          r.yards+' yd quoted.</div>':'')+
         '</div>';
     })():'')+
     (rep?'<div style="margin-top:8px"><b>'+
       (r.bid_amount!=null?money(r.bid_amount):(r.target_price!=null?money(r.target_price)+
         ' <span class="small muted">(target — no bid typed)</span>':'—'))+'</b></div>':'')+
+    /* Drivers see the job TOTAL (per Taylor 2026-11-17) — struck through
+       with the adjusted amount beside it when less volume was used. */
+    (crewView && DriverView && r.bid_amount!=null ? (function(){
+      const fbV=Number(r.feedback_vol)>0?Number(r.feedback_vol):null;
+      const less=fbV!=null && Number(r.yards)>0 && fbV<Number(r.yards);
+      const cpy=less?prodCostYd(r.product):null;
+      const adj=(less && cpy!=null)
+        ? Math.round((Number(r.bid_amount)-(Number(r.yards)-fbV)*cpy)*100)/100 : null;
+      return '<div style="margin-top:8px">Total: '+(adj!=null
+        ? '<s style="opacity:.6">'+money(r.bid_amount)+'</s> '+
+          '<b style="color:var(--accent)">'+money(adj)+'</b>'+
+          ' <span class="muted small">(volume updated by the crew)</span>'
+        : '<b>'+money(r.bid_amount)+'</b>')+'</div>';
+    })():'')+
     ((rep||office)?
       /* ERP numbers usually arrive after scheduling — typed HERE they save
          straight to the quote and land on the calendar event, no trip
