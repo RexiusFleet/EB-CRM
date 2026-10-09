@@ -610,6 +610,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
 
             <div class="saverow" id="schedverbs">
               <button class="btn" id="holdquote" style="background:#6b7280">Hold</button>
+              <button class="btn" id="tbdquote" style="background:var(--warn)"
+                title="Pencil the slot AND flag the date/details as not settled — lands on the To Do tab">⏳ TBD</button>
               <button class="btn" id="schedquote" style="background:var(--good)">Schedule</button>
             </div>
             <div id="savemsg"></div>
@@ -1195,7 +1197,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-21-todo';   // shown in the header; check it after deploying
+const BUILD = '2026-11-22-tbdsplit';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1923,7 +1925,7 @@ const LiveDB = {
   },
   async listTodo(){
     const base='quotes?select=id,customer_name,product,yards,status,crew_id,'+
-      'scheduled_date,scheduled_time,address_raw';
+      'scheduled_date,scheduled_time,address_raw,created_at';
     const tail='&scheduled_date=not.is.null&archived_at=is.null'+
       '&order=scheduled_date&limit=200';
     try{
@@ -5327,25 +5329,51 @@ async function renderTodo(){
     return;
   }
   const crewName=id=>((CREWS||[]).find(c=>String(c.id)===String(id))||{}).name||'';
-  box.innerHTML='<table><thead><tr><th>Date</th><th>Truck</th><th>Customer</th>'+
-    '<th>Job</th><th>Status</th>'+
-    '<th style="min-width:230px">Rep notes <span class="muted small">— never crew-facing</span></th>'+
-    '<th></th></tr></thead><tbody>'+
-    rows.map(r=>'<tr>'+
-      '<td style="white-space:nowrap">'+esc(dfmt(r.scheduled_date))+
-        (r.scheduled_time?'<br><span class="small muted">'+
-          esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5))))+'</span>':'')+'</td>'+
-      '<td>'+esc(crewName(r.crew_id))+'</td>'+
-      '<td><b>'+esc(r.customer_name||'(no name)')+'</b></td>'+
-      '<td class="small">'+esc((r.yards||0)+' yd '+(r.product||''))+
-        (r.address_raw?'<br><span class="muted">'+esc(r.address_raw)+'</span>':'')+'</td>'+
-      '<td style="white-space:nowrap">'+
-        (r.status==='sent'?'<span class="tag w">HOLD</span> ':'')+
-        (r.tbd?'<span class="tag w">⏳ TBD</span>':'')+'</td>'+
-      '<td><textarea rows="2" data-tdn="'+esc(r.id)+'" style="min-width:220px" '+
-        'placeholder="why it’s waiting, what to chase…">'+esc(r.rep_notes||'')+'</textarea></td>'+
-      '<td><button type="button" class="btn ghost sm" data-tdopen="'+esc(r.id)+'">Open</button></td>'+
-      '</tr>').join('')+'</tbody></table>';
+  /* Two piles (per Taylor 2026-11-22): ⏳ TBD first (a row that is both
+     held AND TBD lives here), plain HOLDs below. Each pile carries its
+     own clock: TBD ages from the quote's creation; a HOLD counts down
+     to its held date. */
+  const today=new Date(calFmt(new Date())+'T12:00:00');
+  const days=(a,b)=>Math.round((a-b)/86400000);
+  const tbdRows=rows.filter(r=>r.tbd);
+  const holdRows=rows.filter(r=>!r.tbd && r.status==='sent');
+  const section=(title, list, clockHead, clockCell)=>{
+    if(!list.length) return '<div class="small muted" style="margin:10px 0 14px">'+
+      title+': nothing waiting.</div>';
+    return '<div class="small" style="font-weight:600;margin:10px 0 4px">'+title+
+      ' · '+list.length+'</div>'+
+      '<table style="margin-bottom:14px"><thead><tr><th>Date</th><th>Truck</th>'+
+      '<th>Customer</th><th>Job</th><th class="num">'+clockHead+'</th>'+
+      '<th style="min-width:230px">Rep notes <span class="muted small">— never crew-facing</span></th>'+
+      '<th></th></tr></thead><tbody>'+
+      list.map(r=>'<tr>'+
+        '<td style="white-space:nowrap">'+esc(dfmt(r.scheduled_date))+
+          (r.scheduled_time?'<br><span class="small muted">'+
+            esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5))))+'</span>':'')+'</td>'+
+        '<td>'+esc(crewName(r.crew_id))+'</td>'+
+        '<td><b>'+esc(r.customer_name||'(no name)')+'</b>'+
+          (r.tbd&&r.status==='sent'?' <span class="tag w">HOLD</span>':'')+'</td>'+
+        '<td class="small">'+esc((r.yards||0)+' yd '+(r.product||''))+
+          (r.address_raw?'<br><span class="muted">'+esc(r.address_raw)+'</span>':'')+'</td>'+
+        '<td class="num">'+clockCell(r)+'</td>'+
+        '<td><textarea rows="2" data-tdn="'+esc(r.id)+'" style="min-width:220px" '+
+          'placeholder="why it’s waiting, what to chase…">'+esc(r.rep_notes||'')+'</textarea></td>'+
+        '<td><button type="button" class="btn ghost sm" data-tdopen="'+esc(r.id)+'">Open</button></td>'+
+        '</tr>').join('')+'</tbody></table>';
+  };
+  box.innerHTML=
+    section('⏳ TBD', tbdRows, 'Days on TBD', r=>{
+      if(!r.created_at) return '<span class="muted">—</span>';
+      const n=days(today, new Date(String(r.created_at).slice(0,10)+'T12:00:00'));
+      return '<b'+(n>=14?' style="color:var(--warn)"':'')+'>'+Math.max(0,n)+'</b>'+
+        '<span class="small muted"> since quoted</span>';
+    })+
+    section('HOLD', holdRows, 'Days till hold date', r=>{
+      const n=days(new Date(r.scheduled_date+'T12:00:00'), today);
+      return n>0 ? '<b'+(n<=2?' style="color:var(--warn)"':'')+'>'+n+'</b>'
+        : n===0 ? '<b style="color:var(--warn)">today</b>'
+        : '<b style="color:var(--danger)">'+(-n)+' past</b>';
+    });
   box.querySelectorAll('[data-tdn]').forEach(ta=>{
     ta.addEventListener('change', async ()=>{
       try{
@@ -8587,11 +8615,13 @@ function setSaveBusy(on, status){
   const plain = status!=='sent' && status!=='won' && status!=='lost';
   one('savequote',  on&&plain          ? 'Saving\u2026'     : null);
   one('holdquote',  on&&status==='sent'? 'Holding\u2026'    : null);
+  one('tbdquote',   on&&status==='sent'? 'Saving\u2026'     : null);
   one('schedquote', on&&status==='won' ? 'Scheduling\u2026' : null);
   one('sb_sched',   on&&status==='won' ? 'Scheduling\u2026' : null);
   one('lostquote',  on&&status==='lost'? 'Saving\u2026'     : null);
 }
-async function saveQuote(status){
+async function saveQuote(status, opts){
+  opts = opts || {};
   const wasStatus = State.qstatus || 'draft';   // what the quote WAS, for messaging
   status = status || wasStatus;
   const p = State.lastPrice; if(!p) return;
@@ -8860,6 +8890,10 @@ async function saveQuote(status){
   q.bid_id = State.fromBidId || null;
   q.bid_notes = State.bidNotes || null;
   q.batch_id = State.batchId || null;
+  /* TBD belongs to the scheduling verbs alone: the ⏳ TBD button sets it,
+     a plain Hold or a Schedule CLEARS it (the date is settled), and an
+     ordinary Save/Update leaves it untouched (key omitted). */
+  if(status==='sent' || status==='won') q.tbd = !!opts.tbd;
   let svWarn = '';
   setSaveBusy(true, status);
   try{
@@ -8880,6 +8914,11 @@ async function saveQuote(status){
           delete q.batch_id;
           svWarn += ' ⚠ The master-project link was NOT saved — run '+
                     'sql/37_batches.sql in Supabase.';
+          continue;
+        }
+        if(tries<=3 && /tbd/i.test(em)){
+          delete q.tbd;
+          svWarn += ' ⚠ The TBD flag was NOT saved — run sql/45_todo.sql in Supabase.';
           continue;
         }
         if(tries<=2 && /site_(notes|measurements|photos)/i.test(em)){
@@ -8973,6 +9012,8 @@ async function saveQuote(status){
     bustSuggCache(); bustCalCache(); renderSuggestionsDebounced(); renderCapNoteDebounced();
     updateSchedMode();
     const verb = status==='won' ? '\u2713 Scheduled \u2014 booked on the calendar.'
+               : status==='sent' && opts.tbd
+                 ? '\u2713 \u23f3 TBD \u2014 penciled on the calendar and listed on the To Do tab.'
                : status==='sent' ? '\u2713 On hold \u2014 the slot is held on the calendar.'
                : status==='lost' ? '\u2713 Marked lost.'
                : (wasNew?'\u2713 Quote saved.':'\u2713 Quote updated.');
@@ -9131,6 +9172,7 @@ function wire(){
      the explicit Remove booking button and Mark lost. */
   $('#savequote').onclick=()=>saveQuote(State.qstatus||'draft');
   $('#holdquote').onclick=()=>saveQuote('sent');
+  $('#tbdquote').onclick=()=>saveQuote('sent', {tbd:true});
   $('#schedquote').onclick=()=>saveQuote('won');
   $('#lostquote').onclick=()=>saveQuote('lost');
   $('#q_custno').addEventListener('change', renderCustJobs);
