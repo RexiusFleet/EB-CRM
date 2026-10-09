@@ -310,6 +310,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
     <button data-view="bidlist">Saved Bids</button>
     <button data-view="quotes">Saved Quotes</button>
     <button data-view="cal">Calendar</button>
+    <button data-view="todo">To Do</button>
     <button data-view="reports">Reports</button>
     <button data-view="rates">Rate Card</button>
   </nav>
@@ -754,6 +755,18 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
       </div></div>
   </section>
 
+  <!-- ============================== TO DO =============================
+       Every calendar event waiting on a decision: ON HOLD or marked TBD
+       (per Taylor 2026-11-20). The Rep notes column is REP-ONLY —
+       quotes.rep_notes never reaches the crew, the drivers, the office
+       card or the Google event body. Reps only: every portal clamp
+       (office/crew/driver/bid) already routes away from this view. -->
+  <section id="view-todo" class="hide">
+    <div class="card"><h3>To Do <span class="muted" id="todocount"></span>
+      <span class="muted small">— holds and TBD events waiting on a decision</span></h3>
+      <div class="body"><div class="scroll" id="todolist" style="overflow-x:auto"></div></div></div>
+  </section>
+
   <!-- ============================= REPORTS =============================
        Export-ready view of the calendar (per Taylor 2026-10-30): one row
        per truck TRIP in the range — the same expansion the board draws,
@@ -1182,7 +1195,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-20-repupdate';   // shown in the header; check it after deploying
+const BUILD = '2026-11-21-todo';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1580,6 +1593,11 @@ const DemoDB = {
   },
   async driveCache(){ return null; },
   async driveCachePut(){ return null; },
+  async listTodo(){
+    return this._quotes.filter(q=>q.scheduled_date && !q.archived_at &&
+      (q.status==='sent' || q.tbd))
+      .sort((a,b)=>String(a.scheduled_date).localeCompare(String(b.scheduled_date)));
+  },
   _feedback: [],
   async addFeedback(row){
     const f=Object.assign({id:'fb'+Date.now(), created_at:new Date().toISOString()}, row);
@@ -1848,7 +1866,15 @@ const LiveDB = {
       'scheduled_date,scheduled_time,scheduled_hours,equip_hours,crew2_id,scheduled_time2,'+
       'account_no,so_no,project_no';
     try{
-      // first choice: the whole job-tracking column set (sql/42)
+      // first choice: everything incl. tbd (sql/45)
+      const r = await SB.rest(base+',closed_out_at,invoice_sent_at,feedback_open,'+
+        'bid_amount,feedback_vol,material_rev,labor_rev,equip_rev,tbd,'+
+        'scheduled_date2,scheduled_hours2,slots'+tail);
+      this.hasDate2 = true; this.hasSlots = true;
+      return r;
+    }catch(e45){}
+    try{
+      // the sql/42 job-tracking column set
       const r = await SB.rest(base+',closed_out_at,invoice_sent_at,feedback_open,'+
         'bid_amount,feedback_vol,material_rev,labor_rev,equip_rev,'+
         'scheduled_date2,scheduled_hours2,slots'+tail);
@@ -1893,6 +1919,18 @@ const LiveDB = {
       return SB.rest('quotes?select=*&scheduled_date=gte.'+back+
         '&scheduled_date=lte.'+encodeURIComponent(to)+
         '&status=in.(sent,won)&limit=1000');
+    }
+  },
+  async listTodo(){
+    const base='quotes?select=id,customer_name,product,yards,status,crew_id,'+
+      'scheduled_date,scheduled_time,address_raw';
+    const tail='&scheduled_date=not.is.null&archived_at=is.null'+
+      '&order=scheduled_date&limit=200';
+    try{
+      return await SB.rest(base+',tbd,rep_notes&or=(status.eq.sent,tbd.is.true)'+tail);
+    }catch(e){
+      // sql/45 not run yet: holds only, no notes column
+      return SB.rest(base+'&status=eq.sent'+tail);
     }
   },
   async addFeedback(row){
@@ -2415,7 +2453,7 @@ function show(v){
   if(typeof BidPortal!=='undefined' && BidPortal && v!=='bids' && v!=='bidlist') v='bids';
   if(typeof OfficePortal!=='undefined' && OfficePortal && v!=='cal') v='cal';
   if(typeof Cal!=='undefined' && Cal.crew && v!=='cal') v='cal';
-  ['quote','bids','bidlist','quotes','cal','dash','rates','reports'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  ['quote','bids','bidlist','quotes','cal','dash','rates','reports','todo'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
   if(v==='bids')   fillBidProducts();
   if(v==='bidlist') renderBidsList();
@@ -2423,6 +2461,7 @@ function show(v){
   if(v==='quotes') renderQuotesList();
   if(v==='dash')   renderDash();
   if(v==='reports') renderReport();
+  if(v==='todo')   renderTodo();
   if(v==='rates'){ renderRates(); renderDataStatus(); }
 }
 
@@ -5213,6 +5252,7 @@ async function calFetch(from, to){
       mat: b.material_rev!=null?Number(b.material_rev):null,
       lab: b.labor_rev!=null?Number(b.labor_rev):null,
       eqr: b.equip_rev!=null?Number(b.equip_rev):null,
+      tbd: !!b.tbd,
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
       hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
@@ -5269,6 +5309,66 @@ async function calFetch(from, to){
   while(calCache.size > 6) calCache.delete(calCache.keys().next().value);
   return data;
 }
+/* ============================== TO DO tab ===============================
+   Every calendar event waiting on a decision — ON HOLD or ⏳ TBD — with a
+   REP-ONLY notes column (quotes.rep_notes, sql/45) that saves on change.
+   Never crew-facing: no crew/driver/office surface renders rep_notes and
+   the Apps Script never prints it on the event body. */
+async function renderTodo(){
+  const box=$('#todolist'); if(!box) return;
+  box.innerHTML='<div class="empty"><span class="spin"></span> Loading…</div>';
+  let rows=[];
+  try{ rows=(await DB.listTodo())||[]; }
+  catch(e){ box.innerHTML='<div class="note bad">Could not load: '+
+    esc(e.message)+'</div>'; return; }
+  $('#todocount').textContent = rows.length ? '· '+rows.length : '';
+  if(!rows.length){
+    box.innerHTML='<div class="empty">Nothing waiting — no holds, nothing TBD.</div>';
+    return;
+  }
+  const crewName=id=>((CREWS||[]).find(c=>String(c.id)===String(id))||{}).name||'';
+  box.innerHTML='<table><thead><tr><th>Date</th><th>Truck</th><th>Customer</th>'+
+    '<th>Job</th><th>Status</th>'+
+    '<th style="min-width:230px">Rep notes <span class="muted small">— never crew-facing</span></th>'+
+    '<th></th></tr></thead><tbody>'+
+    rows.map(r=>'<tr>'+
+      '<td style="white-space:nowrap">'+esc(dfmt(r.scheduled_date))+
+        (r.scheduled_time?'<br><span class="small muted">'+
+          esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5))))+'</span>':'')+'</td>'+
+      '<td>'+esc(crewName(r.crew_id))+'</td>'+
+      '<td><b>'+esc(r.customer_name||'(no name)')+'</b></td>'+
+      '<td class="small">'+esc((r.yards||0)+' yd '+(r.product||''))+
+        (r.address_raw?'<br><span class="muted">'+esc(r.address_raw)+'</span>':'')+'</td>'+
+      '<td style="white-space:nowrap">'+
+        (r.status==='sent'?'<span class="tag w">HOLD</span> ':'')+
+        (r.tbd?'<span class="tag w">⏳ TBD</span>':'')+'</td>'+
+      '<td><textarea rows="2" data-tdn="'+esc(r.id)+'" style="min-width:220px" '+
+        'placeholder="why it’s waiting, what to chase…">'+esc(r.rep_notes||'')+'</textarea></td>'+
+      '<td><button type="button" class="btn ghost sm" data-tdopen="'+esc(r.id)+'">Open</button></td>'+
+      '</tr>').join('')+'</tbody></table>';
+  box.querySelectorAll('[data-tdn]').forEach(ta=>{
+    ta.addEventListener('change', async ()=>{
+      try{
+        const upd=await DB.patchQuote(ta.dataset.tdn, {rep_notes: ta.value.trim()||null});
+        if(DB.mode!=='demo' && !upd)
+          throw new Error('Nothing saved — run sql/44_rep_updates.sql.');
+        toast('✓ Rep note saved.', false);
+      }catch(e){
+        toast(/rep_notes/.test(String(e.message))
+          ? 'The rep-notes column is missing — run sql/45_todo.sql in Supabase.'
+          : e.message, true);
+      }
+    });
+  });
+  box.querySelectorAll('[data-tdopen]').forEach(b2=>b2.onclick=async()=>{
+    let r=null; try{ r=await DB.getQuote(b2.dataset.tdopen); }catch(e){}
+    if(!r) return;
+    show('cal'); Cal.view='week'; Cal.anchor=r.scheduled_date;
+    try{ await renderCal(); }catch(e){}
+    calCard(r, true);
+  });
+}
+
 /* Calendar search (per Taylor 2026-11-14): customer / Order Nbr /
    Project, across every booked or held quote on ANY week. A hit jumps
    the board to its week and pops the job's card (office sign-ins get
@@ -5395,6 +5495,7 @@ function tgEvent(it, crew){
     'background:'+col+'22;border-left:3px solid '+col+';'+
     (it.hold?'border-style:dashed;opacity:.75;':'')+'">'+
     '<b>'+esc(timeTxt)+'</b>'+(it.hold?' <span class="muted">HOLD</span>':'')+
+    (it.tbd && !Cal.crew ? ' <span style="color:var(--warn);font-weight:700" title="Marked TBD — on the To Do tab">⏳TBD</span>':'')+
     (it.fb && !Cal.crew ? ' <span style="color:var(--warn);font-weight:700" title="Crew feedback needs review">⚠ feedback</span>':'')+
     /* FE / invoice marks are BACK-OFFICE status — never on the crew or
        driver board (per Taylor 2026-11-17). */
@@ -6683,6 +6784,16 @@ function calCard(r, rep, focusCrew){
           'title="Press once the invoice has gone out — type its number first">'+
           '💲 Invoice sent</button>')+
       '</div>'+
+      (rep
+        ? '<div class="row" style="margin-top:8px;align-items:center">'+
+          (r.tbd
+            ? '<button type="button" class="btn ghost sm" id="cc_tbdoff" '+
+              'style="flex:0 0 auto">⏳ TBD — unmark</button>'
+            : '<button type="button" class="btn ghost sm" id="cc_tbdon" '+
+              'style="flex:0 0 auto" title="Date or details not settled — '+
+              'lands on the To Do tab">⏳ Mark TBD</button>')+
+          '</div>'
+        : '')+
       '<div id="cc_fbrev"></div>'
       :'')+
     (!office&&r.site_notes?'<div style="margin-top:10px"><b class="small">Site notes</b>'+
@@ -6791,9 +6902,9 @@ function calCard(r, rep, focusCrew){
       toast(done, false);
       calCard(r, rep, focusCrew);            // redraw with the new state
     }catch(e){
-      coMsg('⚠ '+(/closed_out_at|invoice_|feedback_|compare_/.test(String(e.message))
-        ? 'The job-tracking columns are missing — run sql/41_closeout.sql and '+
-          'sql/42_jobtrack.sql in Supabase.'
+      coMsg('⚠ '+(/closed_out_at|invoice_|feedback_|compare_|tbd|rep_notes/.test(String(e.message))
+        ? 'Job-tracking columns are missing — run sql/41, sql/42 and sql/45 '+
+          'in Supabase.'
         : e.message));
     }
   };
@@ -6825,6 +6936,16 @@ function calCard(r, rep, focusCrew){
   if(ivun) ivun.onclick=()=>{
     ivun.disabled=true; coMsg('saving…');
     coPatch({ invoice_sent_at:null, invoice_sent_by:null }, '↩ Invoice-sent undone.');
+  };
+  const tbOn=$('#cc_tbdon');
+  if(tbOn) tbOn.onclick=()=>{
+    tbOn.disabled=true; coMsg('saving…');
+    coPatch({ tbd:true }, '⏳ Marked TBD — it is on the To Do tab.');
+  };
+  const tbOff=$('#cc_tbdoff');
+  if(tbOff) tbOff.onclick=()=>{
+    tbOff.disabled=true; coMsg('saving…');
+    coPatch({ tbd:false }, '✓ TBD cleared.');
   };
   /* ---- crew feedback: note + photos + actual volume + live price ---- */
   const fbCostYd=()=>{
