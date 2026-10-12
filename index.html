@@ -611,7 +611,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             <div class="saverow" id="schedverbs">
               <button class="btn" id="holdquote" style="background:#6b7280">Hold</button>
               <button class="btn" id="tbdquote" style="background:var(--warn)"
-                title="Pencil the slot AND flag the date/details as not settled — lands on the To Do tab">⏳ TBD</button>
+                title="No date held — the customer/rep still has to confirm; waits on the To Do tab">⏳ TBD</button>
               <button class="btn" id="schedquote" style="background:var(--good)">Schedule</button>
             </div>
             <div id="savemsg"></div>
@@ -1197,7 +1197,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-22-tbdsplit';   // shown in the header; check it after deploying
+const BUILD = '2026-11-23-tbd2';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1596,9 +1596,9 @@ const DemoDB = {
   async driveCache(){ return null; },
   async driveCachePut(){ return null; },
   async listTodo(){
-    return this._quotes.filter(q=>q.scheduled_date && !q.archived_at &&
-      (q.status==='sent' || q.tbd))
-      .sort((a,b)=>String(a.scheduled_date).localeCompare(String(b.scheduled_date)));
+    return this._quotes.filter(q=>!q.archived_at && (
+      (q.status==='sent' && q.scheduled_date) ||
+      (q.tbd && (q.status==='draft'||q.status==='sent'))));
   },
   _feedback: [],
   async addFeedback(row){
@@ -1929,7 +1929,12 @@ const LiveDB = {
     const tail='&scheduled_date=not.is.null&archived_at=is.null'+
       '&order=scheduled_date&limit=200';
     try{
-      return await SB.rest(base+',tbd,rep_notes&or=(status.eq.sent,tbd.is.true)'+tail);
+      /* HOLDs are CALENDAR events (sent + a date); TBD rows hold NO date
+         (per Taylor 2026-11-23) and belong here regardless. */
+      return await SB.rest(base+',tbd,rep_notes'+
+        '&or=(and(status.eq.sent,scheduled_date.not.is.null),'+
+        'and(tbd.is.true,status.in.(draft,sent)))'+
+        '&archived_at=is.null&order=created_at.desc&limit=200');
     }catch(e){
       // sql/45 not run yet: holds only, no notes column
       return SB.rest(base+'&status=eq.sent'+tail);
@@ -3896,6 +3901,47 @@ async function setQuoteStatus(r, status){
   return note;
 }
 
+/* ---- HOLD vs TBD actions (per Taylor 2026-11-23): a HOLD soft-commits
+   a date; TBD holds NO date and waits on the rep/customer. ---- */
+async function tdMakeTbd(r){
+  /* Off the calendar entirely, flagged ⏳, demoted to draft. */
+  if(DB.mode!=='demo' && GS.configured() &&
+     (r.calendar_event_id || (Array.isArray(r.slots)&&r.slots.length)) &&
+     (await calendarBackend())==='google'){
+    try{ await GS.remove(r.id,
+      (Array.isArray(r.slots)?r.slots:[]).map(sl=>sl&&sl.event_id).filter(Boolean)); }
+    catch(e){}
+  }
+  const patch={ tbd:true, status:'draft',
+    scheduled_date:null, crew_id:null, crew2_id:null, scheduled_time:null,
+    scheduled_hours:null, scheduled_time2:null, scheduled_date2:null,
+    calendar_event_id:null, calendar_id:null, calendar_event_id2:null,
+    scheduled_at:null, slots:null };
+  let upd;
+  try{ upd=await DB.patchQuote(r.id, patch); }
+  catch(e){
+    throw new Error(/tbd/i.test(String(e.message))
+      ? 'The TBD column is missing — run sql/45_todo.sql in Supabase.'
+      : e.message);
+  }
+  if(DB.mode!=='demo' && !upd)
+    throw new Error('⚠ NOT saved — run sql/44_rep_updates.sql.');
+  Object.assign(r, patch);
+  bustCalCache(); bustSuggCache();
+  return r;
+}
+/* Open the full quote and land the rep at the Schedule section. */
+async function tdReschedule(id){
+  let r=null; try{ r=await DB.getQuote(id); }catch(e){}
+  if(!r){ toast('Could not open that quote.', true); return; }
+  await openQuote(r);
+  setTimeout(()=>{ try{
+    const sb=$('#schedbooked');
+    const el2=(sb && !sb.classList.contains('hide')) ? sb
+      : ($('#schedverbs')||$('#schedpick'));
+    if(el2) el2.scrollIntoView({behavior:'smooth', block:'center'});
+  }catch(e){} }, 450);
+}
 let qsearchTerm = '';
 let quotesListHash = '';
 /* Archive a quote (sql/32): parked, not lost — demoted to draft, any hold
@@ -5335,9 +5381,11 @@ async function renderTodo(){
      to its held date. */
   const today=new Date(calFmt(new Date())+'T12:00:00');
   const days=(a,b)=>Math.round((a-b)/86400000);
-  const tbdRows=rows.filter(r=>r.tbd);
-  const holdRows=rows.filter(r=>!r.tbd && r.status==='sent');
-  const section=(title, list, clockHead, clockCell)=>{
+  const tbdRows=rows.filter(r=>r.tbd)
+    .sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')));
+  const holdRows=rows.filter(r=>!r.tbd && r.status==='sent' && r.scheduled_date)
+    .sort((a,b)=>String(a.scheduled_date).localeCompare(String(b.scheduled_date)));
+  const section=(title, list, clockHead, clockCell, btns)=>{
     if(!list.length) return '<div class="small muted" style="margin:10px 0 14px">'+
       title+': nothing waiting.</div>';
     return '<div class="small" style="font-weight:600;margin:10px 0 4px">'+title+
@@ -5347,7 +5395,8 @@ async function renderTodo(){
       '<th style="min-width:230px">Rep notes <span class="muted small">— never crew-facing</span></th>'+
       '<th></th></tr></thead><tbody>'+
       list.map(r=>'<tr>'+
-        '<td style="white-space:nowrap">'+esc(dfmt(r.scheduled_date))+
+        '<td style="white-space:nowrap">'+
+          (r.scheduled_date?esc(dfmt(r.scheduled_date)):'<span class="muted">—</span>')+
           (r.scheduled_time?'<br><span class="small muted">'+
             esc(fmtMin(toMin(String(r.scheduled_time).slice(0,5))))+'</span>':'')+'</td>'+
         '<td>'+esc(crewName(r.crew_id))+'</td>'+
@@ -5358,22 +5407,36 @@ async function renderTodo(){
         '<td class="num">'+clockCell(r)+'</td>'+
         '<td><textarea rows="2" data-tdn="'+esc(r.id)+'" style="min-width:220px" '+
           'placeholder="why it’s waiting, what to chase…">'+esc(r.rep_notes||'')+'</textarea></td>'+
-        '<td><button type="button" class="btn ghost sm" data-tdopen="'+esc(r.id)+'">Open</button></td>'+
+        '<td><div style="display:flex;flex-direction:column;gap:4px">'+btns(r)+'</div></td>'+
         '</tr>').join('')+'</tbody></table>';
   };
   box.innerHTML=
-    section('⏳ TBD', tbdRows, 'Days on TBD', r=>{
+    section('⏳ TBD — awaiting a date', tbdRows, 'Days on TBD', r=>{
       if(!r.created_at) return '<span class="muted">—</span>';
       const n=days(today, new Date(String(r.created_at).slice(0,10)+'T12:00:00'));
       return '<b'+(n>=14?' style="color:var(--warn)"':'')+'>'+Math.max(0,n)+'</b>'+
         '<span class="small muted"> since quoted</span>';
-    })+
-    section('HOLD', holdRows, 'Days till hold date', r=>{
+    }, r=>
+      '<button type="button" class="btn sm" data-tdresched="'+esc(r.id)+'" '+
+        'style="background:var(--good);color:#fff">Schedule →</button>'+
+      '<button type="button" class="btn ghost sm" data-tdopenq="'+esc(r.id)+'">Open quote</button>'+
+      '<button type="button" class="btn ghost sm" data-tdlost="'+esc(r.id)+'" '+
+        'style="color:var(--danger)">Lost</button>')+
+    section('HOLD — date soft-committed', holdRows, 'Days till hold date', r=>{
       const n=days(new Date(r.scheduled_date+'T12:00:00'), today);
       return n>0 ? '<b'+(n<=2?' style="color:var(--warn)"':'')+'>'+n+'</b>'
         : n===0 ? '<b style="color:var(--warn)">today</b>'
         : '<b style="color:var(--danger)">'+(-n)+' past</b>';
-    });
+    }, r=>
+      '<button type="button" class="btn sm" data-tdconfirm="'+esc(r.id)+'" '+
+        'style="background:var(--good);color:#fff" '+
+        'title="Confirm the held slot — becomes an official booking">✓ Schedule</button>'+
+      '<button type="button" class="btn ghost sm" data-tdresched="'+esc(r.id)+'">Reschedule →</button>'+
+      '<button type="button" class="btn ghost sm" data-tdtbd="'+esc(r.id)+'" '+
+        'title="No date held — back to awaiting confirmation">⏳ TBD</button>'+
+      '<button type="button" class="btn ghost sm" data-tdopenq="'+esc(r.id)+'">Open quote</button>'+
+      '<button type="button" class="btn ghost sm" data-tdlost="'+esc(r.id)+'" '+
+        'style="color:var(--danger)">Lost</button>');
   box.querySelectorAll('[data-tdn]').forEach(ta=>{
     ta.addEventListener('change', async ()=>{
       try{
@@ -5388,12 +5451,36 @@ async function renderTodo(){
       }
     });
   });
-  box.querySelectorAll('[data-tdopen]').forEach(b2=>b2.onclick=async()=>{
-    let r=null; try{ r=await DB.getQuote(b2.dataset.tdopen); }catch(e){}
-    if(!r) return;
-    show('cal'); Cal.view='week'; Cal.anchor=r.scheduled_date;
-    try{ await renderCal(); }catch(e){}
-    calCard(r, true);
+  const tdAct=(sel, fn)=>box.querySelectorAll(sel).forEach(b2=>{
+    b2.onclick=async()=>{
+      b2.disabled=true;
+      const id=b2.dataset.tdresched||b2.dataset.tdopenq||b2.dataset.tdconfirm||
+               b2.dataset.tdtbd||b2.dataset.tdlost;
+      try{ await fn(id); }
+      catch(e){ toast(e.message, true); b2.disabled=false; }
+    };
+  });
+  tdAct('[data-tdopenq]', async id=>{
+    const r=await DB.getQuote(id); if(r) await openQuote(r);
+  });
+  tdAct('[data-tdresched]', id=>tdReschedule(id));
+  tdAct('[data-tdconfirm]', async id=>{
+    const r=await DB.getQuote(id); if(!r) return;
+    const note=await setQuoteStatus(r,'won');
+    toast('✓ Scheduled — the hold is now an official booking.'+(note||''), false);
+    bustCalCache(); renderTodo();
+  });
+  tdAct('[data-tdtbd]', async id=>{
+    const r=await DB.getQuote(id); if(!r) return;
+    await tdMakeTbd(r);
+    toast('⏳ TBD — off the calendar, awaiting a date.', false);
+    renderTodo();
+  });
+  tdAct('[data-tdlost]', async id=>{
+    const r=await DB.getQuote(id); if(!r) return;
+    const note=await setQuoteStatus(r,'lost');
+    toast('✓ Marked lost.'+(note||''), false);
+    bustCalCache(); renderTodo();
   });
 }
 
@@ -6812,15 +6899,21 @@ function calCard(r, rep, focusCrew){
           'title="Press once the invoice has gone out — type its number first">'+
           '💲 Invoice sent</button>')+
       '</div>'+
-      (rep
-        ? '<div class="row" style="margin-top:8px;align-items:center">'+
-          (r.tbd
-            ? '<button type="button" class="btn ghost sm" id="cc_tbdoff" '+
-              'style="flex:0 0 auto">⏳ TBD — unmark</button>'
-            : '<button type="button" class="btn ghost sm" id="cc_tbdon" '+
-              'style="flex:0 0 auto" title="Date or details not settled — '+
-              'lands on the To Do tab">⏳ Mark TBD</button>')+
-          '</div>'
+      /* HOLD verbs on the card (per Taylor 2026-11-23): confirm the held
+         slot, reschedule, send back to TBD (off the calendar), or lost.
+         TBD jobs hold no date, so they never appear as board events. */
+      (rep && r.status==='sent'
+        ? '<div class="row" style="margin-top:8px;align-items:center;flex-wrap:wrap">'+
+          '<button type="button" class="btn sm" id="cc_hconfirm" style="flex:0 0 auto;'+
+            'background:var(--good);color:#fff" '+
+            'title="Confirm this held slot — becomes an official booking">✓ Schedule</button>'+
+          '<button type="button" class="btn ghost sm" id="cc_hresched" style="flex:0 0 auto">'+
+            'Reschedule →</button>'+
+          '<button type="button" class="btn ghost sm" id="cc_htbd" style="flex:0 0 auto" '+
+            'title="No date held — waits on the To Do tab">⏳ TBD</button>'+
+          '<button type="button" class="btn ghost sm" id="cc_hlost" '+
+            'style="flex:0 0 auto;color:var(--danger)">Lost</button>'+
+          '<span class="small muted" id="cc_hmsg" style="align-self:center"></span></div>'
         : '')+
       '<div id="cc_fbrev"></div>'
       :'')+
@@ -6965,16 +7058,27 @@ function calCard(r, rep, focusCrew){
     ivun.disabled=true; coMsg('saving…');
     coPatch({ invoice_sent_at:null, invoice_sent_by:null }, '↩ Invoice-sent undone.');
   };
-  const tbOn=$('#cc_tbdon');
-  if(tbOn) tbOn.onclick=()=>{
-    tbOn.disabled=true; coMsg('saving…');
-    coPatch({ tbd:true }, '⏳ Marked TBD — it is on the To Do tab.');
-  };
-  const tbOff=$('#cc_tbdoff');
-  if(tbOff) tbOff.onclick=()=>{
-    tbOff.disabled=true; coMsg('saving…');
-    coPatch({ tbd:false }, '✓ TBD cleared.');
-  };
+  const hAct=(btn, fn)=>{ if(!btn) return; btn.onclick=async()=>{
+    btn.disabled=true;
+    const m9=$('#cc_hmsg'); if(m9) m9.textContent='working…';
+    try{
+      const out=await fn();
+      wrap.remove();
+      bustCalCache();
+      try{ if(!$('#view-cal').classList.contains('hide')) renderCal(); }catch(e9){}
+      try{ if(!$('#view-todo').classList.contains('hide')) renderTodo(); }catch(e9){}
+      if(out) toast(out, false);
+    }catch(e){ btn.disabled=false; if(m9) m9.textContent='⚠ '+e.message; }
+  };};
+  hAct($('#cc_hconfirm'), async()=>{
+    const note=await setQuoteStatus(r,'won'); r.status='won';
+    return '✓ Scheduled — the hold is now an official booking.'+(note||''); });
+  hAct($('#cc_hresched'), async()=>{ await tdReschedule(r.id); return ''; });
+  hAct($('#cc_htbd'), async()=>{ await tdMakeTbd(r);
+    return '⏳ TBD — off the calendar, awaiting a date.'; });
+  hAct($('#cc_hlost'), async()=>{
+    const note=await setQuoteStatus(r,'lost');
+    return '✓ Marked lost.'+(note||''); });
   /* ---- crew feedback: note + photos + actual volume + live price ---- */
   const fbCostYd=()=>{
     const rc=((State.ref&&State.ref.rate_card)||[]).find(x=>x.product===r.product);
@@ -8615,7 +8719,7 @@ function setSaveBusy(on, status){
   const plain = status!=='sent' && status!=='won' && status!=='lost';
   one('savequote',  on&&plain          ? 'Saving\u2026'     : null);
   one('holdquote',  on&&status==='sent'? 'Holding\u2026'    : null);
-  one('tbdquote',   on&&status==='sent'? 'Saving\u2026'     : null);
+  one('tbdquote',   on&&plain           ? 'Saving\u2026'     : null);
   one('schedquote', on&&status==='won' ? 'Scheduling\u2026' : null);
   one('sb_sched',   on&&status==='won' ? 'Scheduling\u2026' : null);
   one('lostquote',  on&&status==='lost'? 'Saving\u2026'     : null);
@@ -8890,10 +8994,10 @@ async function saveQuote(status, opts){
   q.bid_id = State.fromBidId || null;
   q.bid_notes = State.bidNotes || null;
   q.batch_id = State.batchId || null;
-  /* TBD belongs to the scheduling verbs alone: the ⏳ TBD button sets it,
-     a plain Hold or a Schedule CLEARS it (the date is settled), and an
-     ordinary Save/Update leaves it untouched (key omitted). */
-  if(status==='sent' || status==='won') q.tbd = !!opts.tbd;
+  /* Hold and Schedule SETTLE the date, so they clear TBD; the ⏳ TBD
+     button runs its own flow (draft save + off-calendar + flag below) and
+     an ordinary Save/Update leaves the flag untouched (key omitted). */
+  if(status==='sent' || status==='won') q.tbd = false;
   let svWarn = '';
   setSaveBusy(true, status);
   try{
@@ -9012,8 +9116,6 @@ async function saveQuote(status, opts){
     bustSuggCache(); bustCalCache(); renderSuggestionsDebounced(); renderCapNoteDebounced();
     updateSchedMode();
     const verb = status==='won' ? '\u2713 Scheduled \u2014 booked on the calendar.'
-               : status==='sent' && opts.tbd
-                 ? '\u2713 \u23f3 TBD \u2014 penciled on the calendar and listed on the To Do tab.'
                : status==='sent' ? '\u2713 On hold \u2014 the slot is held on the calendar.'
                : status==='lost' ? '\u2713 Marked lost.'
                : (wasNew?'\u2713 Quote saved.':'\u2713 Quote updated.');
@@ -9172,7 +9274,21 @@ function wire(){
      the explicit Remove booking button and Mark lost. */
   $('#savequote').onclick=()=>saveQuote(State.qstatus||'draft');
   $('#holdquote').onclick=()=>saveQuote('sent');
-  $('#tbdquote').onclick=()=>saveQuote('sent', {tbd:true});
+  $('#tbdquote').onclick=async()=>{
+    /* TBD holds NO date (per Taylor 2026-11-23): save the quote's fields,
+       flag it, and take any pencil or booking OFF the calendar — it waits
+       on the To Do tab until a date is confirmed. */
+    await saveQuote('draft');
+    const id=State.savedQuoteId; if(!id) return;
+    try{
+      const r=await DB.getQuote(id);
+      await tdMakeTbd(r);
+      State.qstatus='draft';
+      try{ renderSchedState(r); updateSchedMode(); }catch(e2){}
+      msg('\u2713 \u23f3 TBD \u2014 no date held; waiting on the To Do tab.', false);
+      toast('\u2713 \u23f3 TBD \u2014 on the To Do tab.', false);
+    }catch(e){ msg(e.message, true); }
+  };
   $('#schedquote').onclick=()=>saveQuote('won');
   $('#lostquote').onclick=()=>saveQuote('lost');
   $('#q_custno').addEventListener('change', renderCustJobs);
