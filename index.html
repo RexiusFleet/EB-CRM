@@ -335,6 +335,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
 </header>
 
 <main>
+  <div id="bidremind"></div>
   <div id="boot" class="card"><div class="empty"><span class="spin"></span> Loading…</div></div>
 
   <!-- ============================ NEW QUOTE ============================ -->
@@ -396,6 +397,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
         <div class="card" id="bidpanel">
           <h3>Bid / site visit <span class="muted small" id="bp_state"></span></h3>
           <div class="body">
+            <div id="bp_connect"></div>
             <div id="bp_meas"></div>
             <div id="bp_notes"></div>
             <div style="margin-top:10px">
@@ -884,6 +886,34 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   </div>
 </form></dialog>
 
+<dialog id="bvdlg"><form method="dialog" class="dlg" id="bvform">
+  <h2>Schedule a bid visit</h2>
+  <p class="muted small" style="margin:4px 0 16px">Pencils a dashed BID chip onto the
+    calendar for this quote's site. Tap the chip later to fill out the bid — converting
+    it flows straight back into this quote.</p>
+  <div class="grid" style="gap:12px">
+    <div class="row">
+      <div><label class="f">Date</label><input type="date" id="bv_date" required></div>
+      <div style="max-width:110px"><label class="f">Time</label>
+        <input type="time" id="bv_time" step="900" value="09:00"></div>
+      <div style="max-width:100px"><label class="f">Hours</label>
+        <input type="number" id="bv_hours" class="mono" step="0.5" min="0.5" value="1"></div>
+    </div>
+    <div><label class="f">Who is doing the bid
+      <span class="small muted">their sign-in email — the reminder goes to them</span></label>
+      <input type="email" id="bv_who"></div>
+    <div><label class="f">Reminder</label><select id="bv_remind">
+      <option value="">no reminder</option>
+      <option value="0">the day of the visit</option>
+      <option value="1" selected>1 day before</option>
+      <option value="2">2 days before</option>
+      <option value="7">a week before</option></select></div>
+    <div id="bverr"></div>
+    <div class="row"><button class="btn" id="bv_go" value="go">📌 Schedule the bid</button>
+      <button class="btn ghost" value="cancel" formnovalidate>Cancel</button></div>
+  </div>
+</form></dialog>
+
 <dialog id="pwdlg"><form method="dialog" class="dlg" id="pwform">
   <h2>Set a new password</h2>
   <p class="muted small" style="margin:4px 0 16px">You came in on a password-reset
@@ -1240,7 +1270,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-29-suggreply';   // shown in the header; check it after deploying
+const BUILD = '2026-11-30-bidvisit';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1719,6 +1749,10 @@ const DemoDB = {
   async delBlock(){ return null; },
   _bids: [],
   async listBids(){ return this._bids.slice().reverse(); },
+  async bidForQuote(qid){
+    return this._bids.filter(b=>String(b.from_quote_id)===String(qid) &&
+      !b.archived_at && b.status!=='quoted').slice(-1)[0] || null;
+  },
   async getBid(id){ return this._bids.find(b=>String(b.id)===String(id)) || null; },
   async saveBid(b, id){
     if(id){ const ex=this._bids.find(x=>String(x.id)===String(id));
@@ -2103,6 +2137,13 @@ const LiveDB = {
   async listBids(){
     return SB.rest('bids?select=*&order=created_at.desc&limit=200');
   },
+  async bidForQuote(qid){
+    /* The open bid this quote spawned (sql/50). A database without the
+       column answers with an error — callers treat that as "none". */
+    const r = await SB.rest('bids?select=*&from_quote_id=eq.'+encodeURIComponent(qid)+
+      '&status=eq.open&archived_at=is.null&order=created_at.desc&limit=1');
+    return r && r[0] || null;
+  },
   async getBid(id){
     const r = await SB.rest('bids?select=*&id=eq.'+encodeURIComponent(id));
     return r && r[0];
@@ -2306,10 +2347,13 @@ async function boot(){
      a rep's tab lives all day. */
   if(LIVE) setInterval(()=>{ if(State.user) SB.restore().catch(()=>{}); },
     40*60*1000);
-  if(LIVE) setInterval(()=>{ if(State.user)
-    updateSuggBadge().catch(()=>{}); }, 5*60*1000);
+  if(LIVE) setInterval(()=>{ if(State.user){
+    updateSuggBadge().catch(()=>{});
+    bidReminders().catch(()=>{});
+  } }, 5*60*1000);
   await loadData();       // 2. data load may fail; the app survives it
   updateSuggBadge().catch(()=>{});
+  bidReminders().catch(()=>{});
 }
 
 /* Password recovery (per Taylor 2026-11-25): the reset email's link lands
@@ -5519,10 +5563,13 @@ async function calFetch(from, to){
      pencil mark, shown but NEVER fed to the engine (see bookingsPoolFor). */
   (allBids||[]).forEach(b=>{
     if(!b || !b.scheduled_date || b.status==='quoted' || b.archived_at) return;
-    if(b.scheduled_date<from || b.scheduled_date>to || !b.crew_id) return;
+    if(b.scheduled_date<from || b.scheduled_date>to) return;
+    /* A bid visit scheduled from a quote has no truck — it draws in the
+       first column (it is a rep's walk-through, not a crew's job). */
     gEvents.push({ gid:'bid'+b.id, bid:true, bidId:b.id,
-      summary:'BID '+(b.customer_name||'(no name)'),
-      crew_id:String(b.crew_id), date:b.scheduled_date,
+      summary:'BID '+(b.customer_name||'(no name)')+
+        (b.assigned_to?' — '+String(b.assigned_to).split('@')[0]:''),
+      crew_id:String(b.crew_id || ((CREWS||[])[0]||{}).id || '1'), date:b.scheduled_date,
       time:b.scheduled_time?String(b.scheduled_time).slice(0,5):null,
       hours:Number(b.scheduled_hours)||2, allDay:!b.scheduled_time });
   });
@@ -6590,6 +6637,56 @@ async function calAddCard(date, crewId, time){
   };
 }
 /* Tap a dashed BID chip: what it is, where it goes next. */
+/* Bid-visit reminders (per Taylor 2026-11-30): "set reminders for the rep
+   about upcoming bids." A dashed banner above the app lists this sign-in's
+   open bid visits once inside their reminder window (assigned_to email
+   match, creator as fallback; a day of grace after the date). ✕ hides it
+   for the rest of the day in this browser. */
+async function bidReminders(){
+  const host=$('#bidremind'); if(!host) return;
+  if(typeof OfficePortal!=='undefined' && OfficePortal) return;
+  if(typeof BidPortal!=='undefined' && BidPortal) return;
+  if(typeof Cal!=='undefined' && Cal.crew) return;
+  host.innerHTML='';
+  const today=calFmt(new Date());
+  let snooze=''; try{ snooze=localStorage.getItem('rx_bidremind')||''; }catch(e){}
+  if(snooze===today) return;
+  let bids=[];
+  try{ bids=(await DB.listBids())||[]; }catch(e){ return; }
+  const me=((State.user&&State.user.email)||'').toLowerCase();
+  const t0=new Date(today+'T12:00:00');
+  const daysTo=d9=>Math.round((new Date(d9+'T12:00:00')-t0)/86400000);
+  const due=bids.filter(b=>{
+    if(!b || !b.scheduled_date || b.status==='quoted' || b.archived_at) return false;
+    if(b.remind_days==null || b.remind_days==='') return false;
+    const who=String(b.assigned_to||b.created_by||'').toLowerCase();
+    if(me && who && who!==me) return false;       // someone else's visit
+    const d9=daysTo(b.scheduled_date);
+    return d9<=Number(b.remind_days) && d9>=-1;   // window open … 1 day grace
+  }).sort((a,b9)=>String(a.scheduled_date).localeCompare(String(b9.scheduled_date)));
+  if(!due.length) return;
+  host.innerHTML='<div style="border:1px dashed var(--warn);border-left:5px solid var(--warn);'+
+    'border-radius:10px;padding:8px 12px;margin-bottom:12px;display:flex;gap:10px;'+
+    'align-items:flex-start">'+
+    '<div style="flex:1"><b class="small" style="color:var(--warn)">📌 Upcoming bid visit'+
+    (due.length>1?'s':'')+'</b>'+
+    due.map(b=>{
+      const d9=daysTo(b.scheduled_date);
+      const when=d9<0?'<b style="color:#d13b3b">yesterday</b>'
+        :d9===0?'<b>today</b>':d9===1?'tomorrow':'in '+d9+' days';
+      return '<div class="small" style="margin-top:3px"><a href="#" data-bvr="'+esc(b.id)+'">'+
+        esc(b.customer_name||'(no name)')+'</a> — '+when+', '+esc(dfmt(b.scheduled_date))+
+        (b.scheduled_time?' '+esc(fmtMin(toMin(String(b.scheduled_time).slice(0,5)))):'')+
+        (b.address_raw?' · '+esc(b.address_raw):'')+'</div>';
+    }).join('')+'</div>'+
+    '<button type="button" class="btn ghost sm" id="bvr_x" title="Hide for today">✕</button></div>';
+  host.querySelectorAll('[data-bvr]').forEach(a=>a.onclick=e=>{
+    e.preventDefault(); bidCardById(a.dataset.bvr); });
+  $('#bvr_x').onclick=()=>{
+    try{ localStorage.setItem('rx_bidremind', today); }catch(e){}
+    host.innerHTML='';
+  };
+}
 async function bidCardById(id){
   let b=null; try{ b=await DB.getBid(id); }catch(e){}
   if(!b) return;
@@ -6613,7 +6710,15 @@ async function bidCardById(id){
     (b.scheduled_date?'<div class="small" style="margin-top:4px">📌 '+
       esc(dfmt(b.scheduled_date))+
       (b.scheduled_time?' · '+esc(fmtMin(toMin(String(b.scheduled_time).slice(0,5)))):'')+
+      (b.scheduled_hours?' · '+b.scheduled_hours+' hr':'')+
       ' — a pencil mark; it never blocks the schedule</div>':'')+
+    (b.assigned_to?'<div class="small" style="margin-top:4px">👤 '+esc(b.assigned_to)+
+      (b.remind_days!=null?' <span class="muted">· reminder '+
+        (Number(b.remind_days)===0?'the day of'
+          :Number(b.remind_days)+' day'+(Number(b.remind_days)===1?'':'s')+' before')+
+        '</span>':'')+'</div>':'')+
+    (b.from_quote_id?'<div class="small muted" style="margin-top:4px">🔗 started from a '+
+      'quote — converting flows back into it</div>':'')+
     (b.notes?'<div style="margin-top:10px"><b class="small">Bid notes</b>'+
       '<div class="small">'+esc(b.notes)+'</div></div>':'')+
     '<div class="row" style="margin-top:14px">'+
@@ -8023,11 +8128,20 @@ async function convertBid(id){
   }
   let b=null; try{ b=await DB.getBid(id); }catch(e){}
   if(!b){ bdMsg('That bid was not found.', true); return; }
-  $('#newquote').click();
-  show('quote');
-  $('#q_customer').value=b.customer_name||''; $('#q_phone').value=fmtPhoneTyped(b.phone||'');
-  $('#q_address').value=b.address_raw||''; $('#q_city').value=b.city||'';
-  $('#q_zip').value=b.zip||'';
+  /* A bid STARTED FROM a quote (sql/50) converts back into THAT quote —
+     no duplicate (per Taylor 2026-11-30). */
+  let origin=null;
+  if(b.from_quote_id){
+    try{ origin=await DB.getQuote(b.from_quote_id); }catch(e){}
+    if(origin && origin.archived_at) origin=null;
+  }
+  if(origin){ show('quote'); await openQuote(origin); }
+  else{ $('#newquote').click(); show('quote'); }
+  /* Into an existing quote, the bid only overwrites what it actually has. */
+  const put=(id9,v)=>{ if(v || !origin) $(id9).value=v||''; };
+  put('#q_customer', b.customer_name||''); put('#q_phone', fmtPhoneTyped(b.phone||''));
+  put('#q_address', b.address_raw||''); put('#q_city', b.city||'');
+  put('#q_zip', b.zip||'');
   if(b.product && !$('#q_product').disabled &&
      [...$('#q_product').options].some(o=>o.value===b.product))
     $('#q_product').value=b.product;
@@ -8038,9 +8152,10 @@ async function convertBid(id){
   SiteVisit.pool=Array.isArray(b.photos)?b.photos.map(x=>Object.assign({},x)):[];
   SiteVisit.photos=SiteVisit.pool.map(x=>Object.assign({},x));   // all attached; untick in the panel
   if(t.suggested_yards>0) $('#q_yards').value=t.suggested_yards;
-  if(b.scheduled_date){
+  if(b.scheduled_date && !origin){
     /* The pencil mark becomes the quote's proposed slot — Hold/Schedule
-       makes it real, and quoting the bid clears the dashed chip. */
+       makes it real, and quoting the bid clears the dashed chip. (A
+       from-quote bid's date is the WALK-THROUGH date, never the job's.) */
     $('#q_scheddate').value=b.scheduled_date;
     if(b.crew_id) $('#q_crew').value=String(b.crew_id);
     if(b.scheduled_time) $('#q_schedtime').value=String(b.scheduled_time).slice(0,5);
@@ -8097,8 +8212,65 @@ function poolAdd(list){
     SiteVisit.pool.push(Object.assign({}, p2));
   });
 }
+/* Bid-visit hookup on the quote (per Taylor 2026-11-30): no bid attached
+   -> a button that schedules a NEW bid prefilled from this quote; a
+   connected open bid -> its visit line + Open. Cached per quote id so
+   recalc's constant re-renders cost nothing. */
+let bpBidCache = { qid:null, bid:null };
+async function renderBidConnect(){
+  const box=$('#bp_connect'); if(!box) return;
+  if(State.fromBidId){ box.innerHTML=''; return; }   // already riding a bid
+  const qid=State.savedQuoteId;
+  let b=null;
+  if(qid){
+    if(String(bpBidCache.qid)===String(qid)) b=bpBidCache.bid;
+    else{
+      try{ b=await DB.bidForQuote(qid); }catch(e){ b=null; }
+      if(String(State.savedQuoteId)!==String(qid)) return;   // stale answer
+      bpBidCache={ qid:String(qid), bid:b };
+    }
+  }
+  if(b && b.status!=='quoted' && !b.archived_at){
+    box.innerHTML='<div style="border:1px dashed var(--warn);border-radius:10px;'+
+      'padding:8px 12px;margin-bottom:10px">'+
+      '<div class="small" style="font-weight:600;color:var(--warn)">📌 Bid visit scheduled</div>'+
+      '<div class="small" style="margin-top:2px">'+
+      (b.scheduled_date
+        ? esc(dfmt(b.scheduled_date))+
+          (b.scheduled_time?' · '+esc(fmtMin(toMin(String(b.scheduled_time).slice(0,5)))):'')+
+          (b.scheduled_hours?' · '+b.scheduled_hours+' hr':'')
+        : 'no date yet')+
+      (b.assigned_to?' · '+esc(String(b.assigned_to).split('@')[0]):'')+'</div>'+
+      '<div class="row" style="margin-top:6px">'+
+      '<button type="button" class="btn ghost sm" id="bp_openbid" style="flex:0 0 auto">'+
+      'Open the bid</button>'+
+      '<span class="small muted" style="align-self:center">it is the dashed chip on the '+
+      'calendar — fill it out there, then convert</span></div></div>';
+    const ob=$('#bp_openbid');
+    if(ob) ob.onclick=async()=>{
+      let b2=null; try{ b2=await DB.getBid(b.id); }catch(e){}
+      if(b2) openBid(b2); else toast('Could not open that bid.', true);
+    };
+  }else{
+    box.innerHTML='<div class="row" style="margin-bottom:10px;align-items:center">'+
+      '<button type="button" class="btn ghost sm" id="bp_newbid" style="flex:0 0 auto">'+
+      '📌 Schedule a bid visit</button>'+
+      '<span class="small muted" style="align-self:center">no bid attached — pencil a '+
+      'walk-through onto the calendar</span></div>';
+    const nb=$('#bp_newbid'); if(nb) nb.onclick=openBidVisitDialog;
+  }
+}
+function openBidVisitDialog(){
+  const d=$('#bvdlg'); if(!d) return;
+  const t=new Date(); t.setDate(t.getDate()+1);
+  $('#bv_date').value=calFmt(t);
+  $('#bv_who').value=(State.user&&State.user.email)||'';
+  $('#bverr').innerHTML='';
+  try{ d.showModal(); }catch(e){}
+}
 function renderBidPanel(){
   if(!$('#bidpanel')) return;
+  renderBidConnect();
   poolAdd(SiteVisit.photos);
   /* measurements — read-only; areas are edited on the Bids tab */
   const mbox=$('#bp_meas'); const t=svTotals();
@@ -9389,8 +9561,10 @@ async function saveQuote(status, opts){
         throw e;
       }
     }
-    /* First save off a converted bid: the bid flips to quoted. */
-    if(wasNew && State.fromBidId){
+    /* Any save of a bid-linked quote flips the bid to quoted — converted
+       bids on new quotes AND from-quote bids converting back into their
+       origin (idempotent; failures never block the quote save). */
+    if(State.fromBidId){
       try{ await DB.patchBid(State.fromBidId,
         {status:'quoted', quote_id: saved && saved.id}); }catch(e){}
     }
@@ -9800,6 +9974,50 @@ function wire(){
     }
     b.disabled=false;
   };
+  $('#bvform').addEventListener('submit', async e=>{
+    if(e.submitter && e.submitter.value!=='go') return;
+    e.preventDefault();
+    const err=$('#bverr');
+    err.innerHTML='<div class="small muted"><span class="spin"></span> Scheduling…</div>';
+    try{
+      if(!State.savedQuoteId){
+        await saveQuote('draft');            // the bid hangs off a saved quote
+        if(!State.savedQuoteId)
+          throw new Error('Save the quote first — the bid connects to it.');
+      }
+      const payload={
+        customer_name: $('#q_customer').value.trim()||null,
+        phone:         $('#q_phone').value.trim()||null,
+        address_raw:   $('#q_address').value.trim()||null,
+        city:          $('#q_city').value.trim()||null,
+        zip:           $('#q_zip').value.trim()||null,
+        product:       $('#q_product').value||null,
+        depth_in:      parseFloat($('#q_depth').value)||null,
+        created_by:    (State.user&&State.user.email)||null,
+        from_quote_id: State.savedQuoteId,
+        assigned_to:   $('#bv_who').value.trim()||null,
+        remind_days:   $('#bv_remind').value===''?null:Number($('#bv_remind').value),
+        scheduled_date:  $('#bv_date').value||null,
+        scheduled_time:  $('#bv_time').value||null,
+        scheduled_hours: parseFloat($('#bv_hours').value)||1
+      };
+      const b=await DB.saveBid(payload);
+      if(DB.mode!=='demo' && !b)
+        throw new Error('Nothing saved — check sql/29_bids.sql and sql/50_bid_visits.sql.');
+      bpBidCache={ qid:String(State.savedQuoteId), bid:b };
+      err.innerHTML='';
+      $('#bvdlg').close();
+      bustCalCache(); renderBidPanel(); bidReminders().catch(()=>{});
+      toast('📌 Bid visit penciled onto '+dfmt(payload.scheduled_date)+
+        (payload.scheduled_time?' '+fmtMin(toMin(payload.scheduled_time)):'')+
+        ' — tap the dashed chip on the calendar to fill out the bid.', false);
+    }catch(e2){
+      err.innerHTML='<div class="note bad">'+esc(
+        /from_quote_id|assigned_to|remind_days/i.test(String(e2.message))
+          ? 'Run sql/50_bid_visits.sql in Supabase first.'
+          : e2.message)+'</div>';
+    }
+  });
   $('#pwform').addEventListener('submit', async e=>{
     if(e.submitter && e.submitter.value!=='go') return;
     e.preventDefault();
@@ -9827,6 +10045,7 @@ function wire(){
       $('#authdlg').close();
       await loadData();          // re-read now that we have a token
       updateSuggBadge().catch(()=>{});
+      bidReminders().catch(()=>{});
     }catch(err){ $('#autherr').innerHTML='<div class="note bad">'+esc(err.message)+'</div>'; }
   });
 }
