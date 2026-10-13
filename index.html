@@ -1240,7 +1240,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-27-dotphone';   // shown in the header; check it after deploying
+const BUILD = '2026-11-28-wetmode';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -8810,8 +8810,10 @@ const renderSuggestionsDebounced = debounce(renderSuggestions, 400);
 
 /* Over-capacity warning for the slot the rep actually picked: same truck, same
    day, same product -- would this load exceed the sheet? */
-/* The dry/wet switch and the capacity sheet, on the Rate Card tab. Any rep can
-   flip the mode -- it describes the material in the yard today, not policy. */
+/* The dry/wet switch and the capacity sheet, on the Rate Card tab. Admins
+   and RATE-CARD EDITORS (profiles.rates_editor — Ian, Mollie) flip the
+   mode (sql/48 holds the matching app_config policy); everyone else sees
+   it read-only. Every capacity check and slot suggestion follows it. */
 async function renderCapTable(){
   const box = $('#captable'); if(!box) return;
   box.innerHTML = '<div class="empty"><span class="spin"></span></div>';
@@ -8823,11 +8825,17 @@ async function renderCapTable(){
     return;
   }
   const mode = d.mode;
+  const canFlip = DB.mode==='demo' || State.isAdmin || State.ratesEditor;
   let html = '<div class="row" style="align-items:center;margin-bottom:10px">'+
     '<span class="small">Material is:</span>'+
-    '<button class="btn sm'+(mode==='dry'?'':' ghost')+'" id="capdry">Dry</button>'+
-    '<button class="btn sm'+(mode==='wet'?'':' ghost')+'" id="capwet">Winter / wet</button>'+
-    '<span class="small muted">Every capacity check and slot suggestion uses this.</span></div>';
+    '<button class="btn sm'+(mode==='dry'?'':' ghost')+'" id="capdry"'+
+      (canFlip?'':' disabled')+'>Dry</button>'+
+    '<button class="btn sm'+(mode==='wet'?'':' ghost')+'" id="capwet"'+
+      (canFlip?'':' disabled')+'>Winter / wet</button>'+
+    '<span class="small muted">'+(canFlip
+      ? 'Every capacity check and slot suggestion uses this.'
+      : 'Only an admin or a rates editor can flip this — every capacity check follows it.')+
+    '</span></div>';
   const prods = [...new Set([...d.capMap.keys()].map(k=>k.split('|').slice(1).join('|')))].sort();
   if(prods.length){
     const t = ['<table><thead><tr><th>Product</th>'+
@@ -8854,7 +8862,13 @@ async function renderCapTable(){
   box.innerHTML = html;
   const setMode = async m=>{
     try{
-      await DB.setConfig('capacity_mode', m);
+      const upd = await DB.setConfig('capacity_mode', m);
+      /* PostgREST reports a row-security refusal as a 0-row "success" —
+         the toggle used to snap back silently. Say what to run instead. */
+      if(DB.mode!=='demo' && !upd)
+        throw new Error('⚠ NOT saved — this sign-in is not allowed to flip the '+
+          'material mode. Run sql/48_capacity_mode.sql in Supabase (it opens the '+
+          'switch to admins and rate-card editors).');
       bustSuggCache(); renderCapTable(); renderSuggestionsDebounced();
     }catch(e){ box.insertAdjacentHTML('afterbegin','<div class="note bad">'+esc(e.message)+'</div>'); }
   };
