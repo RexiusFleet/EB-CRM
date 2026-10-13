@@ -871,9 +871,26 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   <div class="grid" style="gap:12px">
     <div><label class="f">Email</label><input type="email" id="au_email" required></div>
     <div><label class="f">Password</label><input type="password" id="au_pw" required></div>
+    <div><button type="button" class="btn ghost sm" id="au_forgot"
+      style="padding:4px 10px">Forgot password? Email me a reset link</button></div>
     <div id="autherr"></div>
     <div class="row"><button class="btn" id="au_go" value="go">Sign in</button>
       <button class="btn ghost" value="cancel" formnovalidate>Cancel</button></div>
+  </div>
+</form></dialog>
+
+<dialog id="pwdlg"><form method="dialog" class="dlg" id="pwform">
+  <h2>Set a new password</h2>
+  <p class="muted small" style="margin:4px 0 16px">You came in on a password-reset
+    link<span id="pw_who"></span>. Pick the password you will sign in with from now on.</p>
+  <div class="grid" style="gap:12px">
+    <div><label class="f">New password</label>
+      <input type="password" id="pw_new" required minlength="8" autocomplete="new-password"></div>
+    <div><label class="f">Type it again</label>
+      <input type="password" id="pw_new2" required autocomplete="new-password"></div>
+    <div id="pwerr"></div>
+    <div class="row"><button class="btn" id="pw_go" value="go">Save new password</button>
+      <button class="btn ghost" value="cancel" formnovalidate>Not now</button></div>
   </div>
 </form></dialog>
 
@@ -1218,7 +1235,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-24-suggest';   // shown in the header; check it after deploying
+const BUILD = '2026-11-25-pwreset';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1452,6 +1469,32 @@ const SB = {
     if(!r.ok) throw new Error(j.error_description||j.msg||j.message||'Sign-in failed');
     State.token=j.access_token; State.user=j.user;
     try{ localStorage.setItem('rx_tok', JSON.stringify({t:j.access_token,r:j.refresh_token,u:j.user})); }catch(e){}
+    return j;
+  },
+  async recover(email){
+    /* Supabase sends its password-reset email; redirect_to brings the rep
+       back to THIS page (the URL must be allow-listed in Auth settings). */
+    const base = String(CONFIG.SUPABASE_URL||'').replace(/\/+$/,'');
+    const back = encodeURIComponent(location.origin+location.pathname);
+    const r = await fetch(base+'/auth/v1/recover?redirect_to='+back,
+      {method:'POST',headers:{apikey:CONFIG.SUPABASE_ANON_KEY,'Content-Type':'application/json'},
+       body:JSON.stringify({email})});
+    if(!r.ok){
+      let j={}; try{ j=await r.json(); }catch(e){}
+      throw new Error(j.error_description||j.msg||j.message||
+        'Could not send the reset email (HTTP '+r.status+')');
+    }
+    return true;
+  },
+  async setPassword(newPw){
+    const base = String(CONFIG.SUPABASE_URL||'').replace(/\/+$/,'');
+    const r = await fetch(base+'/auth/v1/user',
+      {method:'PUT',headers:{apikey:CONFIG.SUPABASE_ANON_KEY,'Content-Type':'application/json',
+        Authorization:'Bearer '+State.token},
+       body:JSON.stringify({password:newPw})});
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error_description||j.msg||j.message||
+      'Could not save the new password');
     return j;
   },
   async restore(){
@@ -2252,6 +2295,7 @@ async function boot(){
   show('quote');
   renderAuth();
 
+  if(LIVE){ try{ await handleRecovery(); }catch(e){} }
   if(LIVE){ try{ await SB.restore(); }catch(e){} }
   /* Keep the session alive across a whole shift: tokens last ~1 hour,
      a rep's tab lives all day. */
@@ -2260,6 +2304,56 @@ async function boot(){
   await loadData();       // 2. data load may fail; the app survives it
 }
 
+/* Password recovery (per Taylor 2026-11-25): the reset email's link lands
+   back on this page with #access_token=…&type=recovery (or #error_code=…
+   when expired). Adopt the one-time session, clean the hash, and ask for
+   the new password. */
+async function handleRecovery(){
+  const h = String(location.hash||'');
+  if(!/access_token=|error_code=|error=|type=recovery/.test(h)) return;
+  const p = new URLSearchParams(h.slice(1));
+  const clean = ()=>{ try{
+    history.replaceState(null,'',location.pathname+location.search); }catch(e){} };
+  if(p.get('error_code') || p.get('error')){
+    clean();
+    toast('⚠ That password-reset link is invalid or has expired — press '+
+      'Sign in → "Forgot password?" to get a fresh one.', true);
+    return;
+  }
+  if(p.get('type')!=='recovery' || !p.get('access_token')) return;
+  try{
+    const rt = p.get('refresh_token');
+    if(rt){
+      /* Trade the link's refresh token for a full session (user incl.). */
+      try{ localStorage.setItem('rx_tok',
+        JSON.stringify({t:p.get('access_token'), r:rt, u:null})); }catch(e){}
+      await SB.restore();
+    }
+    if(!State.user){
+      /* No refresh token on the link: run on the access token alone. */
+      State.token = p.get('access_token');
+      const base = String(CONFIG.SUPABASE_URL||'').replace(/\/+$/,'');
+      const r = await fetch(base+'/auth/v1/user',
+        {headers:{apikey:CONFIG.SUPABASE_ANON_KEY,
+          Authorization:'Bearer '+State.token}});
+      if(r.ok) State.user = await r.json();
+    }
+  }catch(e){}
+  clean();
+  if(!State.token){
+    toast('⚠ Could not open the reset link — request a new one from Sign in.', true);
+    return;
+  }
+  renderAuth();
+  openPwDialog();
+}
+function openPwDialog(){
+  const d=$('#pwdlg'); if(!d) return;
+  $('#pw_who').textContent = (State.user && State.user.email)
+    ? ' for '+State.user.email : '';
+  $('#pw_new').value=''; $('#pw_new2').value=''; $('#pwerr').innerHTML='';
+  try{ d.showModal(); }catch(e){}
+}
 function targetLabel(){
   return LIVE ? String(CONFIG.SUPABASE_URL).replace(/\/+$/,'')
               : 'data/bundle.json (offline demo data, ~7 MB)';
@@ -9551,6 +9645,48 @@ function wire(){
     if(State.user){ SB.signOut(); renderAuth(); location.reload(); return; }
     $('#authdlg').showModal();
   };
+  $('#au_forgot').onclick = async ()=>{
+    const em = $('#au_email').value.trim();
+    if(!em){
+      $('#autherr').innerHTML='<div class="note bad">Type your email above first — '+
+        'the reset link goes there.</div>';
+      $('#au_email').focus(); return;
+    }
+    if(!LIVE){
+      $('#autherr').innerHTML='<div class="note">Demo build — there is no live '+
+        'sign-in here, so no email to send.</div>';
+      return;
+    }
+    const b=$('#au_forgot'); b.disabled=true;
+    $('#autherr').innerHTML='<div class="small muted"><span class="spin"></span> '+
+      'Sending the reset email…</div>';
+    try{
+      await SB.recover(em);
+      $('#autherr').innerHTML='<div class="note">✉ Reset email sent to <b>'+esc(em)+
+        '</b>. Open its link — it brings you back here to set a new password. '+
+        'Give it a minute or two, and check spam.</div>';
+    }catch(err){
+      $('#autherr').innerHTML='<div class="note bad">'+esc(err.message)+'</div>';
+    }
+    b.disabled=false;
+  };
+  $('#pwform').addEventListener('submit', async e=>{
+    if(e.submitter && e.submitter.value!=='go') return;
+    e.preventDefault();
+    if($('#pw_new').value !== $('#pw_new2').value){
+      $('#pwerr').innerHTML='<div class="note bad">The two boxes do not match.</div>';
+      return;
+    }
+    $('#pwerr').innerHTML='<div class="small muted"><span class="spin"></span> Saving…</div>';
+    try{
+      await SB.setPassword($('#pw_new').value);
+      $('#pwerr').innerHTML='';
+      $('#pwdlg').close();
+      toast('✓ Password updated — you are signed in.', false);
+    }catch(err){
+      $('#pwerr').innerHTML='<div class="note bad">'+esc(err.message)+'</div>';
+    }
+  });
   $('#authform').addEventListener('submit', async e=>{
     if(e.submitter && e.submitter.value!=='go') return;
     e.preventDefault();
