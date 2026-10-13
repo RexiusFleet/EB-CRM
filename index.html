@@ -208,6 +208,11 @@ body.bidmode #tabs button[data-view="bidlist"]{display:inline-block}
    sideways scroll. Small screens keep the scroll (columns would be
    unreadable otherwise). */
 body.calwide main,body.officemode main,body.crewmode main{max-width:none}
+/* The red "new suggestions" pill on the tab (admins only). */
+#tabs button .tabdot{display:inline-block;background:#d13b3b;color:#fff;
+  border-radius:99px;font-size:11px;font-weight:700;padding:0 6px;
+  margin-left:6px;line-height:16px;min-width:16px;text-align:center;
+  vertical-align:1px}
 @media(min-width:1000px){#tg{min-width:0 !important}}
 body.officemode #tabs{display:none}
 body.officemode #cal_block,body.officemode #cal_crew,
@@ -320,7 +325,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
     <button data-view="todo">To Do</button>
     <button data-view="reports">Reports</button>
     <button data-view="rates">Rate Card</button>
-    <button data-view="sugg">Suggestions</button>
+    <button data-view="sugg">Suggestions<span class="tabdot hide" id="suggdot"></span></button>
   </nav>
   <div class="userbox">
     <span class="pill" id="modepill">…</span>
@@ -1235,8 +1240,8 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-25-pwreset';   // shown in the header; check it after deploying
-const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
+const BUILD = '2026-11-27-dotphone';   // shown in the header; check it after deploying
+const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptdmNpb2tyY2xndHNubHJ0dndnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjQ5MjMsImV4cCI6MjEwMzAwMDkyM30.x9DFKtyZGCxVTGKVUFXCn8iMveGiWmTzluikO6RmB10'
@@ -2301,7 +2306,10 @@ async function boot(){
      a rep's tab lives all day. */
   if(LIVE) setInterval(()=>{ if(State.user) SB.restore().catch(()=>{}); },
     40*60*1000);
+  if(LIVE) setInterval(()=>{ if(State.user && State.isAdmin)
+    updateSuggBadge().catch(()=>{}); }, 5*60*1000);
   await loadData();       // 2. data load may fail; the app survives it
+  updateSuggBadge().catch(()=>{});
 }
 
 /* Password recovery (per Taylor 2026-11-25): the reset email's link lands
@@ -3556,6 +3564,35 @@ function pickEmail(){
   }
   return '';
 }
+/* Phone boxes format themselves (per Taylor 2026-11-27): 10 digits →
+   (541) 555-0100, 7 → 555-0100, a leading 1 survives as a prefix.
+   Anything longer (extensions) or wordy ("ask for Jim") is left exactly
+   as typed — formatting must never eat information. */
+function fmtPhoneTyped(v){
+  const raw=String(v||'');
+  let d=raw.replace(/\D/g,''), pre='';
+  if(d.length>10 && d[0]==='1'){ pre='1 '; d=d.slice(1); }
+  if(d.length>10) return raw;              // more digits than a number: leave it
+  if(!d.length) return raw.trim()?raw:'';  // words only ("ask for Jim"): leave it
+  if(/[a-z]/i.test(raw)) return raw;       // digits + words: leave it
+  if(d.length<=3) return pre+d;
+  if(d.length<=7) return pre+d.slice(0,3)+(d.length>3?'-'+d.slice(3):'');
+  return pre+'('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6);
+}
+function attachPhoneFmt(sel){
+  const el=$(sel); if(!el) return;
+  el.addEventListener('input', ()=>{
+    /* Reformat only while typing at the end — rewriting the value mid-edit
+       would shove the cursor around. Blur catches mid-edits. */
+    if(el.selectionStart!==el.value.length) return;
+    const f=fmtPhoneTyped(el.value);
+    if(f!==el.value) el.value=f;
+  });
+  el.addEventListener('blur', ()=>{
+    const f=fmtPhoneTyped(el.value);
+    if(f!==el.value) el.value=f;
+  });
+}
 function pickPhone(){
   for(const v of arguments){
     if(!v) continue;
@@ -4434,7 +4471,7 @@ async function openQuote(r){
      (typeof Cal!=='undefined' && Cal.crew)){ crewCard(r); return; }
   show('quote');
   const set=(id,v)=>{ const e=$('#'+id); if(e) e.value = (v==null?'':String(v)); };
-  set('q_customer', r.customer_name); set('q_phone', r.phone); set('q_email', r.email);
+  set('q_customer', r.customer_name); set('q_phone', fmtPhoneTyped(r.phone)); set('q_email', r.email);
   set('q_address', r.address_raw);    set('q_city', r.city);   set('q_zip', r.zip);
   set('q_account', r.account_no); set('q_so', r.so_no); set('q_pn', r.project_no);
   delete $('#q_account').dataset.auto;
@@ -5512,6 +5549,28 @@ async function calFetch(from, to){
    Any rep sends one; the list shows who and when; admins (Taylor) mark
    each ✓ done as it ships — done rows fold away but are never deleted.
    Table + RLS: sql/47_suggestions.sql. */
+/* Red tab badge (per Taylor 2026-11-27): admins see a red count on the
+   Suggestions tab whenever OPEN suggestions arrived after they last had
+   the tab open. The seen-stamp is per sign-in, per browser (localStorage)
+   — no SQL. Checks run at boot, after sign-in, and every 5 minutes. */
+const SuggSeen = {
+  key(){ return 'rx_sugg_seen_'+((State.user&&State.user.id)||'anon'); },
+  get(){ try{ return localStorage.getItem(this.key())||''; }catch(e){ return ''; } },
+  mark(){ try{ localStorage.setItem(this.key(), new Date().toISOString()); }catch(e){} }
+};
+async function updateSuggBadge(){
+  const dot=$('#suggdot'); if(!dot) return;
+  if(!State.isAdmin){ dot.classList.add('hide'); return; }
+  let n=0;
+  try{
+    const rows=(await DB.listSuggestions())||[];
+    const seen=SuggSeen.get();
+    n=rows.filter(r=>r.status!=='done' &&
+      (!seen || String(r.created_at||'')>seen)).length;
+  }catch(e){ n=0; }
+  dot.textContent=n;
+  dot.classList.toggle('hide', !n);
+}
 async function renderSugg(){
   const box=$('#sugglist'); if(!box) return;
   const send=$('#sg_send'), txt=$('#sg_text');
@@ -5524,6 +5583,14 @@ async function renderSugg(){
       if(DB.mode!=='demo' && !r)
         throw new Error('Nothing saved — run sql/47_suggestions.sql in Supabase.');
       txt.value='';
+      /* Heads-up email to Taylor (script action 'suggest') — fire and
+         forget: the suggestion is already saved, so a stale script or a
+         mail hiccup must never look like a failure here. */
+      if(DB.mode!=='demo' && GS.configured() && State.token){
+        const appUrl = location.origin && location.origin!=='null'
+          ? location.origin+location.pathname : null;
+        GS.call('suggest', {body:t, appUrl}, 15000).catch(()=>{});
+      }
       toast('✓ Suggestion sent.', false);
       renderSugg();
     }catch(e){
@@ -5588,6 +5655,8 @@ async function renderSugg(){
       done_by:(State.user&&State.user.email)||null }, '✓ Marked done.');
   act('[data-sgopen]', 'sgopen',
     { status:'open', done_at:null, done_by:null }, '↩ Reopened.');
+  SuggSeen.mark();            // the list is on screen — nothing is "new" now
+  updateSuggBadge();
 }
 async function renderTodo(){
   const box=$('#todolist'); if(!box) return;
@@ -7739,7 +7808,7 @@ function openBid(b){
         sf:(a.l>0&&a.w>0&&Math.abs(a.l*a.w-a.sf)<1)?'':(a.sf??'')}))
     : [];
   BidSt.photos=Array.isArray(b.photos)?b.photos.map(x=>Object.assign({},x)):[];
-  $('#bd_customer').value=b.customer_name||''; $('#bd_phone').value=b.phone||'';
+  $('#bd_customer').value=b.customer_name||''; $('#bd_phone').value=fmtPhoneTyped(b.phone||'');
   $('#bd_address').value=b.address_raw||''; $('#bd_city').value=b.city||'';
   $('#bd_zip').value=b.zip||'';
   $('#bd_product').value=b.product||'';
@@ -7911,7 +7980,7 @@ async function convertBid(id){
   if(!b){ bdMsg('That bid was not found.', true); return; }
   $('#newquote').click();
   show('quote');
-  $('#q_customer').value=b.customer_name||''; $('#q_phone').value=b.phone||'';
+  $('#q_customer').value=b.customer_name||''; $('#q_phone').value=fmtPhoneTyped(b.phone||'');
   $('#q_address').value=b.address_raw||''; $('#q_city').value=b.city||'';
   $('#q_zip').value=b.zip||'';
   if(b.product && !$('#q_product').disabled &&
@@ -9641,6 +9710,8 @@ function wire(){
     pm.textContent=files.length+' photo'+(files.length>1?'s':'')+
       ' attached — they ride to the crew\u2019s event on the next Hold/Schedule.';
   });
+  attachPhoneFmt('#q_phone');
+  attachPhoneFmt('#bd_phone');
   $('#authbtn').onclick=async()=>{
     if(State.user){ SB.signOut(); renderAuth(); location.reload(); return; }
     $('#authdlg').showModal();
@@ -9696,6 +9767,7 @@ function wire(){
       $('#autherr').innerHTML='';
       $('#authdlg').close();
       await loadData();          // re-read now that we have a token
+      updateSuggBadge().catch(()=>{});
     }catch(err){ $('#autherr').innerHTML='<div class="note bad">'+esc(err.message)+'</div>'; }
   });
 }
