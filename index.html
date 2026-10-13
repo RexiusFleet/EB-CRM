@@ -1240,7 +1240,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-28-wetmode';   // shown in the header; check it after deploying
+const BUILD = '2026-11-29-suggreply';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2306,7 +2306,7 @@ async function boot(){
      a rep's tab lives all day. */
   if(LIVE) setInterval(()=>{ if(State.user) SB.restore().catch(()=>{}); },
     40*60*1000);
-  if(LIVE) setInterval(()=>{ if(State.user && State.isAdmin)
+  if(LIVE) setInterval(()=>{ if(State.user)
     updateSuggBadge().catch(()=>{}); }, 5*60*1000);
   await loadData();       // 2. data load may fail; the app survives it
   updateSuggBadge().catch(()=>{});
@@ -5560,15 +5560,25 @@ const SuggSeen = {
 };
 async function updateSuggBadge(){
   const dot=$('#suggdot'); if(!dot) return;
-  if(!State.isAdmin){ dot.classList.add('hide'); return; }
   let n=0;
   try{
     const rows=(await DB.listSuggestions())||[];
     const seen=SuggSeen.get();
-    n=rows.filter(r=>r.status!=='done' &&
-      (!seen || String(r.created_at||'')>seen)).length;
+    if(State.isAdmin){
+      /* Taylor's side: open suggestions that arrived since his last look. */
+      n=rows.filter(r=>r.status!=='done' &&
+        (!seen || String(r.created_at||'')>seen)).length;
+    }else{
+      /* The rep's side (per Taylor 2026-11-29): replies to THEIR OWN
+         suggestions that landed since they last had the tab open. */
+      const me=(State.user&&State.user.email)||'';
+      n=me?rows.filter(r=>r.created_by===me && r.replied_at &&
+        (!seen || String(r.replied_at)>seen)).length:0;
+    }
   }catch(e){ n=0; }
-  dot.textContent=n;
+  /* An empty-but-hidden span still contributes its text to the button's
+     textContent — keep it truly empty at zero. */
+  dot.textContent = n ? String(n) : '';
   dot.classList.toggle('hide', !n);
 }
 async function renderSugg(){
@@ -5610,6 +5620,7 @@ async function renderSugg(){
         : ': '+esc(e.message))+'</div>';
     return;
   }
+  const seen0=SuggSeen.get();     // read BEFORE this render marks seen
   const open=rows.filter(r=>r.status!=='done');
   const done=rows.filter(r=>r.status==='done');
   $('#suggcount').textContent = open.length ? '· '+open.length+' open' : '';
@@ -5623,8 +5634,22 @@ async function renderSugg(){
           (r.done_by?' — '+esc(String(r.done_by).split('@')[0]):'')+'</span>'
         : '')+'</div>'+
     '<div style="margin-top:2px;white-space:pre-wrap">'+esc(r.body||'')+'</div>'+
+    (r.reply
+      ? '<div style="margin-top:6px;border-left:3px solid var(--accent);'+
+        'background:var(--panel-2);border-radius:0 8px 8px 0;padding:6px 10px">'+
+        '<div class="small muted">↳ '+esc(String(r.replied_by||'').split('@')[0]||'reply')+
+        ' · '+esc(dfmt(String(r.replied_at||'').slice(0,10)))+
+        (!State.isAdmin && r.replied_at && String(r.replied_at)>seen0
+          ? ' <span style="color:#d13b3b;font-weight:700">● new</span>':'')+'</div>'+
+        '<div style="white-space:pre-wrap">'+esc(r.reply)+'</div></div>'
+      : '')+
     (State.isAdmin
-      ? '<div class="row" style="margin-top:6px">'+
+      ? '<div class="row" style="margin-top:6px;align-items:flex-start">'+
+        '<textarea data-sgrt="'+esc(r.id)+'" rows="1" style="flex:1;min-width:200px" '+
+        'placeholder="Reply to '+who(r)+' — they get a red mark on their Suggestions tab…">'+
+        esc(r.reply||'')+'</textarea>'+
+        '<button type="button" class="btn ghost sm" data-sgreply="'+esc(r.id)+
+        '" style="flex:0 0 auto">↳ Send reply</button>'+
         (r.status==='done'
           ? '<button type="button" class="btn ghost sm" data-sgopen="'+esc(r.id)+
             '" style="flex:0 0 auto">↩ Reopen</button>'
@@ -5655,6 +5680,26 @@ async function renderSugg(){
       done_by:(State.user&&State.user.email)||null }, '✓ Marked done.');
   act('[data-sgopen]', 'sgopen',
     { status:'open', done_at:null, done_by:null }, '↩ Reopened.');
+  box.querySelectorAll('[data-sgreply]').forEach(b=>b.onclick=async()=>{
+    const ta=box.querySelector('[data-sgrt="'+b.dataset.sgreply+'"]');
+    const t=(ta && ta.value.trim())||'';
+    if(!t){ if(ta) ta.focus(); return; }
+    b.disabled=true;
+    try{
+      const upd=await DB.patchSuggestion(b.dataset.sgreply,
+        { reply:t, replied_at:new Date().toISOString(),
+          replied_by:(State.user&&State.user.email)||null });
+      if(DB.mode!=='demo' && !upd)
+        throw new Error('Nothing saved — run sql/49_suggestion_replies.sql in Supabase.');
+      toast('↳ Reply sent — they get the red mark on their Suggestions tab.', false);
+      renderSugg();
+    }catch(e){
+      toast('⚠ '+(/reply|replied/.test(String(e.message)) && /column|schema|cache/i.test(String(e.message))
+        ? 'The reply columns are missing — run sql/49_suggestion_replies.sql in Supabase.'
+        : e.message), true);
+      b.disabled=false;
+    }
+  });
   SuggSeen.mark();            // the list is on screen — nothing is "new" now
   updateSuggBadge();
 }
