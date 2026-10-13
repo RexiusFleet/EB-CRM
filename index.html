@@ -839,9 +839,12 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
       <span class="muted small">— wish the app did something different? Type it here</span></h3>
       <div class="body">
         <textarea id="sg_text" rows="3" maxlength="2000"
-          placeholder="What should the app do differently? A sentence is plenty."></textarea>
+          placeholder="What should the app do differently? A sentence is plenty — paste a screenshot right in."></textarea>
+        <input type="file" id="sg_photo_in" accept="image/*" multiple style="display:none">
+        <div id="sg_photos" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px"></div>
         <div class="row" style="margin-top:8px;align-items:center">
           <button type="button" class="btn sm" id="sg_send" style="flex:0 0 auto">Send suggestion</button>
+          <button type="button" class="btn ghost sm" id="sg_addphoto" style="flex:0 0 auto">📷 Add photos</button>
           <span class="small muted" style="align-self:center">Every rep can read these; they get marked ✓ done as the changes ship.</span>
         </div>
         <div id="sugglist" style="margin-top:14px"></div>
@@ -1270,7 +1273,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-30-bidvisit';   // shown in the header; check it after deploying
+const BUILD = '2026-12-01-suggphoto';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1701,11 +1704,12 @@ const DemoDB = {
   },
   _suggestions: [],
   async listSuggestions(){ return this._suggestions.slice().reverse(); },
-  async addSuggestion(body){
+  async addSuggestion(body, photos){
     const r={id:'sg'+Date.now()+Math.random().toString(36).slice(2,6),
       created_at:new Date().toISOString(),
       created_by:(State.user&&State.user.email)||'demo@rexius.com',
-      body, status:'open'};
+      body, status:'open',
+      photos:(photos&&photos.length)?photos.slice():null};
     this._suggestions.push(r); return r;
   },
   async patchSuggestion(id, patch){
@@ -2059,10 +2063,11 @@ const LiveDB = {
   async listSuggestions(){
     return SB.rest('suggestions?select=*&order=created_at.desc&limit=300');
   },
-  async addSuggestion(body){
+  async addSuggestion(body, photos){
     const r = await SB.rest('suggestions', {method:'POST',
       headers:{Prefer:'return=representation'},
-      body:JSON.stringify({body, created_by:(State.user&&State.user.email)||null})});
+      body:JSON.stringify({body, created_by:(State.user&&State.user.email)||null,
+        photos:(photos&&photos.length)?photos:null})});
     return r && r[0];
   },
   async patchSuggestion(id, patch){
@@ -5600,6 +5605,39 @@ async function calFetch(from, to){
    Suggestions tab whenever OPEN suggestions arrived after they last had
    the tab open. The seen-stamp is per sign-in, per browser (localStorage)
    — no SQL. Checks run at boot, after sign-in, and every 5 minutes. */
+/* Screenshots waiting on the composer (per Taylor 2026-12-01). They are
+   uploaded the moment they are picked or pasted (svUploadPhoto — the
+   site-photos pipeline from sql/27) and attach to the next Send. */
+const SgPending = [];
+function sgRenderPending(){
+  const box=$('#sg_photos'); if(!box) return;
+  box.innerHTML='';
+  SgPending.forEach((p2,i)=>{
+    const d=document.createElement('div');
+    d.style.cssText='position:relative;width:72px;height:72px';
+    d.innerHTML='<div class="pfall small muted" style="position:absolute;inset:0;'+
+      'border:1px solid var(--line);border-radius:8px;display:flex;'+
+      'align-items:center;justify-content:center">🖼</div>'+
+      '<img alt="" style="width:72px;height:72px;object-fit:cover;border-radius:8px;'+
+      'border:1px solid var(--line);display:none">'+
+      '<button type="button" title="Remove" style="position:absolute;top:-6px;right:-6px;'+
+      'width:20px;height:20px;border-radius:99px;border:1px solid var(--line);'+
+      'background:var(--panel);color:var(--ink);cursor:pointer;line-height:1;'+
+      'font-size:11px;padding:0">✕</button>';
+    svThumbUrl(p2).then(u=>{ if(!u) return; const img=d.querySelector('img');
+      img.src=u; img.style.display='block';
+      d.querySelector('.pfall').style.display='none'; });
+    d.querySelector('button').onclick=()=>{ SgPending.splice(i,1); sgRenderPending(); };
+    box.appendChild(d);
+  });
+}
+async function sgAddFiles(files){
+  for(const f of (files||[])){
+    if(!f) continue;
+    try{ SgPending.push(await svUploadPhoto(f)); sgRenderPending(); }
+    catch(e){ toast('⚠ '+e.message, true); break; }
+  }
+}
 const SuggSeen = {
   key(){ return 'rx_sugg_seen_'+((State.user&&State.user.id)||'anon'); },
   get(){ try{ return localStorage.getItem(this.key())||''; }catch(e){ return ''; } },
@@ -5636,27 +5674,45 @@ async function renderSugg(){
     if(!t){ txt.focus(); return; }
     send.disabled=true; send.textContent='Sending…';
     try{
-      const r=await DB.addSuggestion(t);
+      const ph=SgPending.slice();
+      const r=await DB.addSuggestion(t, ph);
       if(DB.mode!=='demo' && !r)
         throw new Error('Nothing saved — run sql/47_suggestions.sql in Supabase.');
       txt.value='';
+      SgPending.length=0; sgRenderPending();
       /* Heads-up email to Taylor (script action 'suggest') — fire and
          forget: the suggestion is already saved, so a stale script or a
          mail hiccup must never look like a failure here. */
       if(DB.mode!=='demo' && GS.configured() && State.token){
         const appUrl = location.origin && location.origin!=='null'
           ? location.origin+location.pathname : null;
-        GS.call('suggest', {body:t, appUrl}, 15000).catch(()=>{});
+        GS.call('suggest', {body:t+(ph.length
+          ? '\n\n['+ph.length+' screenshot'+(ph.length>1?'s':'')+
+            ' attached — see the Suggestions tab]' : ''), appUrl}, 15000).catch(()=>{});
       }
       toast('✓ Suggestion sent.', false);
       renderSugg();
     }catch(e){
-      toast('⚠ '+(/suggestions/.test(String(e.message))
-        ? 'The suggestions table is missing — run sql/47_suggestions.sql in Supabase.'
-        : e.message), true);
+      toast('⚠ '+(/photos/.test(String(e.message)) && /column|schema|cache/i.test(String(e.message))
+        ? 'The photos column is missing — run sql/51_suggestion_photos.sql in Supabase.'
+        : /suggestions/.test(String(e.message))
+          ? 'The suggestions table is missing — run sql/47_suggestions.sql in Supabase.'
+          : e.message), true);
     }
     send.disabled=false; send.textContent='Send suggestion';
   };
+  const addBtn=$('#sg_addphoto'), fileIn=$('#sg_photo_in');
+  if(addBtn) addBtn.onclick=()=>fileIn && fileIn.click();
+  if(fileIn) fileIn.onchange=()=>{ sgAddFiles([...fileIn.files]); fileIn.value=''; };
+  /* Screenshots paste straight into the note (per Taylor 2026-12-01). */
+  txt.onpaste=e=>{
+    const items=[...((e.clipboardData&&e.clipboardData.items)||[])]
+      .filter(it=>String(it.type).indexOf('image/')===0);
+    if(!items.length) return;
+    e.preventDefault();
+    sgAddFiles(items.map(it=>it.getAsFile()).filter(Boolean));
+  };
+  sgRenderPending();
   box.innerHTML='<div class="empty"><span class="spin"></span> Loading…</div>';
   let rows=[];
   try{ rows=(await DB.listSuggestions())||[]; }
@@ -5681,6 +5737,10 @@ async function renderSugg(){
           (r.done_by?' — '+esc(String(r.done_by).split('@')[0]):'')+'</span>'
         : '')+'</div>'+
     '<div style="margin-top:2px;white-space:pre-wrap">'+esc(r.body||'')+'</div>'+
+    (Array.isArray(r.photos)&&r.photos.length
+      ? '<div data-sgph="'+esc(r.id)+'" style="display:flex;flex-wrap:wrap;gap:6px;'+
+        'margin-top:6px"></div>'
+      : '')+
     (r.reply
       ? '<div style="margin-top:6px;border-left:3px solid var(--accent);'+
         'background:var(--panel-2);border-radius:0 8px 8px 0;padding:6px 10px">'+
@@ -5712,6 +5772,21 @@ async function renderSugg(){
         'style="cursor:pointer">✓ Done · '+done.length+'</summary>'+
         done.map(row).join('')+'</details>'
       : '');
+  /* Screenshots on each row — tap one to open it full size. */
+  rows.forEach(r=>{
+    if(!Array.isArray(r.photos)||!r.photos.length) return;
+    const ph=box.querySelector('[data-sgph="'+r.id+'"]'); if(!ph) return;
+    r.photos.forEach(async p2=>{
+      const u=await svThumbUrl(Object.assign({}, p2));
+      if(!u) return;
+      const img=document.createElement('img');
+      img.src=u; img.alt=p2.name||'screenshot';
+      img.style.cssText='width:88px;height:88px;object-fit:cover;border-radius:8px;'+
+        'border:1px solid var(--line);cursor:pointer';
+      img.onclick=()=>{ try{ window.open(u,'_blank'); }catch(e){} };
+      ph.appendChild(img);
+    });
+  });
   const act=(sel, key, patch, okMsg)=>box.querySelectorAll(sel).forEach(b=>
     b.onclick=async()=>{
       b.disabled=true;
