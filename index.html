@@ -202,6 +202,13 @@ body.bidmode #tabs button[data-view="bidlist"]{display:inline-block}
    Saved Quotes is hidden from the office). One tab is no menu, so the
    whole bar goes, like the crew view; the board is look-don't-touch,
    and tapping a job pops the office card (revenue + ERP numbers). */
+/* Full-width calendar (per Taylor 2026-11-24): the 1400px page cap comes
+   off while the Calendar tab is open, and on a desktop-size window the
+   week grid stops forcing a pixel width — the 7 days always fit with no
+   sideways scroll. Small screens keep the scroll (columns would be
+   unreadable otherwise). */
+body.calwide main,body.officemode main,body.crewmode main{max-width:none}
+@media(min-width:1000px){#tg{min-width:0 !important}}
 body.officemode #tabs{display:none}
 body.officemode #cal_block,body.officemode #cal_crew,
 body.officemode #cal_import{display:none}
@@ -313,6 +320,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
     <button data-view="todo">To Do</button>
     <button data-view="reports">Reports</button>
     <button data-view="rates">Rate Card</button>
+    <button data-view="sugg">Suggestions</button>
   </nav>
   <div class="userbox">
     <span class="pill" id="modepill">…</span>
@@ -819,6 +827,19 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   </section>
 
   <!-- ============================ RATE CARD ============================ -->
+  <section id="view-sugg" class="hide">
+    <div class="card"><h3>Suggestions <span class="muted" id="suggcount"></span>
+      <span class="muted small">— wish the app did something different? Type it here</span></h3>
+      <div class="body">
+        <textarea id="sg_text" rows="3" maxlength="2000"
+          placeholder="What should the app do differently? A sentence is plenty."></textarea>
+        <div class="row" style="margin-top:8px;align-items:center">
+          <button type="button" class="btn sm" id="sg_send" style="flex:0 0 auto">Send suggestion</button>
+          <span class="small muted" style="align-self:center">Every rep can read these; they get marked ✓ done as the changes ship.</span>
+        </div>
+        <div id="sugglist" style="margin-top:14px"></div>
+      </div></div>
+  </section>
   <section id="view-rates" class="hide">
     <div class="grid" style="gap:16px">
       <div id="ratesadminnote"></div>
@@ -1197,7 +1218,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-23-tbd2';   // shown in the header; check it after deploying
+const BUILD = '2026-11-24-suggest';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-07-refresh';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1600,6 +1621,19 @@ const DemoDB = {
       (q.status==='sent' && q.scheduled_date) ||
       (q.tbd && (q.status==='draft'||q.status==='sent'))));
   },
+  _suggestions: [],
+  async listSuggestions(){ return this._suggestions.slice().reverse(); },
+  async addSuggestion(body){
+    const r={id:'sg'+Date.now()+Math.random().toString(36).slice(2,6),
+      created_at:new Date().toISOString(),
+      created_by:(State.user&&State.user.email)||'demo@rexius.com',
+      body, status:'open'};
+    this._suggestions.push(r); return r;
+  },
+  async patchSuggestion(id, patch){
+    const r=this._suggestions.find(x=>String(x.id)===String(id));
+    if(r) Object.assign(r, patch); return r;
+  },
   _feedback: [],
   async addFeedback(row){
     const f=Object.assign({id:'fb'+Date.now(), created_at:new Date().toISOString()}, row);
@@ -1939,6 +1973,21 @@ const LiveDB = {
       // sql/45 not run yet: holds only, no notes column
       return SB.rest(base+'&status=eq.sent'+tail);
     }
+  },
+  async listSuggestions(){
+    return SB.rest('suggestions?select=*&order=created_at.desc&limit=300');
+  },
+  async addSuggestion(body){
+    const r = await SB.rest('suggestions', {method:'POST',
+      headers:{Prefer:'return=representation'},
+      body:JSON.stringify({body, created_by:(State.user&&State.user.email)||null})});
+    return r && r[0];
+  },
+  async patchSuggestion(id, patch){
+    const r = await SB.rest('suggestions?id=eq.'+encodeURIComponent(id),
+      {method:'PATCH', headers:{Prefer:'return=representation'},
+       body:JSON.stringify(patch)});
+    return r && r[0];
   },
   async addFeedback(row){
     const r = await SB.rest('job_feedback', {method:'POST',
@@ -2460,7 +2509,8 @@ function show(v){
   if(typeof BidPortal!=='undefined' && BidPortal && v!=='bids' && v!=='bidlist') v='bids';
   if(typeof OfficePortal!=='undefined' && OfficePortal && v!=='cal') v='cal';
   if(typeof Cal!=='undefined' && Cal.crew && v!=='cal') v='cal';
-  ['quote','bids','bidlist','quotes','cal','dash','rates','reports','todo'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  document.body.classList.toggle('calwide', v==='cal');
+  ['quote','bids','bidlist','quotes','cal','dash','rates','reports','todo','sugg'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
   if(v==='bids')   fillBidProducts();
   if(v==='bidlist') renderBidsList();
@@ -2470,6 +2520,7 @@ function show(v){
   if(v==='reports') renderReport();
   if(v==='todo')   renderTodo();
   if(v==='rates'){ renderRates(); renderDataStatus(); }
+  if(v==='sugg')   renderSugg();
 }
 
 /* ============================ quote builder ============================== */
@@ -5362,6 +5413,88 @@ async function calFetch(from, to){
    REP-ONLY notes column (quotes.rep_notes, sql/45) that saves on change.
    Never crew-facing: no crew/driver/office surface renders rep_notes and
    the Apps Script never prints it on the event body. */
+/* Suggestions (per Taylor 2026-11-24): "a note that a rep could quickly
+   type a suggestion ... and then I can review the updates from there."
+   Any rep sends one; the list shows who and when; admins (Taylor) mark
+   each ✓ done as it ships — done rows fold away but are never deleted.
+   Table + RLS: sql/47_suggestions.sql. */
+async function renderSugg(){
+  const box=$('#sugglist'); if(!box) return;
+  const send=$('#sg_send'), txt=$('#sg_text');
+  send.onclick=async()=>{
+    const t=txt.value.trim();
+    if(!t){ txt.focus(); return; }
+    send.disabled=true; send.textContent='Sending…';
+    try{
+      const r=await DB.addSuggestion(t);
+      if(DB.mode!=='demo' && !r)
+        throw new Error('Nothing saved — run sql/47_suggestions.sql in Supabase.');
+      txt.value='';
+      toast('✓ Suggestion sent.', false);
+      renderSugg();
+    }catch(e){
+      toast('⚠ '+(/suggestions/.test(String(e.message))
+        ? 'The suggestions table is missing — run sql/47_suggestions.sql in Supabase.'
+        : e.message), true);
+    }
+    send.disabled=false; send.textContent='Send suggestion';
+  };
+  box.innerHTML='<div class="empty"><span class="spin"></span> Loading…</div>';
+  let rows=[];
+  try{ rows=(await DB.listSuggestions())||[]; }
+  catch(e){
+    box.innerHTML='<div class="note bad">Could not load suggestions'+
+      (/suggestions/.test(String(e.message))
+        ? ' — run sql/47_suggestions.sql in Supabase.'
+        : ': '+esc(e.message))+'</div>';
+    return;
+  }
+  const open=rows.filter(r=>r.status!=='done');
+  const done=rows.filter(r=>r.status==='done');
+  $('#suggcount').textContent = open.length ? '· '+open.length+' open' : '';
+  const who=r=>esc(String(r.created_by||'').split('@')[0]||'someone');
+  const row=r=>'<div style="border:1px solid var(--line);border-radius:10px;'+
+    'padding:8px 12px;margin-top:8px'+(r.status==='done'?';opacity:.65':'')+'">'+
+    '<div class="small muted">'+who(r)+' · '+
+      esc(dfmt(String(r.created_at||'').slice(0,10)))+
+      (r.status==='done'
+        ? ' · <span style="color:var(--good);font-weight:600">✓ done'+
+          (r.done_by?' — '+esc(String(r.done_by).split('@')[0]):'')+'</span>'
+        : '')+'</div>'+
+    '<div style="margin-top:2px;white-space:pre-wrap">'+esc(r.body||'')+'</div>'+
+    (State.isAdmin
+      ? '<div class="row" style="margin-top:6px">'+
+        (r.status==='done'
+          ? '<button type="button" class="btn ghost sm" data-sgopen="'+esc(r.id)+
+            '" style="flex:0 0 auto">↩ Reopen</button>'
+          : '<button type="button" class="btn ghost sm" data-sgdone="'+esc(r.id)+
+            '" style="flex:0 0 auto">✓ Mark done</button>')+'</div>'
+      : '')+
+    '</div>';
+  box.innerHTML =
+    (open.length ? open.map(row).join('')
+      : '<div class="empty">No open suggestions — type one above.</div>')+
+    (done.length
+      ? '<details style="margin-top:14px"><summary class="small muted" '+
+        'style="cursor:pointer">✓ Done · '+done.length+'</summary>'+
+        done.map(row).join('')+'</details>'
+      : '');
+  const act=(sel, key, patch, okMsg)=>box.querySelectorAll(sel).forEach(b=>
+    b.onclick=async()=>{
+      b.disabled=true;
+      try{
+        const upd=await DB.patchSuggestion(b.dataset[key], patch);
+        if(DB.mode!=='demo' && !upd)
+          throw new Error('Nothing saved — run sql/47_suggestions.sql in Supabase.');
+        toast(okMsg, false); renderSugg();
+      }catch(e){ toast('⚠ '+e.message, true); b.disabled=false; }
+    });
+  act('[data-sgdone]', 'sgdone',
+    { status:'done', done_at:new Date().toISOString(),
+      done_by:(State.user&&State.user.email)||null }, '✓ Marked done.');
+  act('[data-sgopen]', 'sgopen',
+    { status:'open', done_at:null, done_by:null }, '↩ Reopened.');
+}
 async function renderTodo(){
   const box=$('#todolist'); if(!box) return;
   box.innerHTML='<div class="empty"><span class="spin"></span> Loading…</div>';
@@ -5701,7 +5834,7 @@ function renderCalWeek(grid, days, d){
       ? '<span style="background:var(--good);color:#fff;border-radius:99px;padding:2px 9px">'+esc(t)+'</span>'
       : esc(t); };
   let html = '<div id="tg" style="display:grid;grid-template-columns:52px repeat('+
-    (days.length*nT)+',minmax(94px,1fr));min-width:'+(52+days.length*nT*104)+
+    (days.length*nT)+',minmax(0,1fr));min-width:'+(52+days.length*nT*104)+
     'px;border:1px solid var(--line);border-radius:10px;overflow:hidden">';
   html += '<div style="background:var(--panel-2)"></div>';
   days.forEach(date=>{ html += '<div class="small" style="grid-column:span '+nT+
