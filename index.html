@@ -1273,7 +1273,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-01-suggphoto';   // shown in the header; check it after deploying
+const BUILD = '2026-12-02-biddelete';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1771,6 +1771,13 @@ const DemoDB = {
   },
   async archiveBid(id){ return this.patchBid(id, {archived_at: new Date().toISOString()}); },
   async restoreBid(id){ return this.patchBid(id, {archived_at: null}); },
+  async deleteBid(id){
+    const i=this._bids.findIndex(b=>String(b.id)===String(id));
+    if(i<0) throw new Error('That bid was not found.');
+    if(!this._bids[i].archived_at)
+      throw new Error('Only ARCHIVED bids can be deleted — archive it first.');
+    return this._bids.splice(i,1)[0];
+  },
   async truckCaps(){
     // Same numbers as sql/17_truck_capacity.sql -- the placement-truck sheet.
     const base=[['BeautiBark',32,23],['Hemlock',23,18],
@@ -2172,6 +2179,18 @@ const LiveDB = {
      archived_at, restore clears it — a mis-tap is always recoverable. */
   async archiveBid(id){
     return this.patchBid(id, {archived_at: new Date().toISOString()});
+  },
+  async deleteBid(id){
+    /* Hard delete, allowed ONLY for archived rows (the filter makes an
+       un-archived id a 0-row delete, which we refuse loudly). sql/29's
+       "bids delete" policy already permits the DELETE itself. */
+    const r = await SB.rest('bids?id=eq.'+encodeURIComponent(id)+
+      '&archived_at=not.is.null',
+      {method:'DELETE', headers:{Prefer:'return=representation'}});
+    if(!r || !r[0])
+      throw new Error('Nothing deleted — the bid is not archived, or this '+
+        'sign-in may not delete bids (sql/29 holds the delete policy).');
+    return r[0];
   },
   async restoreBid(id){
     return this.patchBid(id, {archived_at: null});
@@ -8110,13 +8129,34 @@ async function renderBidsList(){
         const full=await DB.getBid(b.id); if(full) openBid(full);
       };
       if(mode==='archived'){
-        /* Archived = parked, never gone: Restore is the only action beside
-           reading it. Nothing here can destroy the walk-through's data. */
+        /* Archived = parked: Restore brings it back, and (per Taylor
+           2026-12-02) Delete erases it for good — two presses, and only
+           possible on rows that are already archived. */
         const rs=mk('Restore','color:var(--good);border-color:var(--good)');
         rs.classList.add('bid-convert');
         rs.onclick=async()=>{
           try{ await DB.restoreBid(b.id); bdMsg('Bid restored.', false); renderBidsList(); }
           catch(e){ bdMsg(e.message,true); }
+        };
+        const dl=mk('🗑 Delete','color:var(--danger);border-color:var(--danger)');
+        dl.classList.add('bid-convert');
+        dl.title='Erases this archived bid for good — it asks twice';
+        let armed=false, armT=null;
+        dl.onclick=async()=>{
+          if(!armed){
+            armed=true;
+            dl.textContent='Really delete?';
+            dl.style.background='var(--danger)'; dl.style.color='#fff';
+            armT=setTimeout(()=>{ armed=false; dl.textContent='🗑 Delete';
+              dl.style.background=''; dl.style.color='var(--danger)'; }, 4000);
+            return;
+          }
+          clearTimeout(armT); dl.disabled=true;
+          try{
+            await DB.deleteBid(b.id);
+            bdMsg('Bid deleted — gone for good (its photos stay in storage).', false);
+            renderBidsList();
+          }catch(e){ bdMsg('⚠ '+e.message, true); dl.disabled=false; }
         };
       }else{
         if(mode==='quoted' && b.quote_id){
@@ -8134,7 +8174,7 @@ async function renderBidsList(){
         }
         const ar=mk('Archive');
         ar.classList.add('bid-convert');
-        ar.title='Parks the bid under Archived — restorable any time, never deleted';
+        ar.title='Parks the bid under Archived — restorable any time (deleting is possible only from there)';
         ar.onclick=async()=>{
           try{
             await DB.archiveBid(b.id);
