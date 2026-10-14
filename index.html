@@ -219,7 +219,9 @@ body.calwide main,body.officemode main,body.crewmode main{max-width:none}
 @media(min-width:1000px){#tg{min-width:0 !important}}
 body.officemode #tabs{display:none}
 body.officemode #cal_block,body.officemode #cal_crew,
-body.officemode #cal_import{display:none}
+body.officemode #cal_import,
+body.officecal #cal_block,body.officecal #cal_crew,
+body.officecal #cal_import{display:none}
 body.crewmode{font-size:17px}
 body.crewmode .calchip{font-size:15px;white-space:normal}
 body.crewmode #cal_block,body.crewmode #cal_import,
@@ -1278,7 +1280,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-04-bidchips';   // shown in the header; check it after deploying
+const BUILD = '2026-12-05-molliecal';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1865,12 +1867,18 @@ const LiveDB = {
     if(State.user){
       try{
         let p=null;
-        /* rates_editor arrives with sql/40 — a database without it must
-           not break admin detection, so fall back to the old select. */
-        try{ p=await SB.rest('profiles?select=is_admin,rates_editor&id=eq.'+State.user.id); }
-        catch(e40){ p=await SB.rest('profiles?select=is_admin&id=eq.'+State.user.id); }
+        /* rates_editor arrives with sql/40, office_cal with sql/52 — a
+           database without them must not break admin detection, so fall
+           back through the older selects. */
+        try{ p=await SB.rest('profiles?select=is_admin,rates_editor,office_cal&id=eq.'+State.user.id); }
+        catch(e52){
+          try{ p=await SB.rest('profiles?select=is_admin,rates_editor&id=eq.'+State.user.id); }
+          catch(e40){ p=await SB.rest('profiles?select=is_admin&id=eq.'+State.user.id); }
+        }
         State.isAdmin=!!(p&&p[0]&&p[0].is_admin);
         State.ratesEditor=!!(p&&p[0]&&p[0].rates_editor);
+        State.officeCal=!!(p&&p[0]&&p[0].office_cal);
+        try{ document.body.classList.toggle('officecal', State.officeCal); }catch(e9){}
       }catch(e){}
     }
     return {rate_card,markup_curve,settings,blow_benchmarks,drive_zones};
@@ -6256,13 +6264,13 @@ function wireTimegrid(grid){
   });
   grid.querySelectorAll('.tgev[data-bidid]').forEach(ch=>{
     ch.onclick = e=>{ e.stopPropagation();
-      if(!Cal.crew && !OfficePortal) bidCardById(ch.dataset.bidid); };
+      if(!Cal.crew && !officeEyes()) bidCardById(ch.dataset.bidid); };
   });
   /* Empty grid space opens the two-action chooser (per Taylor: never the
      quote builder): pencil a BID onto the slot, or BLOCK the time out. */
   grid.querySelectorAll('.tgcol').forEach(col=>{
     col.addEventListener('click', e=>{
-      if(Cal.crew || OfficePortal || e.target.closest('.tgev')) return;
+      if(Cal.crew || officeEyes() || e.target.closest('.tgev')) return;
       const rect = col.getBoundingClientRect();
       let min = TG.START + Math.round(((e.clientY-rect.top)/TG.PXH*60)/30)*30;
       min = Math.max(TG.START, Math.min(TG.END-60, min));
@@ -6272,9 +6280,9 @@ function wireTimegrid(grid){
   /* Drag to move: vertical = retime (15-min snap), across = day/truck. */
   grid.querySelectorAll('.tgev.app').forEach(ch=>{
     ch.onclick = e=>{ e.stopPropagation();
-      if(Cal.crew || OfficePortal) openCalItem(ch.dataset.qid, ch.dataset.crew); };
+      if(Cal.crew || officeEyes()) openCalItem(ch.dataset.qid, ch.dataset.crew); };
     ch.addEventListener('pointerdown', e=>{
-      if(Cal.crew || OfficePortal || e.button) return;
+      if(Cal.crew || officeEyes() || e.button) return;
       e.preventDefault();
       const rect = ch.getBoundingClientRect();
       tgDrag = { ch, x0:e.clientX, y0:e.clientY, grabY:e.clientY-rect.top,
@@ -7214,7 +7222,7 @@ function wireCalChips(grid){
    customer history: the card is about THIS job, the builder is for digging. */
 function crewCard(r, focusCrew){ calCard(r, false, focusCrew); }
 function calCard(r, rep, focusCrew){
-  const office = (typeof OfficePortal!=='undefined' && OfficePortal);
+  const office = officeEyes();
   /* Crew-reported shortfall — drives every strikethrough on this card. */
   const cardShort = Number(r.feedback_vol)>0 && Number(r.yards)>0 &&
     Number(r.feedback_vol)<Number(r.yards);
@@ -7904,6 +7912,14 @@ function exitCrewMode(){
    open as the office CARD (revenue split + fillable ERP numbers),
    never the builder; a #quote=<id> deep link pops the same card over
    the board. sql/33_office_users.sql is the matching database lock. */
+/* "Office eyes" on the calendar: the locked office PORTAL, or a full rep
+   whose profile carries office_cal (sql/52 — Mollie, per Taylor
+   2026-12-05: her calendar looks like it did before sql/46; the rest of
+   the app stays fully hers). */
+function officeEyes(){
+  return (typeof OfficePortal!=='undefined' && OfficePortal) ||
+         !!(typeof State!=='undefined' && State && State.officeCal);
+}
 let OfficePortal = false;
 function enterOfficeMode(){
   OfficePortal = true;
