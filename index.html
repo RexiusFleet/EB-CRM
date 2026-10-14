@@ -12,6 +12,7 @@
   --bg:#f6f7f5; --panel:#ffffff; --panel-2:#fbfcfa; --ink:#1b2019; --muted:#5f6b5c;
   --line:#e0e4dd; --line-2:#eef1ec; --accent:#2f6b3c; --accent-ink:#ffffff;
   --accent-soft:#e8f1e9; --warn:#a8620f; --warn-soft:#fdf1e2; --danger:#a32f2f;
+  --bid:#111;
   --danger-soft:#fbeaea; --good:#2f6b3c; --star:#b58a00; --thisq:#1d5fd6;
   --shadow:0 1px 2px rgba(20,30,18,.06),0 4px 14px rgba(20,30,18,.05);
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -21,6 +22,7 @@
   --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
   --line:#2a3025; --line-2:#222719; --accent:#6fbf7f; --accent-ink:#0f1410;
   --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585; --star:#e0c34d;
+  --bid:#d9ded4;
   --danger-soft:#2a1717; --good:#6fbf7f; --thisq:#7fb0f5;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
 }}
@@ -28,6 +30,7 @@
   --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
   --line:#2a3025; --line-2:#222719; --accent:#6fbf7f; --accent-ink:#0f1410;
   --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585; --star:#e0c34d;
+  --bid:#d9ded4;
   --danger-soft:#2a1717; --good:#6fbf7f; --thisq:#7fb0f5;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
 }
@@ -1275,7 +1278,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-03-truckpick';   // shown in the header; check it after deploying
+const BUILD = '2026-12-04-bidchips';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -5588,6 +5591,9 @@ async function calFetch(from, to){
   /* Penciled bids: an open bid with a slot draws as a dashed BID chip — a
      pencil mark, shown but NEVER fed to the engine (see bookingsPoolFor). */
   (allBids||[]).forEach(b=>{
+    /* Bid visits are the REP'S errand — the drivers' iPads never show
+       them (per Taylor 2026-12-04). */
+    if(DriverView) return;
     if(!b || !b.scheduled_date || b.status==='quoted' || b.archived_at) return;
     if(b.scheduled_date<from || b.scheduled_date>to) return;
     /* A bid visit scheduled from a quote has no truck — it draws in the
@@ -6077,8 +6083,9 @@ function tgEvent(it, crew){
   if(it.bid){
     return '<div class="tgev" data-bidid="'+esc(it.bidId)+'" title="'+esc(it.summary||'')+
       ' — penciled bid, tap for details" style="'+pos+
-      'background:color-mix(in srgb, var(--warn) 8%, transparent);cursor:pointer;'+
-      'border:2px dashed var(--warn);color:var(--warn);font-weight:600">'+
+      /* black bid chips (per Taylor 2026-12-04; --bid flips light in dark mode) */
+      'background:color-mix(in srgb, var(--bid) 10%, transparent);cursor:pointer;'+
+      'border:2px dashed var(--bid);color:var(--bid);font-weight:600">'+
       '<b>'+esc(fmtMin(it.s))+'</b> '+esc(String(it.summary||'').slice(0,40))+'</div>';
   }
   if(it.google || it.internal || it.block){
@@ -7169,7 +7176,7 @@ function renderCalMonth(grid, from, to, d){
         .sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));
       const chips = items.slice(0,3).map(it=>{
         const cr = (CREWS||[]).find(x=>String(x.id)===String(it.crew_id));
-        const col = it.block ? 'var(--danger)' : it.bid ? 'var(--warn)'
+        const col = it.block ? 'var(--danger)' : it.bid ? 'var(--bid)'
                   : (it.google||it.internal) ? '#9aa2ad' : ((cr&&cr.color)||'#888');
         const label = it.qid ? it.customer : String(it.summary||'').replace(/^🚫\s*/,'🚫');
         /* The month wall has no truck columns, so the color alone said which
@@ -7961,6 +7968,7 @@ function driverTruckPicker(){
 function enterDriverMode(){
   DriverView = true;
   document.body.classList.add('drivermode');
+  bustCalCache();                // the cached board may still carry BID chips
   enterCrewMode();               // same board, same read-only rules
   updateTruckBtn();
   if(!DriverTruck.get()) driverTruckPicker();
@@ -7969,6 +7977,7 @@ function exitDriverMode(){
   if(!DriverView) return;
   DriverView = false;
   document.body.classList.remove('drivermode');
+  bustCalCache();                // bring the BID chips back for the rep
   const tp=$('#truckpick'); if(tp) tp.remove();
   updateTruckBtn();
 }
