@@ -754,6 +754,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           <span style="flex:1 1 auto"></span>
           <button type="button" class="btn ghost sm" id="cal_week" style="flex:0 0 auto">Week</button>
           <button type="button" class="btn ghost sm" id="cal_month" style="flex:0 0 auto">Month</button>
+          <button type="button" class="btn ghost sm hide" id="cal_truck" style="flex:0 0 auto"
+            title="Switch which truck this iPad shows">🚚</button>
           <button type="button" class="btn ghost sm" id="cal_crew" style="flex:0 0 auto"
             title="Read-only board for the crew — no pricing anywhere">Crew view</button>
           <button type="button" class="btn ghost sm" id="cal_block" style="flex:0 0 auto"
@@ -1273,7 +1275,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-02-biddelete';   // shown in the header; check it after deploying
+const BUILD = '2026-12-03-truckpick';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -6004,6 +6006,11 @@ async function calSearchRun(){
   });
 }
 async function renderCal(){
+  if(DriverView){
+    updateTruckBtn();
+    if(!DriverTruck.get() && (CREWS||[]).length && !$('#truckpick'))
+      driverTruckPicker();     // trucks arrived after the mode did
+  }
   const grid = $('#calgrid'); if(!grid) return;
   if(!Cal.anchor) Cal.anchor = calFmt(new Date());
   ['cal_week','cal_month'].forEach(id=>{ const b=$('#'+id);
@@ -6164,6 +6171,14 @@ function tgBanner(it, crew){
 /* A backup truck keeps the board clean: its column appears only when
    something is actually scheduled/blocked on it in the visible range. */
 function visibleCrews(d, days){
+  /* Driver iPads show just their own truck (per Taylor 2026-12-03). */
+  if(DriverView){
+    const dt=DriverTruck.get();
+    if(dt && dt!=='all'){
+      const one=(CREWS||[]).filter(c=>String(c.id)===String(dt));
+      if(one.length) return one;
+    }
+  }
   return (CREWS||[]).filter(c=>{
     if(!c.backup) return true;
     const id=String(c.id);
@@ -7137,6 +7152,8 @@ function calMsg(t, bad){
 function renderCalMonth(grid, from, to, d){
   const today = calFmt(new Date());
   const month = from.slice(0,7);
+  const dtk=(DriverView && DriverTruck.get() && DriverTruck.get()!=='all')
+    ? String(DriverTruck.get()) : '';
   const rows = []; let c = calWeekStart(from);
   while(calFmt(c) <= to){
     const row = [];
@@ -7147,7 +7164,8 @@ function renderCalMonth(grid, from, to, d){
   grid.innerHTML = '<div style="min-width:820px">'+rows.map(row=>
     '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:6px">'+
     row.map(date=>{
-      const items = d.jobs.filter(j=>j.date===date).concat(d.gEvents.filter(g=>g.date===date))
+      const items = d.jobs.filter(j=>j.date===date && (!dtk || String(j.crew_id)===dtk))
+        .concat(d.gEvents.filter(g=>g.date===date && (!dtk || String(g.crew_id)===dtk)))
         .sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));
       const chips = items.slice(0,3).map(it=>{
         const cr = (CREWS||[]).find(x=>String(x.id)===String(it.crew_id));
@@ -7895,15 +7913,64 @@ function exitOfficeMode(){
    on the day card (drivers call from the driveway; the blower crew
    view stays phone-free). */
 let DriverView = false;
+/* Which truck this DEVICE is (per Taylor 2026-12-03): drivers tap their
+   truck once on the iPad instead of typing anything; the pick sticks in
+   this browser. 'all' is the stored way of saying "show every truck". */
+const DriverTruck = {
+  get(){ try{ return localStorage.getItem('rx_driver_truck')||''; }catch(e){ return ''; } },
+  set(v){ try{
+    if(v) localStorage.setItem('rx_driver_truck', v);
+    else localStorage.removeItem('rx_driver_truck');
+  }catch(e){} }
+};
+function updateTruckBtn(){
+  const b=$('#cal_truck'); if(!b) return;
+  if(!DriverView){ b.classList.add('hide'); return; }
+  b.classList.remove('hide');
+  const id=DriverTruck.get();
+  const c=(CREWS||[]).find(x=>String(x.id)===String(id));
+  b.textContent='🚚 '+(c?c.name:'All trucks');
+}
+function driverTruckPicker(){
+  const old=$('#truckpick'); if(old) old.remove();
+  if(!(CREWS||[]).length) return;      // trucks not loaded yet — renderCal retries
+  const wrap=document.createElement('div'); wrap.id='truckpick';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:120;'+
+    'display:flex;align-items:center;justify-content:center;padding:20px';
+  wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);'+
+    'border-radius:14px;max-width:420px;width:100%;max-height:90vh;overflow:auto;padding:22px">'+
+    '<div style="font-size:20px;font-weight:700;text-align:center">Which truck are you?</div>'+
+    '<div class="small muted" style="text-align:center;margin-top:4px">This device remembers '+
+    'the pick — the 🚚 button up top changes it any time.</div>'+
+    (CREWS||[]).map(c=>'<button type="button" data-tp="'+esc(String(c.id))+'" '+
+      'style="display:block;width:100%;margin-top:12px;padding:18px 14px;font-size:19px;'+
+      'font-weight:700;border-radius:12px;cursor:pointer;background:var(--panel-2);'+
+      'color:var(--ink);border:2px solid '+esc(c.color||'var(--line)')+'">'+
+      esc(c.name)+(c.backup?' <span class="small muted" style="font-weight:400">— backup</span>':'')+
+      '</button>').join('')+
+    '<button type="button" class="btn ghost" data-tp="all" '+
+    'style="display:block;width:100%;margin-top:14px">Show all trucks</button></div>';
+  document.body.appendChild(wrap);
+  wrap.querySelectorAll('[data-tp]').forEach(b=>b.onclick=()=>{
+    DriverTruck.set(b.dataset.tp);
+    wrap.remove();
+    updateTruckBtn();
+    try{ renderCal(); }catch(e){}
+  });
+}
 function enterDriverMode(){
   DriverView = true;
   document.body.classList.add('drivermode');
   enterCrewMode();               // same board, same read-only rules
+  updateTruckBtn();
+  if(!DriverTruck.get()) driverTruckPicker();
 }
 function exitDriverMode(){
   if(!DriverView) return;
   DriverView = false;
   document.body.classList.remove('drivermode');
+  const tp=$('#truckpick'); if(tp) tp.remove();
+  updateTruckBtn();
 }
 let BidPortal = false;
 function enterBidMode(){
@@ -9842,6 +9909,7 @@ function wire(){
   $('#cal_block').onclick = ()=>calBlockCard();
   $('#cal_import').onclick = ()=>calImportCard();
   $('#cal_week').onclick = ()=>{ Cal.view='week'; renderCal(); };
+  $('#cal_truck').onclick = ()=>driverTruckPicker();
   $('#calsearch').addEventListener('input', debounce(calSearchRun, 250));
   $('#calsearch').addEventListener('focus', ()=>{
     if($('#calsearch').value.trim().length>=2) calSearchRun(); });
