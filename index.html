@@ -464,6 +464,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                   <option value="2.5">2.5&quot;</option>
                   <option value="3">3&quot;</option>
                   <option value="4">4&quot;</option>
+                  <option value="fill">Fill up — no set depth</option>
                 </select></div>
             </div>
             <div class="small muted" id="depthhint" style="margin-top:-6px"></div>
@@ -689,6 +690,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                 <option value="2" selected>2" — standard</option>
                 <option value="2.5">2.5"</option><option value="3">3"</option>
                 <option value="4">4"</option>
+                <option value="fill">Fill up — no set depth</option>
               </select></div>
           </div>
           <div style="margin-top:12px"><label class="f">Measurements</label>
@@ -713,6 +715,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               placeholder="Slope on the north side, second drop spot, homeowner wants a call first…"></textarea></div>
           <div class="saverow">
             <button class="btn" id="bd_save" style="background:var(--good)">Save bid</button>
+            <button class="btn hide" id="bd_convert" style="background:var(--accent);color:var(--accent-ink)"
+              title="Carries everything on this worksheet into a quote">→ Convert to quote</button>
             <button class="btn ghost" id="bd_new">New bid</button>
             <div id="bd_msg" style="flex:1 1 100%"></div>
           </div>
@@ -1280,7 +1284,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-05-molliecal';   // shown in the header; check it after deploying
+const BUILD = '2026-12-06-bidflow';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2755,7 +2759,7 @@ function estimateCtx(){
   return {
     product: $('#q_product').value,
     yards: parseFloat($('#q_yards').value)||0,
-    depth_in: parseFloat($('#q_depth').value)||null,
+    depth_in: $('#q_depth').value==='fill' ? 0 : (parseFloat($('#q_depth').value)||null),
     city: $('#q_city').value || extractCity($('#q_address').value),
     zip: $('#q_zip').value || extractZip($('#q_address').value),
     siteHistory: State.site ? {quotes:State.site.quotes, orders:State.site.orders} : {quotes:[],orders:[]},
@@ -2849,10 +2853,15 @@ function suggest(){
   /* Coverage check: 1 yd³ = 27 ft³, so yards × 324 ÷ depth-in-inches = sq ft.
      Reads as a sanity check against the measured area. */
   {
-    const dep = parseFloat($('#q_depth').value)||2;
-    const sqft = Math.round((parseFloat($('#q_yards').value)||0) * 324 / dep);
-    $('#depthhint').textContent = sqft > 0
-      ? '≈ '+sqft.toLocaleString()+' sq ft of coverage at '+dep+'" depth' : '';
+    if($('#q_depth').value==='fill'){
+      $('#depthhint').textContent = 'Fill up — no set depth, so no coverage math; '+
+        'quote the yards directly.';
+    }else{
+      const dep = parseFloat($('#q_depth').value)||2;
+      const sqft = Math.round((parseFloat($('#q_yards').value)||0) * 324 / dep);
+      $('#depthhint').textContent = sqft > 0
+        ? '≈ '+sqft.toLocaleString()+' sq ft of coverage at '+dep+'" depth' : '';
+    }
   }
   $('#drivebasis').innerHTML = basisLabel(d.basis) + esc(d.detail) +
     (proj.loads>1 ? ' <b>× '+proj.loads+' loads</b> (one round trip each)' : '') +
@@ -4563,7 +4572,8 @@ async function openQuote(r){
   State.qstatus = r.status || 'draft';
   if(r.product && [...$('#q_product').options].some(o=>o.value===r.product))
     $('#q_product').value = r.product;
-  $('#q_depth').value = r.depth_in ? String(r.depth_in) : '2';
+  $('#q_depth').value = (r.depth_in===0||r.depth_in==='0') ? 'fill'
+    : r.depth_in ? String(r.depth_in) : '2';
 
   State.savedQuoteId = r.id;
   State.openedSlots = Array.isArray(r.slots) ? r.slots : null;
@@ -8048,10 +8058,13 @@ function bidReset(){
   const pr=$('#bd_product'); if(pr) pr.value='';
   const dp=$('#bd_depth'); if(dp) dp.value='2';
   $('#bd_state').textContent='';
+  const cv9=$('#bd_convert'); if(cv9) cv9.classList.add('hide');
   renderBidMeas(); renderBidPhotos();
 }
 function bidTotals(){
   const sqft = BidSt.meas.reduce((t,m)=>t+svSqft(m), 0);
+  if($('#bd_depth').value==='fill')
+    return {sqft: Math.round(sqft), depth: 0, yards: 0};   // fill-up: rep sets yards
   const depth = parseFloat($('#bd_depth').value)||2;
   const yards = sqft>0 ? Math.ceil(sqft*(depth/12)/27*2)/2 : 0;
   return {sqft: Math.round(sqft), depth, yards};
@@ -8085,7 +8098,10 @@ function renderBidMeas(){
 function renderBidTotal(){
   const box=$('#bd_meastotal'); if(!box) return;
   const t=bidTotals();
-  box.innerHTML = t.sqft>0
+  box.innerHTML = ($('#bd_depth').value==='fill' && t.sqft>0)
+    ? '<b>'+t.sqft.toLocaleString()+' sq ft</b> · <span class="muted">Fill up — no depth '+
+      'math; the yards get set on the quote</span>'
+    : t.sqft>0
     ? '<b>'+t.sqft.toLocaleString()+' sq ft</b> × '+t.depth+'&Prime; ≈ <b>'+t.yards+
       ' yd</b> <span class="muted">— suggested when this bid becomes a quote</span>'
     : (BidSt.meas.length?'<span class="muted">Enter lengths and widths (or square feet).</span>':'');
@@ -8120,7 +8136,7 @@ function bidPayload(){
     city: $('#bd_city').value.trim()||null,
     zip: $('#bd_zip').value.trim()||null,
     product: $('#bd_product').value||null,
-    depth_in: parseFloat($('#bd_depth').value)||null,
+    depth_in: $('#bd_depth').value==='fill' ? 0 : (parseFloat($('#bd_depth').value)||null),
     measurements: BidSt.meas.length
       ? {areas: BidSt.meas.map(m=>({label:m.label||'', l:parseFloat(m.l)||null,
           w:parseFloat(m.w)||null, sf:Math.round(svSqft(m))})),
@@ -8148,11 +8164,15 @@ function openBid(b){
   $('#bd_address').value=b.address_raw||''; $('#bd_city').value=b.city||'';
   $('#bd_zip').value=b.zip||'';
   $('#bd_product').value=b.product||'';
-  $('#bd_depth').value=b.depth_in?String(b.depth_in):'2';
+  $('#bd_depth').value=(b.depth_in===0||b.depth_in==='0')?'fill'
+    :b.depth_in?String(b.depth_in):'2';
   $('#bd_notes').value=b.notes||'';
   $('#bd_state').textContent='· editing a saved bid'+
     (b.status==='quoted'?' (already quoted)':'')+
     (b.archived_at?' (ARCHIVED — restore it from Saved Bids)':'');
+  /* Convert straight from the worksheet (per Taylor 2026-12-06). */
+  const cv=$('#bd_convert');
+  if(cv) cv.classList.toggle('hide', !!(b.status==='quoted' || b.archived_at));
   renderBidMeas(); renderBidPhotos();
   show('bids');
 }
@@ -8352,7 +8372,8 @@ async function convertBid(id){
   if(b.product && !$('#q_product').disabled &&
      [...$('#q_product').options].some(o=>o.value===b.product))
     $('#q_product').value=b.product;
-  if(b.depth_in) $('#q_depth').value=String(b.depth_in);
+  if(b.depth_in===0||b.depth_in==='0') $('#q_depth').value='fill';
+  else if(b.depth_in) $('#q_depth').value=String(b.depth_in);
   const t=(b.measurements||{});
   SiteVisit.meas=(t.areas||[]).map(a=>({label:a.label||'', l:a.l??'', w:a.w??'',
     sf:(a.l>0&&a.w>0&&Math.abs(a.l*a.w-a.sf)<1)?'':(a.sf??'')}));
@@ -8369,6 +8390,15 @@ async function convertBid(id){
     slotDurTouched=false;
   }
   State.fromBidId=b.id; State.bidNotes=b.notes||null;
+  /* Bid notes ride to the CREW now (per Taylor 2026-12-06, reversing the
+     old rep-only rule): they copy into Site notes — which already reach
+     the crew card and the Google event body — where the rep can trim
+     anything crew-irrelevant before saving. */
+  if(b.notes){
+    const sn=$('#q_sitenotes');
+    if(sn && sn.value.indexOf(b.notes)<0)
+      sn.value=(sn.value.trim()? sn.value.trim()+'\n\n':'')+b.notes;
+  }
   renderBidRef();
   recalc();
   msg('Bid loaded'+(t.suggested_yards>0?' — '+t.suggested_yards+' yd suggested from '+
@@ -8401,6 +8431,8 @@ function svSqft(m){
 }
 function svTotals(){
   const sqft = SiteVisit.meas.reduce((s,m)=>s+svSqft(m), 0);
+  if($('#q_depth').value==='fill')
+    return {sqft: Math.round(sqft), depth: 0, yards: 0};   // fill-up: rep sets yards
   const depth = parseFloat($('#q_depth').value)||2;
   /* cubic yards = sqft × (in/12) ft ÷ 27, rounded UP to the half yard --
      blown material settles; short loads are the expensive mistake. */
@@ -8491,13 +8523,17 @@ function renderBidPanel(){
           ((parseFloat(m.l)>0&&parseFloat(m.w)>0)?' <span class="muted">'+m.l+' × '+m.w+' ft</span>':'')+
           '</span><span class="v mono small">'+sf.toLocaleString()+' sq ft</span></div>';
       }).join('')+
-      '<div class="small" style="margin-top:6px"><b>'+t.sqft.toLocaleString()+
+      ($('#q_depth').value==='fill'
+        ? '<div class="small" style="margin-top:6px"><b>'+t.sqft.toLocaleString()+
+          ' sq ft</b> · <span class="muted">Fill up — no depth math; set the yards '+
+          'directly</span></div>'
+        : '<div class="small" style="margin-top:6px"><b>'+t.sqft.toLocaleString()+
       ' sq ft</b> × '+t.depth+'&Prime; ≈ <b>'+t.yards+' yd</b> '+
       (Math.abs(cur-t.yards)<0.01
         ? '<span class="tag g">in the quote</span>'
         : '<button type="button" class="btn ghost sm" id="bp_apply" '+
           'style="margin-left:6px;padding:3px 10px">Use '+t.yards+' yd in the quote</button>')+
-      '</div>';
+      '</div>');
     const b=$('#bp_apply');
     if(b) b.onclick=()=>{ $('#q_yards').value=t.yards; recalc(); renderBidPanel(); };
   }else{
@@ -8507,7 +8543,8 @@ function renderBidPanel(){
   /* bid notes — REP reference; the crew's event never carries these */
   $('#bp_notes').innerHTML = State.bidNotes
     ? '<div style="margin-top:10px"><label class="f">Bid notes '+
-      '<span class="small muted">reference — the crew never sees these</span></label>'+
+      '<span class="small muted">also copied into Site notes — edit THERE if the '+
+      'crew\u2019s version should say less</span></label>'+
       '<div class="small" style="white-space:pre-wrap;border:1px dashed var(--line);'+
       'border-radius:8px;padding:8px 10px;background:var(--panel-2)">'+
       esc(State.bidNotes)+'</div></div>'
@@ -9655,7 +9692,7 @@ async function saveQuote(status, opts){
     site_key: resolveSiteKey(addr)||null,
     product: $('#q_product').value,
     yards: parseFloat($('#q_yards').value)||0,
-    depth_in: parseFloat($('#q_depth').value)||null,
+    depth_in: $('#q_depth').value==='fill' ? 0 : (parseFloat($('#q_depth').value)||null),
     prep_hours: parseFloat($('#q_prep').value)||0,
     drive_hours: parseFloat($('#q_drive').value)||0,
     blow_hours: parseFloat($('#q_blow').value)||0,
@@ -10112,6 +10149,13 @@ function wire(){
         ' on the bid — press Save bid to keep everything.';
     }
   });
+  $('#bd_convert').onclick=async()=>{
+    if(!BidSt.id) return;
+    const btn=$('#bd_convert'); btn.disabled=true;
+    try{ await convertBid(BidSt.id); }    // saves pending edits first
+    catch(e){ bdMsg('⚠ '+e.message, true); }
+    btn.disabled=false;
+  };
   $('#bd_save').onclick=async()=>{
     const pl=bidPayload();
     if(!pl.customer_name && !pl.address_raw){
