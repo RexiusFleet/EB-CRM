@@ -1284,7 +1284,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-06-bidflow';   // shown in the header; check it after deploying
+const BUILD = '2026-12-07-series';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2010,7 +2010,7 @@ const LiveDB = {
       '&status=in.(sent,won)&limit=500';
     const base='quotes?select=id,product,yards,customer_name,address_raw,status,crew_id,'+
       'scheduled_date,scheduled_time,scheduled_hours,equip_hours,crew2_id,scheduled_time2,'+
-      'account_no,so_no,project_no';
+      'account_no,so_no,project_no,batch_id';
     try{
       // first choice: everything incl. tbd (sql/45)
       const r = await SB.rest(base+',closed_out_at,invoice_sent_at,feedback_open,'+
@@ -3370,26 +3370,29 @@ async function renderBatchPanel(){
    Best-effort per member; each member only gets the fields it is
    actually missing or disagrees on. */
 async function batchApplyPN(batchId, nums, exceptId){
-  const pn = nums && nums.project_no, so = nums && nums.so_no;
-  if(!batchId || (!pn && !so)) return '';
+  const pn = nums && nums.project_no, so = nums && nums.so_no,
+        acct = nums && nums.account_no;
+  if(!batchId || (!pn && !so && !acct)) return '';
   let members=[]; try{ members=(await DB.listBatch(batchId))||[]; }catch(e){ return ''; }
   const jobs=[];
   members.forEach(m=>{
     if(String(m.id)===String(exceptId) || m.archived_at) return;
     const patch={};
-    if(pn && m.project_no!==pn) patch.project_no=pn;
-    if(so && m.so_no!==so)      patch.so_no=so;
+    if(pn && m.project_no!==pn)       patch.project_no=pn;
+    if(so && m.so_no!==so)            patch.so_no=so;
+    if(acct && m.account_no!==acct)   patch.account_no=acct;
     if(Object.keys(patch).length) jobs.push({m, patch});
   });
   if(!jobs.length) return '';
   let n=0, synced=0;
-  const spread={pn:false, so:false};
+  const spread={pn:false, so:false, acct:false};
   const backend=await calendarBackend();
   for(const {m, patch} of jobs){
     try{
       await DB.patchQuote(m.id, patch); n++;
       if(patch.project_no) spread.pn=true;
       if(patch.so_no) spread.so=true;
+      if(patch.account_no) spread.acct=true;
       if(backend==='google' && DB.mode!=='demo' && GS.configured() &&
          (m.status==='sent'||m.status==='won') && m.scheduled_date){
         try{
@@ -3401,8 +3404,8 @@ async function batchApplyPN(batchId, nums, exceptId){
       }
     }catch(e){}
   }
-  const what = spread.pn && spread.so ? 'Project + Order Nbr'
-             : spread.so ? 'Order Nbr' : 'Project';
+  const what = [spread.acct&&'Customer #', spread.pn&&'Project',
+                spread.so&&'Order Nbr'].filter(Boolean).join(' + ')||'numbers';
   return n ? ' 🔗 '+what+' spread to '+n+' linked site'+(n===1?'':'s')+
     (synced?' ('+synced+' calendar event'+(synced===1?'':'s')+' updated)':'')+'.' : '';
 }
@@ -4612,6 +4615,7 @@ async function openQuote(r){
       : ''; }
   SiteVisit.meas = (r.site_measurements && Array.isArray(r.site_measurements.areas))
     ? r.site_measurements.areas.map(a=>({label:a.label||'', l:a.l??'', w:a.w??'',
+        off:!!a.off,
         /* sf saved from L×W stays derived on reopen; a typed sf stays typed */
         sf:(a.l>0 && a.w>0 && Math.abs(a.l*a.w - a.sf) < 1) ? '' : (a.sf??'')}))
     : [];
@@ -5573,7 +5577,7 @@ async function calFetch(from, to){
       mat: b.material_rev!=null?Number(b.material_rev):null,
       lab: b.labor_rev!=null?Number(b.labor_rev):null,
       eqr: b.equip_rev!=null?Number(b.equip_rev):null,
-      tbd: !!b.tbd,
+      tbd: !!b.tbd, batch: b.batch_id||null,
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
       hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
@@ -5597,6 +5601,18 @@ async function calFetch(from, to){
            Math.round((totY-y1)*10)/10);
     }else push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours, '', 0);
   });
+  /* Series-last (per Taylor 2026-12-07): ✅FE/💲 live only on a job's
+     FINAL calendar event — every trip of a quote and every member of a
+     master project count as ONE series; latest date+time wins. */
+  {
+    const gLast={};
+    jobs.forEach(j=>{
+      const k=String(j.batch||('q'+j.qid));
+      const v=(j.date||'')+'T'+(j.time||'24:00')+'#'+String(j.si||0).padStart(3,'0');
+      if(!gLast[k] || v>gLast[k].v) gLast[k]={v, j};
+    });
+    jobs.forEach(j=>{ j.lastEvt = gLast[String(j.batch||('q'+j.qid))].j===j; });
+  }
   const gEvents = [];
   (iblocks||[]).forEach(r=>{
     const crews = String(r.crew_id)==='*' ? (CREWS||[]).map(c=>String(c.id)) : [String(r.crew_id)];
@@ -6118,6 +6134,7 @@ function tgEvent(it, crew){
   const col = (crew && crew.color) || '#888';
   const timeTxt = fmtMin(toMin(it.time))+'–'+fmtMin(toMin(it.time)+Math.round((it.hours||1)*60));
   return '<div class="tgev app" data-qid="'+esc(it.qid)+'" data-si="'+(it.si||0)+
+    '" data-lastevt="'+(it.lastEvt===false?'0':'1')+
     '" data-date="'+it.date+'" data-crew="'+esc(String(it.crew_id))+
     '" data-time="'+esc(it.time)+'" data-hours="'+(it.hours||1)+
     '" title="'+esc(it.customer)+' — drag to move" style="'+pos+
@@ -6128,8 +6145,8 @@ function tgEvent(it, crew){
     (it.fb && !Cal.crew ? ' <span style="color:var(--warn);font-weight:700" title="Crew feedback needs review">⚠ feedback</span>':'')+
     /* FE / invoice marks are BACK-OFFICE status — never on the crew or
        driver board (per Taylor 2026-11-17). */
-    (it.closed && !Cal.crew ? ' <span style="color:var(--good);font-weight:700" title="Updated in Front End">✅ FE</span>':'')+
-    (it.inv && !Cal.crew ? ' <span style="color:var(--good);font-weight:700" title="Invoice sent">💲</span>':'')+
+    (it.closed && !Cal.crew && it.lastEvt!==false ? ' <span style="color:var(--good);font-weight:700" title="Updated in Front End">✅ FE</span>':'')+
+    (it.inv && !Cal.crew && it.lastEvt!==false ? ' <span style="color:var(--good);font-weight:700" title="Invoice sent">💲</span>':'')+
     '<br>'+esc(it.customer)+
     ((it.yards || (!Cal.crew && it.erp) || (DriverView && it.bidAmt!=null))
       ?'<div class="muted" style="font-size:10.5px">'+
@@ -6270,7 +6287,8 @@ function renderCalWeek(grid, days, d){
 function wireTimegrid(grid){
   const hhmm = m => String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
   grid.querySelectorAll('.tgev[data-qid]:not(.app)').forEach(ch=>{
-    ch.onclick = e=>{ e.stopPropagation(); openCalItem(ch.dataset.qid); };
+    ch.onclick = e=>{ e.stopPropagation();
+      openCalItem(ch.dataset.qid, null, ch.dataset.lastevt!=='0'); };
   });
   grid.querySelectorAll('.tgev[data-bidid]').forEach(ch=>{
     ch.onclick = e=>{ e.stopPropagation();
@@ -6290,7 +6308,8 @@ function wireTimegrid(grid){
   /* Drag to move: vertical = retime (15-min snap), across = day/truck. */
   grid.querySelectorAll('.tgev.app').forEach(ch=>{
     ch.onclick = e=>{ e.stopPropagation();
-      if(Cal.crew || officeEyes()) openCalItem(ch.dataset.qid, ch.dataset.crew); };
+      if(Cal.crew || officeEyes())
+        openCalItem(ch.dataset.qid, ch.dataset.crew, ch.dataset.lastevt!=='0'); };
     ch.addEventListener('pointerdown', e=>{
       if(Cal.crew || officeEyes() || e.button) return;
       e.preventDefault();
@@ -6318,7 +6337,7 @@ function wireTimegrid(grid){
       const dr = tgDrag; tgDrag = null;
       ch.classList.remove('dragging'); ch.style.pointerEvents = '';
       if(dr.tcol) dr.tcol.classList.remove('droptgt');
-      if(!dr.moved){ openCalItem(ch.dataset.qid); return; }
+      if(!dr.moved){ openCalItem(ch.dataset.qid, null, ch.dataset.lastevt!=='0'); return; }
       ch.style.transform = '';
       const col = dr.tcol;
       if(!col) return;
@@ -6937,10 +6956,10 @@ function renderSchedBooked(){
   };
   $('#sb_remove').onclick=()=>doUnschedule();
 }
-async function openCalItem(qid, crewId){
+async function openCalItem(qid, crewId, lastEvt){
   let r = null; try{ r = await DB.getQuote(qid); }catch(e){}
   if(!r) return;
-  calCard(r, !Cal.crew, crewId);
+  calCard(r, !Cal.crew, crewId, {lastEvt: lastEvt!==false});
 }
 /* ---- the MINI internal calendar inside the quote's Schedule section ----
    The same data as the Calendar tab (calFetch: app bookings + Google overlay
@@ -7202,7 +7221,7 @@ function renderCalMonth(grid, from, to, d){
         const tno = cr ? ((String(cr.name).match(/#\S+/)||[])[0]||'') : '';
         return '<div class="calchip" style="border-left:3px solid '+col+';'+
           ((it.hold||it.google)?'opacity:.65;':'')+'">'+
-          ((it.fb&&!Cal.crew)?'⚠ ':(it.closed&&!Cal.crew)?'✅ ':'')+
+          ((it.fb&&!Cal.crew)?'⚠ ':(it.closed&&!Cal.crew&&it.lastEvt!==false)?'✅ ':'')+
           (tno?'<b>'+esc(tno)+'</b> ':'')+
           (it.time?'<b>'+esc(fmtMin(toMin(it.time)))+'</b> ':'')+esc(String(label).slice(0,22))+'</div>';
       }).join('');
@@ -7231,8 +7250,12 @@ function wireCalChips(grid){
    stays on the board unless they choose to edit. Neither shows site or
    customer history: the card is about THIS job, the builder is for digging. */
 function crewCard(r, focusCrew){ calCard(r, false, focusCrew); }
-function calCard(r, rep, focusCrew){
+function calCard(r, rep, focusCrew, opts){
   const office = officeEyes();
+  /* Only the series' FINAL event carries the FE / Invoice controls (per
+     Taylor 2026-12-07). Cards opened away from a board chip (search,
+     To Do) can't know, so they keep the controls. */
+  const ccLast = !opts || opts.lastEvt!==false;
   /* Crew-reported shortfall — drives every strikethrough on this card. */
   const cardShort = Number(r.feedback_vol)>0 && Number(r.yards)>0 &&
     Number(r.feedback_vol)<Number(r.yards);
@@ -7454,13 +7477,18 @@ function calCard(r, rep, focusCrew){
       '<button type="button" class="btn ghost sm" id="cc_saveerp" style="flex:0 0 auto">'+
       'Save #s</button>'+
       '<span class="small muted" id="cc_msg" style="align-self:center">'+
-      (r.batch_id?'🔗 master project — the Project and Order Nbr save to every linked site':'')+
+      (r.batch_id?'🔗 master project — the Customer #, Project and Order Nbr save to every linked site':'')+
       '</span></div>'+
       /* Back-office verbs (per Taylor 2026-11-13/15): "Updated in Front
          End" after the order is updated in the internal system, then
          "Invoice sent" with the externally-generated invoice number.
-         One click each, undoable. */
-      '<div class="row" style="margin-top:8px;align-items:center">'+
+         One click each, undoable. Since 2026-12-07 they live ONLY on the
+         series' last calendar event. */
+      (!ccLast
+        ? '<div class="small muted" style="margin-top:8px">✅ Updated in Front End '+
+          'and 💲 Invoice sent live on the LAST calendar event of this job — '+
+          'open that one.</div>'
+        : '<div class="row" style="margin-top:8px;align-items:center">'+
       (r.closed_out_at
         ? '<button type="button" class="btn ghost sm" id="cc_reopen" style="flex:0 0 auto" '+
           'title="Un-mark — the project shows as not yet updated">↩ Undo front-end update</button>'
@@ -7481,7 +7509,7 @@ function calCard(r, rep, focusCrew){
           'background:var(--accent);color:var(--accent-ink)" '+
           'title="Press once the invoice has gone out — type its number first">'+
           '💲 Invoice sent</button>')+
-      '</div>'+
+      '</div>')+
       /* HOLD verbs on the card (per Taylor 2026-11-23): confirm the held
          slot, reschedule, send back to TBD (off the calendar), or lost.
          TBD jobs hold no date, so they never appear as board events. */
@@ -7566,7 +7594,7 @@ function calCard(r, rep, focusCrew){
          master project, the per-member fan-out — run in the background
          and update this line when they land. The board redraws at once
          so the ✓#s / no #s badge is current without a page reload. */
-      ccMsg('✓ Saved.'+(r.batch_id&&(vals.project_no||vals.so_no)
+      ccMsg('✓ Saved.'+(r.batch_id&&(vals.project_no||vals.so_no||vals.account_no)
         ? ' Spreading across the master project…' : ''));
       ccBoard();
       (async()=>{
@@ -7581,9 +7609,10 @@ function calCard(r, rep, focusCrew){
             m='✓ Saved — the calendar event now carries them.';
           }catch(e){ m='✓ Saved in the app; calendar not updated: '+e.message; }
         }
-        if(r.batch_id && (vals.project_no || vals.so_no)){
+        if(r.batch_id && (vals.project_no || vals.so_no || vals.account_no)){
           try{ note = await batchApplyPN(r.batch_id,
-            {project_no:vals.project_no, so_no:vals.so_no}, r.id); }
+            {project_no:vals.project_no, so_no:vals.so_no,
+             account_no:vals.account_no}, r.id); }
           catch(e3){}
         }
         ccMsg(m+note);
@@ -8062,7 +8091,7 @@ function bidReset(){
   renderBidMeas(); renderBidPhotos();
 }
 function bidTotals(){
-  const sqft = BidSt.meas.reduce((t,m)=>t+svSqft(m), 0);
+  const sqft = BidSt.meas.reduce((t,m)=>t+(m.off?0:svSqft(m)), 0);
   if($('#bd_depth').value==='fill')
     return {sqft: Math.round(sqft), depth: 0, yards: 0};   // fill-up: rep sets yards
   const depth = parseFloat($('#bd_depth').value)||2;
@@ -8070,26 +8099,43 @@ function bidTotals(){
   return {sqft: Math.round(sqft), depth, yards};
 }
 function renderBidMeas(){
+  /* Sq ft is a READOUT now (per Taylor 2026-12-07): L × W computes it live
+     (a legacy typed-sf row keeps its number until L/W are entered), and
+     the "count" box pulls a row in or out of the volume math. */
   const box=$('#bd_measrows'); if(!box) return;
-  box.innerHTML = BidSt.meas.map((m,i)=>
-    '<div class="row" style="margin-top:6px" data-bmi="'+i+'">'+
+  box.innerHTML = BidSt.meas.map((m,i)=>{
+    const sf=Math.round(svSqft(m));
+    return '<div class="row" style="margin-top:6px'+(m.off?';opacity:.55':'')+
+    '" data-bmi="'+i+'">'+
     '<div style="flex:2"><label class="f">Area</label><input type="text" class="m_lbl" '+
       'placeholder="Front beds" value="'+esc(m.label||'')+'"></div>'+
     '<div><label class="f">L (ft)</label><input type="number" class="m_l num mono" '+
       'step="0.5" min="0" value="'+(m.l??'')+'"></div>'+
     '<div><label class="f">W (ft)</label><input type="number" class="m_w num mono" '+
       'step="0.5" min="0" value="'+(m.w??'')+'"></div>'+
-    '<div><label class="f">Sq ft <span class="small muted">or type it</span></label>'+
-      '<input type="number" class="m_sf num mono" step="1" min="0" value="'+(m.sf??'')+'"></div>'+
+    '<div style="flex:0 0 92px"><label class="f">Sq ft</label>'+
+      '<div class="m_sf mono" style="padding:9px 0;font-weight:600">'+
+      (sf?sf.toLocaleString():'—')+'</div></div>'+
+    '<label class="small" style="flex:0 0 auto;align-self:end;display:flex;gap:5px;'+
+      'align-items:center;padding-bottom:11px" '+
+      'title="Untick to leave this area OUT of the volume calculation">'+
+      '<input type="checkbox" class="m_on"'+(m.off?'':' checked')+'> count</label>'+
     '<button type="button" class="btn ghost sm m_del" style="flex:0 0 auto;align-self:end" '+
       'title="Remove area">✕</button>'+
-    '</div>').join('');
+    '</div>'; }).join('');
   box.querySelectorAll('[data-bmi]').forEach(row=>{
     const m = BidSt.meas[Number(row.dataset.bmi)];
     const upd = ()=>{ m.label=row.querySelector('.m_lbl').value;
       m.l=row.querySelector('.m_l').value; m.w=row.querySelector('.m_w').value;
-      m.sf=row.querySelector('.m_sf').value; renderBidTotal(); };
+      /* typing L and W takes over from any legacy typed square footage */
+      if(parseFloat(m.l)>0 && parseFloat(m.w)>0) m.sf='';
+      m.off=!row.querySelector('.m_on').checked;
+      row.style.opacity=m.off?'.55':'';
+      const sf=Math.round(svSqft(m));
+      row.querySelector('.m_sf').textContent=sf?sf.toLocaleString():'—';
+      renderBidTotal(); };
     row.querySelectorAll('input').forEach(inp=>inp.addEventListener('input', upd));
+    row.querySelector('.m_on').addEventListener('change', upd);
     row.querySelector('.m_del').onclick=()=>{ BidSt.meas.splice(Number(row.dataset.bmi),1);
       renderBidMeas(); };
   });
@@ -8139,7 +8185,8 @@ function bidPayload(){
     depth_in: $('#bd_depth').value==='fill' ? 0 : (parseFloat($('#bd_depth').value)||null),
     measurements: BidSt.meas.length
       ? {areas: BidSt.meas.map(m=>({label:m.label||'', l:parseFloat(m.l)||null,
-          w:parseFloat(m.w)||null, sf:Math.round(svSqft(m))})),
+          w:parseFloat(m.w)||null, sf:Math.round(svSqft(m)),
+          off:m.off?true:undefined})),
          sqft:t.sqft, depth_in:t.depth, suggested_yards:t.yards}
       : null,
     photos: BidSt.photos.length
@@ -8157,6 +8204,7 @@ function openBid(b){
   BidSt.id=b.id;
   BidSt.meas=(b.measurements&&Array.isArray(b.measurements.areas))
     ? b.measurements.areas.map(a=>({label:a.label||'', l:a.l??'', w:a.w??'',
+        off:!!a.off,
         sf:(a.l>0&&a.w>0&&Math.abs(a.l*a.w-a.sf)<1)?'':(a.sf??'')}))
     : [];
   BidSt.photos=Array.isArray(b.photos)?b.photos.map(x=>Object.assign({},x)):[];
@@ -8376,6 +8424,7 @@ async function convertBid(id){
   else if(b.depth_in) $('#q_depth').value=String(b.depth_in);
   const t=(b.measurements||{});
   SiteVisit.meas=(t.areas||[]).map(a=>({label:a.label||'', l:a.l??'', w:a.w??'',
+    off:!!a.off,
     sf:(a.l>0&&a.w>0&&Math.abs(a.l*a.w-a.sf)<1)?'':(a.sf??'')}));
   SiteVisit.pool=Array.isArray(b.photos)?b.photos.map(x=>Object.assign({},x)):[];
   SiteVisit.photos=SiteVisit.pool.map(x=>Object.assign({},x));   // all attached; untick in the panel
@@ -8430,7 +8479,7 @@ function svSqft(m){
   return (l>0 && w>0) ? l*w : 0;
 }
 function svTotals(){
-  const sqft = SiteVisit.meas.reduce((s,m)=>s+svSqft(m), 0);
+  const sqft = SiteVisit.meas.reduce((s,m)=>s+(m.off?0:svSqft(m)), 0);
   if($('#q_depth').value==='fill')
     return {sqft: Math.round(sqft), depth: 0, yards: 0};   // fill-up: rep sets yards
   const depth = parseFloat($('#q_depth').value)||2;
@@ -8518,9 +8567,10 @@ function renderBidPanel(){
     mbox.innerHTML = '<label class="f">Measurements</label>'+
       SiteVisit.meas.map(m=>{
         const sf=Math.round(svSqft(m));
-        return '<div class="kv" style="padding:3px 0"><span class="k small">'+
-          esc(m.label||'area')+
+        return '<div class="kv" style="padding:3px 0'+(m.off?';opacity:.5':'')+
+          '"><span class="k small">'+esc(m.label||'area')+
           ((parseFloat(m.l)>0&&parseFloat(m.w)>0)?' <span class="muted">'+m.l+' × '+m.w+' ft</span>':'')+
+          (m.off?' <span class="muted">(not counted)</span>':'')+
           '</span><span class="v mono small">'+sf.toLocaleString()+' sq ft</span></div>';
       }).join('')+
       ($('#q_depth').value==='fill'
@@ -8631,7 +8681,8 @@ function svPayload(){
     site_notes: ($('#q_sitenotes')&&$('#q_sitenotes').value.trim())||null,
     site_measurements: SiteVisit.meas.length
       ? {areas: SiteVisit.meas.map(m=>({label:m.label||'', l:parseFloat(m.l)||null,
-          w:parseFloat(m.w)||null, sf:Math.round(svSqft(m))})),
+          w:parseFloat(m.w)||null, sf:Math.round(svSqft(m)),
+          off:m.off?true:undefined})),
          sqft:t.sqft, depth_in:t.depth, suggested_yards:t.yards}
       : null,
     site_photos: SiteVisit.photos.length
