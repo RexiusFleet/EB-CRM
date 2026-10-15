@@ -1284,7 +1284,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-09b-ianoriginals';   // shown in the header; check it after deploying
+const BUILD = '2026-12-10-nocompare';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -7820,8 +7820,7 @@ function calCard(r, rep, focusCrew, opts){
   async function renderFbRev(){
     const box=$('#cc_fbrev'); if(!box) return;
     let rows=[]; try{ rows=(await DB.listFeedback(r.id))||[]; }catch(e){}
-    let comps=[]; try{ comps=(await DB.listCompares(r.id))||[]; }catch(e){}
-    if(!rows.length && !comps.length && !r.feedback_open && !r.adj_at){
+    if(!rows.length && !r.feedback_open && !r.adj_at){
       box.innerHTML=''; return; }
     const quoted=Number(r.yards)||0;
     const latestVol=(rows.find(x=>Number(x.actual_yards)>0)||{}).actual_yards
@@ -7851,11 +7850,6 @@ function calCard(r, rep, focusCrew, opts){
           (adj!=null?' Adjusted invoice: <b>'+money(adj)+'</b> <span class="muted">(bid '+
             money(r.bid_amount)+' − '+(Math.round((quoted-latestVol)*10)/10)+
             ' yd × '+money2(cpy)+'/yd product cost)</span>':'')+
-          ((rep)?'<div style="margin-top:6px"><textarea id="cc_cmpnote" rows="2" '+
-            'placeholder="Why the difference — for the record…"></textarea>'+
-            '<button type="button" class="btn ghost sm" id="cc_cmpmake" '+
-            'style="margin-top:4px">⚖ Save linked comparison quote at '+latestVol+' yd</button>'+
-            '<span class="small muted" id="cc_cmpmsg"></span></div>':'')+
           '</div>'
         : '')+
       /* Ian sets the updated bid (per Taylor 2026-12-09). Under-use
@@ -7928,13 +7922,7 @@ function calCard(r, rep, focusCrew, opts){
             '✓ Approve updated bid</button>'+
             ' <span class="small muted" id="cc_adjmsg"></span></div>';
         })() : '')+
-      (comps.length?'<div class="small" style="margin-top:8px;border-top:1px solid '+
-        'var(--line-2);padding-top:6px"><b>⚖ Linked comparisons</b>'+
-        comps.map(c2=>'<div style="margin-top:4px">'+esc(dfmt(String(c2.created_at||'').slice(0,10)))+
-          ' · '+c2.yards+' yd · '+money(c2.bid_amount)+
-          (c2.compare_note?' — <span class="muted">'+esc(c2.compare_note)+'</span>':'')+
-          ' <button type="button" class="btn ghost sm" data-cmpopen="'+esc(c2.id)+'" '+
-          'style="padding:2px 10px">Open</button></div>').join('')+'</div>':'')+
+
       (r.feedback_open
         ? '<div style="margin-top:8px"><button type="button" class="btn ghost sm" '+
           'id="cc_fback">✓ Mark feedback reviewed</button></div>'
@@ -8022,36 +8010,10 @@ function calCard(r, rep, focusCrew, opts){
         calCard(r, rep, focusCrew);
       }catch(e){ adjMsg('⚠ '+e.message); unb.disabled=false; }
     };
-    const mk=box.querySelector('#cc_cmpmake');
-    if(mk) mk.onclick=async()=>{
-      mk.disabled=true;
-      const msg=box.querySelector('#cc_cmpmsg');
-      try{
-        const q2={ customer_name:r.customer_name, phone:r.phone, email:r.email,
-          address_raw:r.address_raw, city:r.city, zip:r.zip, site_key:r.site_key,
-          product:r.product, yards:Number(latestVol), depth_in:r.depth_in,
-          account_no:r.account_no, so_no:r.so_no, project_no:r.project_no,
-          bid_amount: adj!=null?adj:r.bid_amount, status:'draft',
-          site_notes:'⚖ Comparison of quote '+r.id+' at the volume the crew reported.',
-          compare_of:r.id,
-          compare_note: (box.querySelector('#cc_cmpnote').value.trim()||null) };
-        let saved=null;
-        try{ saved=await DB.saveQuote(q2); }
-        catch(ec){
-          if(/compare_of|compare_note/.test(String(ec.message)))
-            throw new Error('Run sql/42_jobtrack.sql first — the comparison link '+
-              'columns are missing.');
-          throw ec;
-        }
-        toast('⚖ Comparison quote saved and linked.', false);
-        if(msg) msg.textContent=' ✓ saved';
-        renderFbRev();
-      }catch(e){ mk.disabled=false; if(msg) msg.textContent=' ⚠ '+e.message; }
-    };
-    box.querySelectorAll('[data-cmpopen]').forEach(b2=>b2.onclick=async()=>{
-      let q3=null; try{ q3=await DB.getQuote(b2.dataset.cmpopen); }catch(e){}
-      if(q3){ wrap.remove(); openQuote(q3); }
-    });
+    /* The old "⚖ Save linked comparison quote" workflow was removed per
+       Taylor 2026-12-10 — the Updated-bid approval above replaced it.
+       DB.listCompares and the compare_of/compare_note columns stay for
+       any historical comparison quotes (visible on Saved Quotes). */
   }
   if(rep||office) renderFbRev();
   wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
