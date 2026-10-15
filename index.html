@@ -1284,7 +1284,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-07-series';   // shown in the header; check it after deploying
+const BUILD = '2026-12-09-ianadjust';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -5601,17 +5601,27 @@ async function calFetch(from, to){
            Math.round((totY-y1)*10)/10);
     }else push(b.crew_id, b.scheduled_date, b.scheduled_time, b.scheduled_hours, '', 0);
   });
-  /* Series-last (per Taylor 2026-12-07): ✅FE/💲 live only on a job's
-     FINAL calendar event — every trip of a quote and every member of a
-     master project count as ONE series; latest date+time wins. */
+  /* Series pass (per Taylor 2026-12-07 + 2026-12-08): every trip of a
+     quote and every member of a master project count as ONE series,
+     ordered by date+time. Each event learns its place ("1 of 2"), the
+     FE/Invoice CONTROLS live only on the final event (lastEvt), and the
+     final event's ✅FE/💲 STATE paints every chip in the series — once
+     the closing job is invoiced/updated, the earlier chips say so too. */
   {
-    const gLast={};
-    jobs.forEach(j=>{
-      const k=String(j.batch||('q'+j.qid));
-      const v=(j.date||'')+'T'+(j.time||'24:00')+'#'+String(j.si||0).padStart(3,'0');
-      if(!gLast[k] || v>gLast[k].v) gLast[k]={v, j};
+    const groups={};
+    jobs.forEach(j=>{ const k=String(j.batch||('q'+j.qid));
+      (groups[k]=groups[k]||[]).push(j); });
+    const ord=j=>(j.date||'')+'T'+(j.time||'24:00')+'#'+String(j.si||0).padStart(3,'0');
+    Object.keys(groups).forEach(k=>{
+      const g=groups[k].slice().sort((a2,b2)=>ord(a2).localeCompare(ord(b2)));
+      const last=g[g.length-1];
+      g.forEach((j,i)=>{
+        j.lastEvt = j===last;
+        j.seq = i+1; j.seqN = g.length;
+        j.closed = last.closed;   // the closing job's state is the
+        j.inv    = last.inv;      // whole series' state on the board
+      });
     });
-    jobs.forEach(j=>{ j.lastEvt = gLast[String(j.batch||('q'+j.qid))].j===j; });
   }
   const gEvents = [];
   (iblocks||[]).forEach(r=>{
@@ -6145,8 +6155,8 @@ function tgEvent(it, crew){
     (it.fb && !Cal.crew ? ' <span style="color:var(--warn);font-weight:700" title="Crew feedback needs review">⚠ feedback</span>':'')+
     /* FE / invoice marks are BACK-OFFICE status — never on the crew or
        driver board (per Taylor 2026-11-17). */
-    (it.closed && !Cal.crew && it.lastEvt!==false ? ' <span style="color:var(--good);font-weight:700" title="Updated in Front End">✅ FE</span>':'')+
-    (it.inv && !Cal.crew && it.lastEvt!==false ? ' <span style="color:var(--good);font-weight:700" title="Invoice sent">💲</span>':'')+
+    (it.closed && !Cal.crew ? ' <span style="color:var(--good);font-weight:700" title="Updated in Front End">✅ FE</span>':'')+
+    (it.inv && !Cal.crew ? ' <span style="color:var(--good);font-weight:700" title="Invoice sent">💲</span>':'')+
     '<br>'+esc(it.customer)+
     ((it.yards || (!Cal.crew && it.erp) || (DriverView && it.bidAmt!=null))
       ?'<div class="muted" style="font-size:10.5px">'+
@@ -6164,7 +6174,10 @@ function tgEvent(it, crew){
       })():'')+
       /* Crew/driver: THEIR trip only — no cross-truck load labels, no
          project total (per Taylor: "just display what is relevant"). */
-      (it.yards && it.lbl && !Cal.crew ? ' · '+esc(it.lbl):'')+
+      /* Multi-event jobs count themselves out loud (per Taylor
+         2026-12-08): "1 of 2 jobs" instead of the bare load label. */
+      (it.seqN>1 && !Cal.crew ? ' · <b>'+it.seq+' of '+it.seqN+' jobs</b>'
+        : (it.yards && it.lbl && !Cal.crew ? ' · '+esc(it.lbl):''))+
       (!Cal.crew && it.yards && it.totYards && it.totYards>it.yards
         ? ' <span style="opacity:.75">(of '+
         (Math.round(it.totYards*10)/10)+')</span>':'')+
@@ -7221,7 +7234,7 @@ function renderCalMonth(grid, from, to, d){
         const tno = cr ? ((String(cr.name).match(/#\S+/)||[])[0]||'') : '';
         return '<div class="calchip" style="border-left:3px solid '+col+';'+
           ((it.hold||it.google)?'opacity:.65;':'')+'">'+
-          ((it.fb&&!Cal.crew)?'⚠ ':(it.closed&&!Cal.crew&&it.lastEvt!==false)?'✅ ':'')+
+          ((it.fb&&!Cal.crew)?'⚠ ':(it.closed&&!Cal.crew)?'✅ ':'')+
           (tno?'<b>'+esc(tno)+'</b> ':'')+
           (it.time?'<b>'+esc(fmtMin(toMin(it.time)))+'</b> ':'')+esc(String(label).slice(0,22))+'</div>';
       }).join('');
@@ -7398,11 +7411,46 @@ function calCard(r, rep, focusCrew, opts){
       const E=r.equip_rev!=null?Math.round(Number(r.equip_rev)):null;
       const M=r.material_rev!=null?Math.round(rawT)-(L||0)-(E||0):null;
       const tot=(M||0)+(L||0)+(E||0);
+      /* APPROVED adjustment (per Taylor 2026-12-09): once Ian approves,
+         the box reads Original bid → Updated bid on every line — these
+         are the numbers the office keys in. */
+      if(r.adj_at){
+        const aM=r.adj_material!=null?Math.round(Number(r.adj_material)):null;
+        const aL=r.adj_labor!=null?Math.round(Number(r.adj_labor)):null;
+        const aE=r.adj_equip!=null?Math.round(Number(r.adj_equip)):null;
+        const aT=r.adj_total!=null?Math.round(Number(r.adj_total))
+          :(aM||0)+(aL||0)+(aE||0);
+        const pair=(o,n2)=>'<s style="opacity:.55">'+(o!=null?money(o):'—')+'</s> '+
+          '<b style="color:var(--accent)">'+(n2!=null?money(n2):'—')+'</b>';
+        const yline=(r.adj_yards!=null && r.yards)
+          ? '<s style="opacity:.55">'+esc(r.yards+' yd')+'</s> '+
+            '<b style="color:var(--accent)">'+r.adj_yards+' yd</b>'+
+            (r.product?' '+esc(r.product):'')
+          : (r.yards?esc(r.yards+' yd'+(r.product?' '+r.product:'')):'');
+        return '<div id="cc_revbox" style="margin-top:10px;border:1px solid var(--line);'+
+          'border-radius:10px;padding:8px 12px">'+
+          '<div class="small" style="font-weight:600;margin-bottom:4px">Revenue '+
+          '<span class="muted">· Original bid → <span style="color:var(--accent)">Updated bid</span>'+
+          (r.adj_by?' — ✓ '+esc(String(r.adj_by).split('@')[0]):'')+'</span></div>'+
+          '<div class="kv"><span class="k">Material'+(yline?' <span class="muted">· '+yline+
+            '</span>':'')+'</span><b>'+pair(M,aM)+'</b></div>'+
+          '<div class="kv"><span class="k">Labor'+(qty(r.labor_hours)?' <span class="muted">· '+
+            esc(qty(r.labor_hours))+'</span>':'')+'</span><b>'+pair(L,aL)+'</b></div>'+
+          '<div class="kv"><span class="k">Equipment'+(qty(r.equip_hours)?' <span class="muted">· '+
+            esc(qty(r.equip_hours))+'</span>':'')+'</span><b>'+pair(E,aE)+'</b></div>'+
+          '<div class="kv" style="border-top:1px solid var(--line-2);margin-top:4px;'+
+          'padding-top:4px"><span class="k">Total</span><b>'+pair(tot,aT)+'</b></div>'+
+          '<div class="small" style="color:var(--accent);margin-top:2px">✓ Updated bid '+
+          'approved'+(r.adj_at?' '+esc(dfmt(String(r.adj_at).slice(0,10))):'')+
+          ' — key the updated figures into the system.</div>'+
+          '</div>';
+      }
       /* Crew-reported SHORTFALL (per Taylor 2026-11-17): the Material line
          and the Total show the adjusted numbers beside the originals —
          struck through, new figures in blue — because the office keys
          THESE into the system. Adjustment = yards short × the product's
-         rate-card cost/yd, the same rule the driver sees. */
+         rate-card cost/yd, the same rule the driver sees. BEFORE Ian
+         approves, this is the provisional view. */
       const fbV=Number(r.feedback_vol)>0?Number(r.feedback_vol):null;
       const lessV=fbV!=null && Number(r.yards)>0 && fbV<Number(r.yards);
       const cpyO=lessV?prodCostYd(r.product):null;
@@ -7439,7 +7487,11 @@ function calCard(r, rep, focusCrew, opts){
     })():'')+
     (rep?'<div style="margin-top:8px"><b>'+
       (r.bid_amount!=null
-        ? (cardShort && prodCostYd(r.product)!=null
+        ? (r.adj_at && r.adj_total!=null
+            ? '<s style="opacity:.6">'+money(r.bid_amount)+'</s> '+
+              '<b style="color:var(--accent)">'+money(r.adj_total)+'</b>'+
+              ' <span class="small muted">✓ updated bid</span>'
+          : cardShort && prodCostYd(r.product)!=null
             ? '<s style="opacity:.6">'+money(r.bid_amount)+'</s> '+
               '<b style="color:var(--accent)">'+money(Math.round((Number(r.bid_amount)-
               (Number(r.yards)-Number(r.feedback_vol))*prodCostYd(r.product))*100)/100)+'</b>'
@@ -7769,7 +7821,8 @@ function calCard(r, rep, focusCrew, opts){
     const box=$('#cc_fbrev'); if(!box) return;
     let rows=[]; try{ rows=(await DB.listFeedback(r.id))||[]; }catch(e){}
     let comps=[]; try{ comps=(await DB.listCompares(r.id))||[]; }catch(e){}
-    if(!rows.length && !comps.length && !r.feedback_open){ box.innerHTML=''; return; }
+    if(!rows.length && !comps.length && !r.feedback_open && !r.adj_at){
+      box.innerHTML=''; return; }
     const quoted=Number(r.yards)||0;
     const latestVol=(rows.find(x=>Number(x.actual_yards)>0)||{}).actual_yards
       || (Number(r.feedback_vol)>0?r.feedback_vol:null);
@@ -7805,6 +7858,67 @@ function calCard(r, rep, focusCrew, opts){
             '<span class="small muted" id="cc_cmpmsg"></span></div>':'')+
           '</div>'
         : '')+
+      /* Ian sets the updated bid (per Taylor 2026-12-09). Under-use
+         prefills the crew's calc (− short yd × cost/yd off Material);
+         over-use prefills + extra yd × (overhead/yd + cost/yd × markup).
+         He can type over anything; Approve stamps adj_* (sql/53) and
+         marks the feedback reviewed. */
+      ((rep && ((latestVol && quoted && Number(latestVol)!==quoted) || r.adj_at))
+        ? (function(){
+          const canAdj = State.isAdmin || State.ratesEditor;
+          if(r.adj_at){
+            return '<div class="small" style="margin-top:8px;border-top:1px solid '+
+              'var(--line-2);padding-top:6px"><b style="color:var(--accent)">✓ Updated bid '+
+              'approved</b> <span class="muted">'+esc(dfmt(String(r.adj_at).slice(0,10)))+
+              (r.adj_by?' · '+esc(String(r.adj_by).split('@')[0]):'')+
+              ' · '+money(r.adj_total!=null?r.adj_total:0)+
+              ' — the Revenue box shows Original → Updated.</span>'+
+              (canAdj?' <button type="button" class="btn ghost sm" id="cc_adjundo" '+
+                'style="padding:2px 10px">↩ Un-approve</button>':'')+
+              '<span class="small muted" id="cc_adjmsg"></span></div>';
+          }
+          if(!canAdj)
+            return '<div class="small muted" style="margin-top:8px;border-top:1px solid '+
+              'var(--line-2);padding-top:6px">⚖ Awaiting review — a rates editor (Ian) '+
+              'sets and approves the updated bid; the office then sees Original → '+
+              'Updated.</div>';
+          const used=Number(latestVol), short=Math.round((quoted-used)*10)/10,
+                extra=Math.round((used-quoted)*10)/10;
+          const matO=Number(r.material_rev)||0, labO=Number(r.labor_rev)||0,
+                eqO=Number(r.equip_rev)||0;
+          let matN=matO, basis='';
+          if(used<quoted && cpy!=null){
+            matN=Math.round((matO-short*cpy)*100)/100;
+            basis='− '+short+' yd × '+money2(cpy)+'/yd product cost — the crew\u2019s calc';
+          }else if(used>quoted){
+            const oh=Number((State.ref.settings||{}).overhead_per_yard)||25;
+            let mk=0; try{ mk=Engine.markupFor(State.ref.markup_curve, used)||0; }catch(e9){}
+            if(cpy!=null){
+              const per=Math.round((oh+cpy*(1+mk))*100)/100;
+              matN=Math.round((matO+extra*per)*100)/100;
+              basis='+ '+extra+' yd × ('+money2(oh)+' OH/yd + '+money2(cpy)+
+                ' cost × '+(1+mk).toFixed(2)+' markup = '+money2(per)+'/yd)';
+            }else basis='no rate-card cost for '+esc(r.product||'this product')+
+              ' — set the numbers by hand';
+          }
+          return '<div class="small" style="margin-top:8px;border-top:1px solid '+
+            'var(--line-2);padding-top:6px"><b>⚖ Set the updated bid</b>'+
+            (basis?' <span class="muted">· '+basis+'</span>':'')+
+            '<div class="row" style="margin-top:6px">'+
+            '<div><label class="f">Material</label><input type="number" step="0.01" '+
+              'id="cc_adjm" class="num mono" value="'+matN+'"></div>'+
+            '<div><label class="f">Labor</label><input type="number" step="0.01" '+
+              'id="cc_adjl" class="num mono" value="'+labO+'"></div>'+
+            '<div><label class="f">Equipment</label><input type="number" step="0.01" '+
+              'id="cc_adje" class="num mono" value="'+eqO+'"></div>'+
+            '</div>'+
+            '<div class="kv" style="margin-top:4px"><span class="k">Updated total</span>'+
+            '<b id="cc_adjt"></b></div>'+
+            '<button type="button" class="btn sm" id="cc_adjok" '+
+            'style="background:var(--good);color:#fff;margin-top:6px">'+
+            '✓ Approve updated bid</button>'+
+            ' <span class="small muted" id="cc_adjmsg"></span></div>';
+        })() : '')+
       (comps.length?'<div class="small" style="margin-top:8px;border-top:1px solid '+
         'var(--line-2);padding-top:6px"><b>⚖ Linked comparisons</b>'+
         comps.map(c2=>'<div style="margin-top:4px">'+esc(dfmt(String(c2.created_at||'').slice(0,10)))+
@@ -7841,6 +7955,63 @@ function calCard(r, rep, focusCrew, opts){
         toast('✓ Feedback marked reviewed.', false);
         renderFbRev();
       }catch(e){ ak.disabled=false; toast(e.message, true); }
+    };
+    const adjMsg=t=>{ const e9=box.querySelector('#cc_adjmsg'); if(e9) e9.textContent=t; };
+    const adjSum=()=>{
+      const v=id2=>parseFloat((box.querySelector(id2)||{}).value)||0;
+      const t2=Math.round((v('#cc_adjm')+v('#cc_adjl')+v('#cc_adje'))*100)/100;
+      const el2=box.querySelector('#cc_adjt'); if(el2) el2.textContent=money(t2);
+      return t2;
+    };
+    ['#cc_adjm','#cc_adjl','#cc_adje'].forEach(id2=>{
+      const el2=box.querySelector(id2);
+      if(el2) el2.addEventListener('input', adjSum);
+    });
+    adjSum();
+    const okb=box.querySelector('#cc_adjok');
+    if(okb) okb.onclick=async()=>{
+      okb.disabled=true; adjMsg('saving…');
+      const v=id2=>parseFloat((box.querySelector(id2)||{}).value);
+      const patch={
+        adj_material: isNaN(v('#cc_adjm'))?null:v('#cc_adjm'),
+        adj_labor:    isNaN(v('#cc_adjl'))?null:v('#cc_adjl'),
+        adj_equip:    isNaN(v('#cc_adje'))?null:v('#cc_adje'),
+        adj_total:    adjSum(),
+        adj_yards:    Number(latestVol)||null,
+        adj_at:       new Date().toISOString(),
+        adj_by:       (State.user&&State.user.email)||null };
+      try{
+        const upd=await DB.patchQuote(r.id, patch);
+        if(DB.mode!=='demo' && !upd)
+          throw new Error('Nothing saved — run sql/53_adjusted_bid.sql in Supabase.');
+        Object.assign(r, patch);
+        try{ await DB.ackFeedback(r.id, (State.user&&State.user.email)||null); }catch(e9){}
+        r.feedback_open=false;
+        bustCalCache();
+        try{ if(!$('#view-cal').classList.contains('hide')) renderCal(); }catch(e9){}
+        toast('✓ Updated bid approved — the office card now shows Original → Updated.', false);
+        calCard(r, rep, focusCrew);
+      }catch(e){
+        adjMsg('⚠ '+(/adj_/.test(String(e.message)) && /column|schema|cache/i.test(String(e.message))
+          ? 'The adjustment columns are missing — run sql/53_adjusted_bid.sql.'
+          : e.message));
+        okb.disabled=false;
+      }
+    };
+    const unb=box.querySelector('#cc_adjundo');
+    if(unb) unb.onclick=async()=>{
+      unb.disabled=true; adjMsg('saving…');
+      try{
+        const patch={adj_material:null, adj_labor:null, adj_equip:null,
+          adj_total:null, adj_yards:null, adj_at:null, adj_by:null};
+        const upd=await DB.patchQuote(r.id, patch);
+        if(DB.mode!=='demo' && !upd)
+          throw new Error('Nothing saved — run sql/53_adjusted_bid.sql in Supabase.');
+        Object.assign(r, patch);
+        bustCalCache();
+        toast('↩ Updated bid un-approved — back to the original numbers.', false);
+        calCard(r, rep, focusCrew);
+      }catch(e){ adjMsg('⚠ '+e.message); unb.disabled=false; }
     };
     const mk=box.querySelector('#cc_cmpmake');
     if(mk) mk.onclick=async()=>{
