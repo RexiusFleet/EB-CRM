@@ -761,6 +761,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           <button type="button" class="btn ghost sm" id="cal_next" style="flex:0 0 auto">›</button>
           <b id="cal_label" style="align-self:center;margin-left:6px"></b>
           <span style="flex:1 1 auto"></span>
+          <button type="button" class="btn ghost sm hide" id="cal_day" style="flex:0 0 auto">Day</button>
           <button type="button" class="btn ghost sm" id="cal_week" style="flex:0 0 auto">Week</button>
           <button type="button" class="btn ghost sm" id="cal_month" style="flex:0 0 auto">Month</button>
           <button type="button" class="btn ghost sm hide" id="cal_truck" style="flex:0 0 auto"
@@ -1284,7 +1285,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-10-nocompare';   // shown in the header; check it after deploying
+const BUILD = '2026-12-11-dayview';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -6154,11 +6155,20 @@ async function renderCal(){
   }
   const grid = $('#calgrid'); if(!grid) return;
   if(!Cal.anchor) Cal.anchor = calFmt(new Date());
-  ['cal_week','cal_month'].forEach(id=>{ const b=$('#'+id);
-    const on = (id==='cal_week')===(Cal.view==='week');
+  [['cal_day','day'],['cal_week','week'],['cal_month','month']].forEach(([id,v])=>{
+    const b=$('#'+id); if(!b) return;
+    const on = Cal.view===v;
     b.style.background = on ? 'var(--good)' : ''; b.style.color = on ? '#fff' : ''; });
   let from, to, days = [];
-  if(Cal.view==='week'){
+  if(Cal.view==='day'){
+    /* Day view (per Taylor 2026-12-11, for the driver iPads): one day of
+       the same time grid. Sundays aren't working days — land on Monday. */
+    let a9=new Date(Cal.anchor+'T00:00:00');
+    if(a9.getDay()===0){ a9.setDate(a9.getDate()+1); Cal.anchor=calFmt(a9); }
+    days=[Cal.anchor]; from=Cal.anchor; to=Cal.anchor;
+    $('#cal_label').textContent =
+      a9.toLocaleDateString([], {weekday:'long'})+' · '+dfmt(Cal.anchor);
+  }else if(Cal.view==='week'){
     const ws = calWeekStart(Cal.anchor);
     for(let i=0;i<6;i++){ const d=new Date(ws); d.setDate(d.getDate()+i); days.push(calFmt(d)); }
     from = days[0]; to = days[5];
@@ -6186,9 +6196,9 @@ async function renderCal(){
     : d.backend==='google' && d.calErr
     ? '⚠ Google overlay unavailable — showing app bookings only. '+esc(d.calErr.slice(0,90))
     : (Cal.crew ? 'Tap a job for the address, notes and photos.'
-                : (Cal.view==='week'
+                : (Cal.view==='week' || Cal.view==='day'
                     ? 'Drag a job to move it; tap an open spot to pencil a bid or block time.' : ''));
-  if(Cal.view==='week') renderCalWeek(grid, days, d);
+  if(Cal.view==='week' || Cal.view==='day') renderCalWeek(grid, days, d);
   else renderCalMonth(grid, from, to, d);
 }
 /* ---- Google-style time grid: one column per TRUCK per day ----------------
@@ -8219,6 +8229,8 @@ const DriverTruck = {
   }catch(e){} }
 };
 function updateTruckBtn(){
+  const db=$('#cal_day');
+  if(db) db.classList.toggle('hide', !DriverView);
   const b=$('#cal_truck'); if(!b) return;
   if(!DriverView){ b.classList.add('hide'); return; }
   b.classList.remove('hide');
@@ -8265,6 +8277,7 @@ function exitDriverMode(){
   if(!DriverView) return;
   DriverView = false;
   document.body.classList.remove('drivermode');
+  if(Cal.view==='day') Cal.view='week';   // the day view is the drivers'
   bustCalCache();                // bring the BID chips back for the rep
   const tp=$('#truckpick'); if(tp) tp.remove();
   updateTruckBtn();
@@ -10245,7 +10258,11 @@ function wire(){
   /* ---- internal calendar controls ---- */
   const calStep = dir => {
     const a = new Date((Cal.anchor||calFmt(new Date()))+'T00:00:00');
-    if(Cal.view==='week') a.setDate(a.getDate()+7*dir);
+    if(Cal.view==='day'){
+      a.setDate(a.getDate()+dir);
+      if(a.getDay()===0) a.setDate(a.getDate()+dir);   // Sundays off
+    }
+    else if(Cal.view==='week') a.setDate(a.getDate()+7*dir);
     else a.setMonth(a.getMonth()+dir);
     Cal.anchor = calFmt(a); renderCal();
   };
@@ -10255,6 +10272,7 @@ function wire(){
   $('#cal_block').onclick = ()=>calBlockCard();
   $('#cal_import').onclick = ()=>calImportCard();
   $('#cal_week').onclick = ()=>{ Cal.view='week'; renderCal(); };
+  $('#cal_day').onclick = ()=>{ Cal.view='day'; Cal.anchor=Cal.anchor||calFmt(new Date()); renderCal(); };
   $('#cal_truck').onclick = ()=>driverTruckPicker();
   $('#calsearch').addEventListener('input', debounce(calSearchRun, 250));
   $('#calsearch').addEventListener('focus', ()=>{
