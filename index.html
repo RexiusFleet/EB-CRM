@@ -1391,7 +1391,7 @@ function extractCity(a){
 
 /* ============================ data adapters ============================== */
 const LIVE = !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
-const State = { user:null, token:null, isAdmin:false, ratesEditor:false, ref:null, site:null, comps:[],
+const State = { user:null, token:null, employee:null, isAdmin:false, ratesEditor:false, ref:null, site:null, comps:[],
                 index:null, indexErr:null, savedQuoteId:null, scheduled:false,
                 qstatus:'draft', prefill:{customer:null, address:null} };
 
@@ -1559,9 +1559,71 @@ const SB = {
     try{ localStorage.setItem('rx_tok', JSON.stringify({t:j.access_token,r:j.refresh_token,u:j.user})); }catch(e){}
     return true;
   },
-  signOut(){ State.token=null; State.user=null; State.isAdmin=false; State.ratesEditor=false;
+  signOut(){ RexiusAuth.clear(); State.token=null; State.user=null; State.isAdmin=false; State.ratesEditor=false;
     try{ localStorage.removeItem('rx_tok'); }catch(e){} }
 };
+
+/* External Rexius authentication. The refresh code rotates on EVERY successful
+   request: persist the replacement before another request can start. */
+const RexiusAuth = {
+  endpoint:'https://app.rexius.com/API/authAPI.php',
+  key:'rx_external_auth',
+  pending:null,
+  read(){ try{ return JSON.parse(localStorage.getItem(this.key)||'null'); }catch(e){return null;} },
+  save(v){ localStorage.setItem(this.key, JSON.stringify(v)); },
+  clear(){ try{localStorage.removeItem(this.key);}catch(e){} State.employee=null; },
+  async authenticate(code, refresh=false){
+    if(this.pending) return this.pending;
+    this.pending=this._authenticate(code,refresh);
+    try{ return await this.pending; }finally{ this.pending=null; }
+  },
+  async _authenticate(code,refresh){
+    const r=await fetch(this.endpoint, {
+      method:'POST',
+      headers:refresh ? {'X-Auth-Refresh':code} : {'X-Auth-Code':code},
+      cache:'no-store'
+    });
+    let j;
+    try{ j=await r.json(); }catch(e){ throw new Error('Authentication server returned an invalid response (HTTP '+r.status+').'); }
+    if(Number(j.success)!==1) throw new Error(j.message||'External authentication failed.');
+    if(!r.ok) throw new Error(j.message||'Authentication request failed (HTTP '+r.status+').');
+    if(!j.token || !j.code) throw new Error('Authentication response is missing token or replacement code.');
+    // Save the newly rotated code immediately: the previous code is now expired,
+    // even if subsequent Supabase user lookup fails.
+    const employee=j.employee || (refresh && this.read()?.employee) || null;
+    this.save({code:j.code,employee});
+    // Resolve the Supabase user from the returned JWT; a JWT alone does not
+    // populate State.user, which the app uses to enforce the login gate.
+    const base=String(CONFIG.SUPABASE_URL||'').replace(/\/+$/,'');
+    const ur=await fetch(base+'/auth/v1/user', {
+      headers:{apikey:CONFIG.SUPABASE_ANON_KEY,Authorization:'Bearer '+j.token}
+    });
+    if(!ur.ok) throw new Error('Supabase rejected the authentication token (HTTP '+ur.status+').');
+    const user=await ur.json();
+    State.token=j.token; State.user=user; State.employee=employee;
+    return true;
+  },
+  async restore(){
+    const saved=this.read();
+    if(!saved?.code) return false;
+    return this.authenticate(saved.code,true);
+  }
+};
+function showExternalAuthError(message){
+  const d=$('#authdlg'); if(d) try{d.close();}catch(e){}
+  let g=$('#authgate');
+  if(!g){g=document.createElement('div');g.id='authgate';document.body.appendChild(g);}
+  g.innerHTML='<div style="max-width:460px;text-align:center">'+
+    '<h2>Authentication failed</h2><div class="note bad" id="externalAuthMessage"></div>'+
+    '<button class="btn" id="externalAuthRetry">Retry</button></div>';
+  $('#externalAuthMessage').textContent=message;
+  $('#externalAuthRetry').onclick=async()=>{
+    const b=$('#externalAuthRetry');b.disabled=true;
+    try{await RexiusAuth.restore();await loadData();}
+    catch(e){showExternalAuthError(e.message);}
+    finally{b.disabled=false;}
+  };
+}
 
 const DemoDB = {
   mode:'demo', B:null,
@@ -2380,14 +2442,43 @@ async function boot(){
 
   wire();                 // 1. controls live no matter what happens next
   show('quote');
-  renderAuth();
-
-  if(LIVE){ try{ await handleRecovery(); }catch(e){} }
-  if(LIVE){ try{ await SB.restore(); }catch(e){} }
-  /* Keep the session alive across a whole shift: tokens last ~1 hour,
-     a rep's tab lives all day. */
-  if(LIVE) setInterval(()=>{ if(State.user) SB.restore().catch(()=>{}); },
-    40*60*1000);
+  const url=new URL(location.href);
+  const initialCode=url.searchParams.get('code');
+  if(initialCode!==null){
+    url.searchParams.delete('code');
+    history.replaceState(null,'',url.pathname+url.search+url.hash);
+  }
+  const externalSession=LIVE && (initialCode!==null || !!RexiusAuth.read()?.code);
+  // Avoid flashing the password dialog while external auth is being checked.
+  if(!externalSession) renderAuth();
+  if(LIVE){
+    if(externalSession){
+      try{
+        if(initialCode!==null){
+          // New launch code supersedes any previous external session.
+          RexiusAuth.clear();
+          await RexiusAuth.authenticate(initialCode,false);
+        }else await RexiusAuth.restore();
+      }catch(e){showExternalAuthError(e.message);return;}
+    }else{
+      try{await handleRecovery();}catch(e){}
+      try{await SB.restore();}catch(e){}
+    }
+  }
+  /* Keep the session alive across a whole shift: tokens last ~1 hour.
+     External sessions rotate their code; native sessions use Supabase refresh. */
+  if(LIVE) setInterval(async()=>{
+    if(!State.user) return;
+    try{
+      if(RexiusAuth.read()?.code) await RexiusAuth.restore();
+      else await SB.restore();
+    }catch(e){
+      if(RexiusAuth.read()?.code){
+        State.token=null;State.user=null;
+        showExternalAuthError(e.message);
+      }
+    }
+  },40*60*1000);
   if(LIVE) setInterval(()=>{ if(State.user){
     updateSuggBadge().catch(()=>{});
     bidReminders().catch(()=>{});
