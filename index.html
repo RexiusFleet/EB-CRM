@@ -1283,7 +1283,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-12-nogoogle';   // shown in the header; check it after deploying
+const BUILD = '2026-12-13-chainmove';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -6417,9 +6417,26 @@ async function moveBooking(qid, si, tgt, hours){
     throw new Error(nm+' can\u2019t place '+(q.product||'this product')+' — not moved.');
   }
   const patch = {};
+  const hh9 = m => String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+  let chained = 0;   // trailing loads that followed a pure retime
   if(Array.isArray(q.slots) && q.slots.length > 2){
     const slots = q.slots.map(x=>Object.assign({}, x));
     if(!slots[si]) throw new Error('That day of the layout was not found — reopen the quote.');
+    /* Pure RETIME on the same truck+day (per Taylor 2026-12-13, the Kennan
+       Bloom overlap): the loads chained after this one on that truck+day
+       shift by the same delta, so back-to-back stays back-to-back. */
+    const orig = q.slots[si];
+    if(orig && orig.time && tgt.time &&
+       orig.date===tgt.date && String(orig.crew_id)===String(tgt.crew)){
+      const delta = toMin(tgt.time) - toMin(String(orig.time).slice(0,5));
+      for(let k=si+1; k<slots.length; k++){
+        const sl=slots[k];
+        if(!sl || sl.date!==orig.date ||
+           String(sl.crew_id)!==String(orig.crew_id) || !sl.time) continue;
+        const t9 = toMin(String(sl.time).slice(0,5)) + delta;
+        if(t9>=TG.START && t9<=TG.END-30){ sl.time=hh9(t9); chained++; }
+      }
+    }
     slots[si].date = tgt.date; slots[si].time = tgt.time; slots[si].crew_id = String(tgt.crew);
     patch.slots = slots;
     const s0 = slots[0], s1 = slots[1];
@@ -6435,11 +6452,23 @@ async function moveBooking(qid, si, tgt, hours){
   }else{
     patch.scheduled_date = tgt.date; patch.scheduled_time = tgt.time;
     patch.crew_id = String(tgt.crew);
+    /* Two-load job on ONE truck, load 1 retimed in place: load 2 keeps its
+       gap and follows (per Taylor 2026-12-13). A second load on a DIFFERENT
+       truck, or on another day, stays where it is. */
+    if(tgt.date===q.scheduled_date && String(tgt.crew)===String(q.crew_id) &&
+       q.crew2_id && String(q.crew2_id)===String(q.crew_id) &&
+       !q.scheduled_date2 && q.scheduled_time && q.scheduled_time2 && tgt.time){
+      const delta = toMin(tgt.time) - toMin(String(q.scheduled_time).slice(0,5));
+      const t9 = toMin(String(q.scheduled_time2).slice(0,5)) + delta;
+      if(t9>=TG.START && t9<=TG.END-30){ patch.scheduled_time2 = hh9(t9); chained++; }
+    }
   }
   if(DB.hasDate2===false) delete patch.scheduled_date2;
   if(DB.hasSlots===false) delete patch.slots;
   await DB.patchQuote(qid, patch);
   let warn = '';
+  if(chained) warn += ' The '+(chained===1?'load after it':chained+' loads after it')+
+    ' moved with it — spacing kept.';
   const endMin = toMin(tgt.time) + Math.round((hours||1)*60);
   if(endMin > 18*60) warn += ' \u26a0 Ends '+fmtMin(endMin)+' — past the 6 PM cutoff.';
   const backend = await calendarBackend();
