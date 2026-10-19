@@ -467,6 +467,19 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                   <option value="fill">Fill up — no set depth</option>
                 </select></div>
             </div>
+            <!-- Seed add-on (per Taylor 2026-12-14): only when a
+                 Terraseeding product is selected. -->
+            <div class="row hide" id="seedrow">
+              <div style="flex:2"><label class="f">Seed
+                <span class="small muted">the second product blown with the terraseed</span></label>
+                <input type="text" id="q_seedname" list="seedopts" autocomplete="off"
+                  placeholder="e.g. Eco-Turf blend">
+                <datalist id="seedopts"></datalist></div>
+              <div style="max-width:110px"><label class="f">Qty (lb)</label>
+                <input type="number" id="q_seedqty" class="num mono" step="1" min="0"></div>
+              <div style="max-width:110px"><label class="f">$ / lb</label>
+                <input type="number" id="q_seedcost" class="num mono" step="0.01" min="0"></div>
+            </div>
             <div class="small muted" id="depthhint" style="margin-top:-6px"></div>
             <div id="costwarn"></div>
             <div id="loadsnote"></div>
@@ -509,6 +522,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div class="kv"><span class="k">Cost</span><span class="v" id="o_cost">—</span></div>
               <div class="kv"><span class="k">Markup <span class="small" id="o_mkpct"></span></span>
                 <span class="v" id="o_mk">—</span></div>
+              <div class="kv hide" id="seedoutrow"><span class="k" id="k_seed">Seed</span>
+                <span class="v" id="o_seed">—</span></div>
               <div class="kv total"><span class="k">Target price</span><span class="v" id="o_target">—</span></div>
               <div class="kv hide" id="perloadrow"><span class="k" id="k_perload">Per truckload</span>
                 <span class="v" id="o_perload">—</span></div>
@@ -1283,7 +1298,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-13-chainmove';   // shown in the header; check it after deploying
+const BUILD = '2026-12-14-seedmove';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2838,6 +2853,11 @@ function fillProducts(){
   ph.value=''; ph.textContent='— choose a product —';
   sel.insertBefore(ph, sel.firstChild);
   sel.value = '';
+  /* seed suggestions: any rate-card item that reads like a seed */
+  const dl=$('#seedopts');
+  if(dl) dl.innerHTML=State.ref.rate_card
+    .filter(r=>/seed/i.test(r.product||'') && !/terra/i.test(r.product||''))
+    .map(r=>'<option value="'+esc(r.product)+'">').join('');
 }
 
 function currentRate(){
@@ -3527,6 +3547,16 @@ function renderSchedWho(){
       esc(probs.join(' · '))+'</span>':'')+
     '</div>';
 }
+/* Seed add-on (per Taylor 2026-12-14): a Terraseeding quote carries a
+   second product — the seed. Pass-through money: qty × $/lb rides the
+   Target price and the bid placeholder untouched by markup. */
+function seedInfo(){
+  const on = /terra/i.test($('#q_product').value||'');
+  const qty = parseFloat(($('#q_seedqty')||{value:''}).value)||0;
+  const cost = parseFloat(($('#q_seedcost')||{value:''}).value)||0;
+  return { on, name: (($('#q_seedname')||{value:''}).value||'').trim(),
+    qty, cost, total: on ? Math.round(qty*cost*100)/100 : 0 };
+}
 function recalc(){
   setTimeout(()=>{ syncSlotDurField(); renderSlotHint(); }, 0);
   renderSchedWho();
@@ -3573,7 +3603,18 @@ function recalc(){
   $('#o_cost').textContent=money2(p.cost);
   $('#o_mkpct').textContent='('+(p.markup*100).toFixed(0)+'% at '+yards+' yd)';
   $('#o_mk').textContent = p.cost==null?'—':money2(p.targetPrice-p.cost);
-  $('#o_target').textContent=money(p.targetPrice);
+  const seed=seedInfo();
+  { const sr=$('#seedrow'); if(sr) sr.classList.toggle('hide', !seed.on); }
+  { const sor=$('#seedoutrow');
+    if(sor){
+      sor.classList.toggle('hide', !(seed.on && seed.total>0));
+      $('#k_seed').innerHTML='Seed <span class="small">'+esc(seed.name||'')+
+        (seed.qty?' · '+seed.qty+' lb × '+money2(seed.cost)+'/lb — passes straight '+
+         'into the price':'')+'</span>';
+      $('#o_seed').textContent=money2(seed.total);
+    } }
+  $('#o_target').textContent=money(p.targetPrice!=null && seed.total
+    ? p.targetPrice+seed.total : p.targetPrice);
   /* Multi-load projects also read as price per truckload -- the number the
      office compares against single-load jobs. Based on the bid when one is
      typed (that's the real price), the target otherwise. */
@@ -3590,7 +3631,8 @@ function recalc(){
       }
     }
   }
-  if($('#q_bid').value==='' && p.targetPrice!=null) $('#q_bid').placeholder = Math.round(p.targetPrice);
+  if($('#q_bid').value==='' && p.targetPrice!=null)
+    $('#q_bid').placeholder = Math.round(p.targetPrice + (seedInfo().total||0));
   renderCompetitor(p);
   updateCrewEligibility();
   /* The split carries the job facts in its titles, so a rep reading the
@@ -4590,6 +4632,8 @@ async function openQuote(r){
   set('q_yards', r.yards); set('q_prep', r.prep_hours); set('q_drive', r.drive_hours);
   set('q_blow', r.blow_hours); set('q_helpers', r.helpers); set('q_notes', r.notes);
   set('q_bid', r.bid_amount);
+  set('q_seedname', r.seed_product); set('q_seedqty', r.seed_qty);
+  set('q_seedcost', r.seed_cost);
   $('#q_pw').value = r.prevailing_wage ? '1' : '0';
   State.qstatus = r.status || 'draft';
   if(r.product && [...$('#q_product').options].some(o=>o.value===r.product))
@@ -6419,7 +6463,9 @@ async function moveBooking(qid, si, tgt, hours){
   const patch = {};
   const hh9 = m => String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
   let chained = 0;   // trailing loads that followed a pure retime
-  if(Array.isArray(q.slots) && q.slots.length > 2){
+  /* ANY slots array is the board's source of truth — rewrite it for 1
+     and 2-slot layouts too (2026-12-14 snap-back fix). */
+  if(Array.isArray(q.slots) && q.slots.length){
     const slots = q.slots.map(x=>Object.assign({}, x));
     if(!slots[si]) throw new Error('That day of the layout was not found — reopen the quote.');
     /* Pure RETIME on the same truck+day (per Taylor 2026-12-13, the Kennan
@@ -6439,12 +6485,14 @@ async function moveBooking(qid, si, tgt, hours){
     }
     slots[si].date = tgt.date; slots[si].time = tgt.time; slots[si].crew_id = String(tgt.crew);
     patch.slots = slots;
-    const s0 = slots[0], s1 = slots[1];
+    const s0 = slots[0], s1 = slots.length>1 ? slots[1] : null;
     patch.scheduled_date = s0.date; patch.scheduled_time = s0.time;
     patch.scheduled_hours = s0.hours; patch.crew_id = String(s0.crew_id);
-    patch.crew2_id = String(s1.crew_id);
-    patch.scheduled_date2 = (s1.date!==s0.date) ? s1.date : null;
-    patch.scheduled_time2 = s1.time; patch.scheduled_hours2 = s1.hours;
+    if(s1){
+      patch.crew2_id = String(s1.crew_id);
+      patch.scheduled_date2 = (s1.date!==s0.date) ? s1.date : null;
+      patch.scheduled_time2 = s1.time; patch.scheduled_hours2 = s1.hours;
+    }
   }else if(q.crew2_id && si===1){
     patch.crew2_id = String(tgt.crew);
     patch.scheduled_date2 = (tgt.date!==q.scheduled_date) ? tgt.date : null;
@@ -6465,7 +6513,13 @@ async function moveBooking(qid, si, tgt, hours){
   }
   if(DB.hasDate2===false) delete patch.scheduled_date2;
   if(DB.hasSlots===false) delete patch.slots;
-  await DB.patchQuote(qid, patch);
+  const upd = await DB.patchQuote(qid, patch);
+  /* PostgREST reports a row-security refusal as a 0-row "success" — the
+     board used to toast Moved while nothing moved. Say so instead. */
+  if(DB.mode!=='demo' && !upd)
+    throw new Error('⚠ NOT moved — the save came back empty. This sign-in may '+
+      'not update this quote (run sql/44_rep_updates.sql in Supabase), or the '+
+      'row changed underneath you — refresh and try again.');
   let warn = '';
   if(chained) warn += ' The '+(chained===1?'load after it':chained+' loads after it')+
     ' moved with it — spacing kept.';
@@ -7450,6 +7504,14 @@ function calCard(r, rep, focusCrew, opts){
         ' · Labor '+esc(hrs(r.labor_hours))+'</div>'
       : '')+
     (loads?'<div class="small" style="margin-top:4px">'+loads+'</div>':'')+
+    /* Seed rides the job facts on EVERY flavor — the crew loads it. */
+    (Number(r.seed_qty)>0
+      ? '<div class="small" style="margin-top:4px">🌱 Seed: '+
+        esc(r.seed_product||'seed')+' · '+r.seed_qty+' lb'+
+        ((rep||office)&&r.seed_cost?' <span class="muted">× '+money2(r.seed_cost)+
+          '/lb = '+money2(Math.round(r.seed_qty*r.seed_cost*100)/100)+'</span>':'')+
+        '</div>'
+      : '')+
     /* Office money box (per Taylor): the three revenue lines + their
        total, and NOTHING else — no bid amount, costs, margins or notes. */
     ((office || (rep && cardShort))?(function(){
@@ -9956,6 +10018,9 @@ async function saveQuote(status, opts){
     cost_per_yard: p.costPerYard, material_cost: p.materialCost, labor_cost: p.laborCost,
     equip_cost: p.equipCost, overhead: p.overhead, total_cost: p.cost, markup: p.markup,
     target_price: p.targetPrice, bid_amount: p.bidAmount,
+    seed_product: (seedInfo().on && seedInfo().name) ? seedInfo().name : null,
+    seed_qty:  (seedInfo().on && seedInfo().qty>0)  ? seedInfo().qty  : null,
+    seed_cost: (seedInfo().on && seedInfo().qty>0)  ? seedInfo().cost : null,
     material_rev: p.materialRev, labor_rev: p.laborRev, equip_rev: p.equipRev,
     gross_margin: p.grossMargin,
     notes: $('#q_notes').value.trim()||null,
@@ -10045,6 +10110,11 @@ async function saveQuote(status, opts){
         if(tries<=3 && /tbd/i.test(em)){
           delete q.tbd;
           svWarn += ' ⚠ The TBD flag was NOT saved — run sql/45_todo.sql in Supabase.';
+          continue;
+        }
+        if(tries<=3 && /seed_/i.test(em)){
+          delete q.seed_product; delete q.seed_qty; delete q.seed_cost;
+          svWarn += ' ⚠ The seed fields were NOT saved — run sql/54_seed.sql in Supabase.';
           continue;
         }
         if(tries<=2 && /site_(notes|measurements|photos)/i.test(em)){
@@ -10271,6 +10341,8 @@ function wire(){
     recalc();
   }));
   $('#q_depth').addEventListener('change', recalc);
+  ['q_seedname','q_seedqty','q_seedcost'].forEach(id=>{
+    const el=$('#'+id); if(el) el.addEventListener('input', recalc); });
   $('#q_drive').addEventListener('input',()=>{autoFill.drive=false; recalc();});
   $('#q_blow').addEventListener('input',()=>{autoFill.blow=false; recalc();});
   $('#q_bid').addEventListener('input',recalc);
@@ -10343,7 +10415,8 @@ function wire(){
   };
   $('#newquote').onclick=()=>{
     ['q_customer','q_phone','q_email','q_address','q_city','q_zip','q_notes','q_bid',
-     'q_account','q_so','q_pn','q_custno'].forEach(i=>$('#'+i).value='');
+     'q_account','q_so','q_pn','q_custno',
+     'q_seedname','q_seedqty','q_seedcost'].forEach(i=>$('#'+i).value='');
     State.site=null; State.savedQuoteId=null; State.scheduled=false; State.calendarLive=false;
     State.openedSlots=null;
     State.qstatus='draft'; State.prefill={customer:null,address:null}; renderCustJobs();
