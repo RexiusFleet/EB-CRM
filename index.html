@@ -770,8 +770,6 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             title="Read-only board for the crew — no pricing anywhere">Crew view</button>
           <button type="button" class="btn ghost sm" id="cal_block" style="flex:0 0 auto"
             title="Holiday, PTO, shop day — suggestions steer around blocks">🚫 Block time</button>
-          <button type="button" class="btn ghost sm" id="cal_import" style="flex:0 0 auto"
-            title="Copy manual Google-calendar events into the app calendar">⇪ Import Google</button>
         </div>
         <div class="addrwrap" id="calsearchwrap" style="margin-top:8px;max-width:440px">
           <input type="text" id="calsearch" autocomplete="off"
@@ -1285,7 +1283,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-11-dayview';   // shown in the header; check it after deploying
+const BUILD = '2026-12-12-nogoogle';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -4516,15 +4514,10 @@ async function runCalCheck(){
       '<code>sql/12_apps_script.sql</code>.'));
     btn.disabled=false; return;
   }
-  GS.url = (cfg.apps_script_url || '').trim() || null;
   DT.url = (cfg.drive_time_url || '').trim() || null;
-  try{
-    _cbCache.t = 0;   // Check must read the CURRENT flag, not a cached one
-    const be = await calendarBackend();
-    rows.push(line(true, 'Calendar backend', be==='internal'
-      ? 'internal — bookings live in the app only; Google is not consulted'
-      : 'google — events sync to Google Calendar (app_config calendar_backend)'));
-  }catch(e){}
+  rows.push(line(true, 'Calendar',
+    'internal — bookings live in the app only. The Google calendar script '+
+    'is retired (2026-12-12) and is never called.'));
   /* Drive-time service (drive-time.gs): optional, so an unset URL is a
      grey fact, not a failure — but a SET URL that does not answer is. */
   if(!DT.url){
@@ -4544,77 +4537,11 @@ async function runCalCheck(){
       rows.push(line(false,'Drive time (Google Maps)', 'set, but unreachable: '+e.message));
     }
   }
-  rows.push(line(!!GS.url,'Calendar service URL',
-    GS.url ? String(GS.url).slice(0,44)+'…' : 'not set in app_config'));
-  if(!GS.url){
-    paint(note('Deploy <code>calendar-appscript.gs</code> from script.google.com, then: '+
-      '<code>update app_config set value = \'…/exec\' where key = \'apps_script_url\';</code> '+
-      '— README step 8.'));
-    btn.disabled=false; return;
-  }
-  if(!/\/exec\s*$/.test(GS.url)){
-    rows.push(line(false,'URL shape','does not end in /exec'));
-    paint(note('An Apps Script web app URL ends in <code>/exec</code>. A <code>/dev</code> '+
-      'URL only works while you are signed in as the script’s owner, so reps would get a '+
-      'sign-in page instead of an answer.'));
-    btn.disabled=false; return;
-  }
   rows.push(line(true,'Trucks', (CREWS||[]).length+' active'));
 
-  /* The service itself. This is the part that can be slow -- a cold Apps Script
-     takes a couple of seconds -- so it is timed and reported separately. */
-  working('calling the calendar service');
-  let ping;
-  try{ ping = await GS.ping(); }
-  catch(e){
-    rows.push(line(false,'Calendar service', e.status==='timeout' ? 'no answer in 25s' : e.message));
-    paint(note(e.status==='timeout'
-      ? 'The script did not answer. Open the URL in a browser tab: it should return a '+
-        'small JSON message. If it asks you to sign in, the deployment’s <b>Who has '+
-        'access</b> is not set to <b>Anyone</b>.'
-      : 'Check the deployment: <b>Deploy → Manage deployments</b>. <b>Execute as</b> must '+
-        'be <b>Me</b>, and <b>Who has access</b> must be <b>Anyone</b>. Remember that '+
-        'editing the script does not change what /exec runs — you must deploy a new '+
-        'version.'));
-    btn.disabled=false; return;
-  }
-  rows.push(line(true,'Calendar service','answered in '+secs()));
-  /* The single most common failure in this whole system: the code was edited
-     but the deployment was not. The script reports its version so that state
-     is visible instead of mysterious. */
-  /* SCRIPT_WANT is global (next to BUILD) — the booking path checks it too. */
-  if(ping.version === SCRIPT_WANT){
-    rows.push(line(true,'Script version', ping.version));
-  }else{
-    rows.push(line(false,'Script version',
-      (ping.version || 'older than versioning') + ' — this app expects ' + SCRIPT_WANT));
-    paint(note('The DEPLOYED script is out of date, so recent features (second '+
-      'calendar event for split projects, inspection interop, …) are not live. '+
-      'Paste the current <code>calendar-appscript.gs</code>, then '+
-      '<b>Deploy → Manage deployments → ✏️ → New version</b>. Editing code alone '+
-      'changes nothing at the /exec URL.'));
-  }
-  rows.push(line(true,'Running as', ping.runningAs||'(unknown)'));
-  rows.push(line(true,'Calendar', (ping.calendar||'')+(ping.timeZone?' · '+ping.timeZone:'')));
-
-  /* Prove it can actually read events, not just describe the calendar. */
-  working('reading today');
-  const today = new Date().toISOString().slice(0,10);
-  try{
-    const items = await GS.eventsOn(today);
-    rows.push(line(true,'Events readable', items.length+' event'+
-      (items.length===1?'':'s')+' on '+dfmt(today)));
-  }catch(e){
-    rows.push(line(false,'Events readable', e.message));
-    paint(note('The script reached the calendar but could not list events. If it mentions '+
-      'permission, the account in <b>Running as</b> above needs <b>Make changes to '+
-      'events</b> on that calendar.'));
-    btn.disabled=false; return;
-  }
-
-  paint('<div class="small muted" style="margin-top:8px">Finished in '+secs()+'. Everything '+
-    'is connected — a real booking will work. Reps never see a Google prompt: the script '+
-    'does the writing as '+esc(ping.runningAs||'its owner')+'.<br>Truck colours: '+
+  paint('<div class="small muted" style="margin-top:8px">Finished in '+secs()+'. '+
+    'Bookings live on the internal calendar — no Google account, script or '+
+    'deployment is involved anywhere.<br>Truck colours: '+
     esc((CREWS||[]).map(c=>c.name+' '+(c.calendar_color_id||'—')).join(' · '))+'</div>');
   btn.disabled=false;
 }
@@ -5192,7 +5119,7 @@ async function loadCrews(){
   try{ CREWS = await DB.crews(); }catch(e){ CREWS=[]; }
   try{
     const cfg = await DB.appConfig();
-    GS.url = (cfg.apps_script_url || '').trim() || null;
+    /* apps_script_url ignored — the Google calendar script is retired. */
     DT.url = (cfg.drive_time_url || '').trim() || null;
   }catch(e){ /* reported by the connection check, not here */ }
   const fill=(el, first)=>{
@@ -5624,12 +5551,10 @@ function splitCounts(){
    members sign in with their own accounts like anyone else. */
 let _cbCache = {t:0, v:'google'};
 async function calendarBackend(){
-  if(Date.now() - _cbCache.t < 60000) return _cbCache.v;
-  try{
-    const cfg = await DB.appConfig();
-    _cbCache = {t: Date.now(), v: cfg.calendar_backend==='internal' ? 'internal' : 'google'};
-  }catch(e){ _cbCache.t = Date.now(); }
-  return _cbCache.v;
+  /* Google Calendar is RETIRED (per Taylor 2026-12-12). The internal
+     calendar is the only backend; app_config.calendar_backend is no
+     longer consulted and the Apps Script is never called. */
+  return 'internal';
 }
 const Cal = { view:'week', anchor:null, crew:false };
 function calFmt(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+
@@ -10127,8 +10052,7 @@ async function saveQuote(status, opts){
       }else if((await calendarBackend())==='internal'){
         /* Internal backend: the quote row IS the booking. Nothing is sent to
            Google — the Calendar tab renders it, the engine already reads it. */
-        sync = ' Booked on the internal calendar (Google sync is off — '+
-               'app_config calendar_backend = internal).';
+        sync = ' Booked on the internal calendar.';
         State.scheduled = true;
         State.openedSlots = (saved && Array.isArray(saved.slots)) ? saved.slots : null;
         bustCalCache();
@@ -10270,7 +10194,6 @@ function wire(){
   $('#cal_next').onclick = ()=>calStep(1);
   $('#cal_today').onclick = ()=>{ Cal.anchor = calFmt(new Date()); renderCal(); };
   $('#cal_block').onclick = ()=>calBlockCard();
-  $('#cal_import').onclick = ()=>calImportCard();
   $('#cal_week').onclick = ()=>{ Cal.view='week'; renderCal(); };
   $('#cal_day').onclick = ()=>{ Cal.view='day'; Cal.anchor=Cal.anchor||calFmt(new Date()); renderCal(); };
   $('#cal_truck').onclick = ()=>driverTruckPicker();
