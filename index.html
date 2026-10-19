@@ -1298,7 +1298,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-14-seedmove';   // shown in the header; check it after deploying
+const BUILD = '2026-12-15-multitruck';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -5638,7 +5638,7 @@ async function calFetch(from, to){
       mat: b.material_rev!=null?Number(b.material_rev):null,
       lab: b.labor_rev!=null?Number(b.labor_rev):null,
       eqr: b.equip_rev!=null?Number(b.equip_rev):null,
-      tbd: !!b.tbd, batch: b.batch_id||null,
+      tbd: !!b.tbd, batch: b.batch_id||null, so: b.so_no||null,
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
       hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
@@ -6248,6 +6248,7 @@ function tgEvent(it, crew){
          2026-12-08): "1 of 2 jobs" instead of the bare load label. */
       (it.seqN>1 && !Cal.crew ? ' · <b>'+it.seq+' of '+it.seqN+' jobs</b>'
         : (it.yards && it.lbl && !Cal.crew ? ' · '+esc(it.lbl):''))+
+      (it.so ? ' · Ord '+esc(it.so) : '')+
       (!Cal.crew && it.yards && it.totYards && it.totYards>it.yards
         ? ' <span style="opacity:.75">(of '+
         (Math.round(it.totYards*10)/10)+')</span>':'')+
@@ -6296,12 +6297,13 @@ function tgBanner(it, crew){
 /* A backup truck keeps the board clean: its column appears only when
    something is actually scheduled/blocked on it in the visible range. */
 function visibleCrews(d, days){
-  /* Driver iPads show just their own truck (per Taylor 2026-12-03). */
-  if(DriverView){
-    const dt=DriverTruck.get();
-    if(dt && dt!=='all'){
-      const one=(CREWS||[]).filter(c=>String(c.id)===String(dt));
-      if(one.length) return one;
+  /* Driver iPads AND the crew view show just the picked truck(s)
+     (per Taylor 2026-12-03 / 2026-12-15). */
+  if(DriverView || (typeof Cal!=='undefined' && Cal.crew)){
+    const ids=DriverTruck.list();
+    if(ids){
+      const sel=(CREWS||[]).filter(c=>ids.includes(String(c.id)));
+      if(sel.length) return sel;
     }
   }
   return (CREWS||[]).filter(c=>{
@@ -7318,8 +7320,7 @@ function calMsg(t, bad){
 function renderCalMonth(grid, from, to, d){
   const today = calFmt(new Date());
   const month = from.slice(0,7);
-  const dtk=(DriverView && DriverTruck.get() && DriverTruck.get()!=='all')
-    ? String(DriverTruck.get()) : '';
+  const dtkIds=(DriverView || Cal.crew) ? DriverTruck.list() : null;
   const rows = []; let c = calWeekStart(from);
   while(calFmt(c) <= to){
     const row = [];
@@ -7330,8 +7331,8 @@ function renderCalMonth(grid, from, to, d){
   grid.innerHTML = '<div style="min-width:820px">'+rows.map(row=>
     '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:6px">'+
     row.map(date=>{
-      const items = d.jobs.filter(j=>j.date===date && (!dtk || String(j.crew_id)===dtk))
-        .concat(d.gEvents.filter(g=>g.date===date && (!dtk || String(g.crew_id)===dtk)))
+      const items = d.jobs.filter(j=>j.date===date && (!dtkIds || dtkIds.includes(String(j.crew_id))))
+        .concat(d.gEvents.filter(g=>g.date===date && (!dtkIds || dtkIds.includes(String(g.crew_id)))))
         .sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')));
       const chips = items.slice(0,3).map(it=>{
         const cr = (CREWS||[]).find(x=>String(x.id)===String(it.crew_id));
@@ -7474,6 +7475,15 @@ function calCard(r, rep, focusCrew, opts){
       : '')+
     (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" href="https://maps.google.com/?q='+
       encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
+    /* The job's numbers, at a glance on EVERY flavor (per Taylor
+       2026-12-15) — identifiers, not money, so the crew sees them too. */
+    ((r.account_no||r.so_no||r.project_no)
+      ? '<div class="small" style="margin-top:4px;font-weight:600">'+
+        [r.account_no?'Cust '+esc(r.account_no):null,
+         r.so_no?'Order '+esc(r.so_no):null,
+         r.project_no?'Project '+esc(r.project_no):null]
+        .filter(Boolean).join(' <span class="muted">·</span> ')+'</div>'
+      : '')+
     /* Phone shows on EVERY flavor of the card (per Taylor 2026-10-21:
        the crew needs it too, not just drivers). */
     (r.phone?
@@ -8196,6 +8206,7 @@ function enterCrewMode(){
   const tb=$('#tabs'); if(tb) tb.classList.add('hide');
   const b=$('#cal_crew'); if(b) b.textContent='Exit crew view';
   show('cal');
+  try{ updateTruckBtn(); }catch(e){}
 }
 function exitCrewMode(){
   if(!Cal.crew) return;
@@ -8203,6 +8214,7 @@ function exitCrewMode(){
   document.body.classList.remove('crewmode');
   const tb=$('#tabs'); if(tb) tb.classList.remove('hide');
   const b=$('#cal_crew'); if(b) b.textContent='Crew view';
+  try{ updateTruckBtn(); }catch(e){}
   renderCal();
 }
 /* Office portal (#office in the URL): the read-only board ONLY (per
@@ -8242,44 +8254,79 @@ const DriverTruck = {
   set(v){ try{
     if(v) localStorage.setItem('rx_driver_truck', v);
     else localStorage.removeItem('rx_driver_truck');
-  }catch(e){} }
+  }catch(e){} },
+  /* MULTI-TRUCK (per Taylor 2026-12-15): the stored pick is 'all' or a
+     comma list of crew ids ('2,3'). null = no filter (all trucks). */
+  list(){
+    const v=this.get();
+    if(!v || v==='all') return null;
+    const ids=String(v).split(',').map(x=>x.trim()).filter(Boolean);
+    return ids.length ? ids : null;
+  }
 };
 function updateTruckBtn(){
   const db=$('#cal_day');
   if(db) db.classList.toggle('hide', !DriverView);
   const b=$('#cal_truck'); if(!b) return;
-  if(!DriverView){ b.classList.add('hide'); return; }
+  /* The picker serves the CREW view too now (per Taylor 2026-12-15). */
+  const onBoard = DriverView || (typeof Cal!=='undefined' && Cal.crew);
+  if(!onBoard){ b.classList.add('hide'); return; }
   b.classList.remove('hide');
-  const id=DriverTruck.get();
-  const c=(CREWS||[]).find(x=>String(x.id)===String(id));
-  b.textContent='🚚 '+(c?c.name:'All trucks');
+  const ids=DriverTruck.list();
+  if(!ids){ b.textContent='🚚 All trucks'; return; }
+  const names=ids.map(id=>{
+    const c=(CREWS||[]).find(x=>String(x.id)===String(id));
+    return c ? ((String(c.name).match(/#\S+/)||[c.name])[0]) : '#'+id;
+  });
+  b.textContent='🚚 '+names.join(' + ');
 }
 function driverTruckPicker(){
   const old=$('#truckpick'); if(old) old.remove();
   if(!(CREWS||[]).length) return;      // trucks not loaded yet — renderCal retries
+  const cur=new Set(DriverTruck.list()||[]);
   const wrap=document.createElement('div'); wrap.id='truckpick';
   wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:120;'+
     'display:flex;align-items:center;justify-content:center;padding:20px';
+  const paintBtn=(b,on)=>{
+    b.dataset.on=on?'1':'0';
+    b.style.background=on?(b.dataset.col||'var(--accent)')+'22':'var(--panel-2)';
+    b.style.boxShadow=on?'inset 0 0 0 2px '+(b.dataset.col||'var(--accent)'):'';
+    const t=b.querySelector('.tpk'); if(t) t.textContent=on?'✓ ':'';
+  };
   wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);'+
     'border-radius:14px;max-width:420px;width:100%;max-height:90vh;overflow:auto;padding:22px">'+
-    '<div style="font-size:20px;font-weight:700;text-align:center">Which truck are you?</div>'+
-    '<div class="small muted" style="text-align:center;margin-top:4px">This device remembers '+
-    'the pick — the 🚚 button up top changes it any time.</div>'+
+    '<div style="font-size:20px;font-weight:700;text-align:center">Which truck(s)?</div>'+
+    '<div class="small muted" style="text-align:center;margin-top:4px">Tap one or MORE — '+
+    'this device remembers the pick; the 🚚 button up top changes it any time.</div>'+
     (CREWS||[]).map(c=>'<button type="button" data-tp="'+esc(String(c.id))+'" '+
+      'data-col="'+esc(c.color||'')+'" '+
       'style="display:block;width:100%;margin-top:12px;padding:18px 14px;font-size:19px;'+
       'font-weight:700;border-radius:12px;cursor:pointer;background:var(--panel-2);'+
       'color:var(--ink);border:2px solid '+esc(c.color||'var(--line)')+'">'+
-      esc(c.name)+(c.backup?' <span class="small muted" style="font-weight:400">— backup</span>':'')+
+      '<span class="tpk"></span>'+esc(c.name)+
+      (c.backup?' <span class="small muted" style="font-weight:400">— backup</span>':'')+
       '</button>').join('')+
-    '<button type="button" class="btn ghost" data-tp="all" '+
-    'style="display:block;width:100%;margin-top:14px">Show all trucks</button></div>';
+    '<button type="button" class="btn" id="tp_done" '+
+    'style="display:block;width:100%;margin-top:14px;padding:14px;font-size:17px;'+
+    'background:var(--good);color:#fff">✓ Done</button>'+
+    '<button type="button" class="btn ghost" id="tp_all" '+
+    'style="display:block;width:100%;margin-top:10px">Show all trucks</button></div>';
   document.body.appendChild(wrap);
-  wrap.querySelectorAll('[data-tp]').forEach(b=>b.onclick=()=>{
-    DriverTruck.set(b.dataset.tp);
+  wrap.querySelectorAll('[data-tp]').forEach(b=>{
+    paintBtn(b, cur.has(String(b.dataset.tp)));
+    b.onclick=()=>paintBtn(b, b.dataset.on!=='1');
+  });
+  const closeWith=v=>{
+    DriverTruck.set(v);
     wrap.remove();
     updateTruckBtn();
     try{ renderCal(); }catch(e){}
-  });
+  };
+  $('#tp_done').onclick=()=>{
+    const ids=[...wrap.querySelectorAll('[data-tp][data-on="1"]')].map(b=>b.dataset.tp);
+    closeWith(ids.length ? ids.join(',') : 'all');
+  };
+  $('#tp_all').onclick=()=>closeWith('all');
 }
 function enterDriverMode(){
   DriverView = true;
