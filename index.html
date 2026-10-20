@@ -225,8 +225,7 @@ body.officecal #cal_import{display:none}
 body.crewmode{font-size:17px}
 body.crewmode .calchip{font-size:15px;white-space:normal}
 body.crewmode #cal_block,body.crewmode #cal_import,
-body.crewmode #calsearchwrap,
-body.drivermode #cal_crew{display:none}
+body.crewmode #calsearchwrap{display:none}
 .kv.total .v{font-size:19px}
 .basis{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.4}
 .basis b{color:var(--accent);font-weight:600}
@@ -1298,7 +1297,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-15-multitruck';   // shown in the header; check it after deploying
+const BUILD = '2026-12-16-crewisdriver';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -10365,7 +10364,11 @@ function wire(){
      swaps the hash without adding a history entry; typed/bookmarked
      #crew links still work through applyCrewMode on load. */
   $('#cal_crew').onclick = ()=>{
-    const h = Cal.crew ? '' : '#crew';
+    /* The toggle shows the DRIVER flavor (per Taylor 2026-12-16): the
+       reps' crew preview matches what the drivers actually see — job
+       total $, shortfall strikes, no bid chips, the Day button. A plain
+       #crew URL still reaches the old money-free crew board. */
+    const h = (Cal.crew || DriverView) ? '' : '#driver';
     try{ history.replaceState(null, '', location.pathname+location.search+h); }
     catch(e){ location.hash = h; }
     applyCrewMode();
