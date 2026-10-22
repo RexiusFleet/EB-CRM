@@ -371,6 +371,10 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                   <div class="results hide" id="custresults"></div>
                 </div></div>
             </div>
+            <!-- Duplicate guard (per Taylor 2026-10-22, "Beth Lee"): a typed
+                 name / phone / address that looks like someone already on
+                 file shows here with a one-tap Use this. -->
+            <div id="dupebox"></div>
             <div class="row">
               <div style="min-width:170px"><label class="f">Phone</label><input type="text" id="q_phone" placeholder="(541) 555-0100"></div>
               <!-- flex:0 0 + min-width: the 9-digit customer number must
@@ -697,6 +701,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             <div style="min-width:170px"><label class="f">Phone</label>
               <input type="text" id="bd_phone" placeholder="(541) 555-0100"></div>
           </div>
+          <div id="bd_dupebox"></div>
           <div class="row" style="margin-top:8px">
             <div style="flex:2"><label class="f">Address</label>
               <div class="addrwrap" id="bd_addrwrap">
@@ -1311,7 +1316,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-22-bidcal';   // shown in the header; check it after deploying
+const BUILD = '2026-10-22-dupeguard';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1917,6 +1922,23 @@ const DemoDB = {
             quote_history:{n:B.quote_history.length},
             site_index:{n:(State.index||[]).length}, quotes:{n:this._quotes.length}};
   },
+  /* Duplicate guard: everything on file with this phone number. */
+  async findByPhone(digits){
+    const d=String(digits||'').replace(/\D/g,''); if(d.length<7) return [];
+    const out=[];
+    const hit=p=>String(p||'').replace(/\D/g,'').endsWith(d);
+    this.B.customers.forEach(c=>{ if(hit(c.phone)) out.push({src:'customer',
+      cust_id:c.cust_id, customer_name:c.customer_name, phone:c.phone,
+      address1:c.bill_addr1, city:c.bill_city, zip:c.bill_zip}); });
+    this.B.quote_history.forEach(q=>{ if(hit(q.phone)) out.push({src:'quote',
+      site_key:q.site_key, customer_name:q.customer_name, phone:q.phone,
+      address1:q.address_raw, city:q.city, zip:q.zip, when:q.quote_date}); });
+    (this._quotes||[]).forEach(q=>{ if(hit(q.phone)) out.push({src:'quote',
+      site_key:q.site_key, customer_name:q.customer_name, phone:q.phone,
+      address1:q.address_raw, city:q.city, zip:q.zip, cust_id:q.account_no,
+      when:(q.created_at||'').slice(0,10)}); });
+    return out;
+  },
   async searchIndex(){
     // Mirrors the site_index SQL view so both modes behave identically.
     const m = new Map();
@@ -2331,6 +2353,33 @@ const LiveDB = {
       out.push(...(rows||[]));
       if(!rows || rows.length<page) break;
     }
+    return out;
+  },
+  /* Duplicate guard: everything on file with this phone number. Phones
+     are stored every which way — "(541) 935-2245", "541-935-2245",
+     "5419352245" — so the match is a wildcard between digit groups. */
+  async findByPhone(digits){
+    const d=String(digits||'').replace(/\D/g,''); if(d.length<7) return [];
+    const last=d.slice(-10);
+    const groups = last.length===10 ? [last.slice(0,3),last.slice(3,6),last.slice(6)]
+                                    : [last.slice(0,3),last.slice(3)];
+    const pat=encodeURIComponent('*'+groups.join('*')+'*');
+    const [qs,qh,cs]=await Promise.all([
+      SB.rest('quotes?select=site_key,customer_name,phone,address_raw,city,zip,account_no,created_at'+
+        '&phone=ilike.'+pat+'&archived_at=is.null&order=created_at.desc&limit=6').catch(()=>[]),
+      SB.rest('quote_history?select=site_key,customer_name,phone,address_raw,city,zip,quote_date'+
+        '&phone=ilike.'+pat+'&order=quote_date.desc&limit=6').catch(()=>[]),
+      SB.rest('customers?select=cust_id,customer_name,phone,bill_addr1,bill_city,bill_zip'+
+        '&phone=ilike.'+pat+'&limit=6').catch(()=>[])
+    ]);
+    const out=[];
+    (cs||[]).forEach(c=>out.push({src:'customer', cust_id:c.cust_id, customer_name:c.customer_name,
+      phone:c.phone, address1:c.bill_addr1, city:c.bill_city, zip:c.bill_zip}));
+    (qs||[]).forEach(q=>out.push({src:'quote', site_key:q.site_key, customer_name:q.customer_name,
+      phone:q.phone, address1:q.address_raw, city:q.city, zip:q.zip, cust_id:q.account_no,
+      when:(q.created_at||'').slice(0,10)}));
+    (qh||[]).forEach(q=>out.push({src:'quote', site_key:q.site_key, customer_name:q.customer_name,
+      phone:q.phone, address1:q.address_raw, city:q.city, zip:q.zip, when:q.quote_date}));
     return out;
   },
   async searchIndex(){
@@ -3901,6 +3950,7 @@ async function loadSite(key, seed, opts){
      the site's history panel never overwrites them. That overwrite was a
      real field bug: open a saved quote, watch the drive time change. */
   if(!(opts && opts.preserveHours)) autoFill={drive:true,blow:true,prep:true};
+  try{ dupeCheckQuoteDebounced(); }catch(e){}
   renderHistory();
   renderCustJobs();
   recalc();
@@ -4294,6 +4344,236 @@ function initPickers(){
   });
 }
 
+/* ======================= DUPLICATE-CUSTOMER GUARD ========================
+   (2026-10-22-dupeguard, per Taylor: "help stop creating multiple accounts
+   for a similar address / customer. Beth Lee is an example" — her ERP
+   account and delivered job sit at 17910 Highway 126, Walton; a later
+   quote was filed as "beth lee" at "Walton", a second site with no
+   customer number.) Warn-and-offer, never block: as the rep types a name,
+   phone or address on the quote form or the bid worksheet, the people
+   already on file who look like a match show in a box under the name
+   with a one-tap "Use this" (= the normal pick-a-site fill, so the
+   Customer #, phone, address spelling and site key all come from the
+   record) and a "Not them" dismiss that holds for the session.
+   Signals, strongest first:
+     phone  — same digits anywhere on file (quotes, quote log, ERP customers)
+     name   — every typed word matches a word of a name on file: same word,
+              a 3+-letter prefix (Beth/Bethany), or one typo (Damerau ≤1 on
+              5+ letters); "LEE, BETH" / "Beth Lee" / "beth lee" all equal
+     address— same house number + a matching street word (any name: a
+              spouse or a renamed account at the same place)
+   Sources: the site index (orders + quote log + saved quotes, already in
+   memory), plus a phone lookup against the database. */
+const Dupe = { t:null, seq:0, dismissed:new Set(), quiet:false };
+const DUPE_STOP = new Set(['the','and','llc','inc','co','mr','mrs','ms','dr','of','a']);
+function dupeToks(s){
+  return String(s||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
+    .filter(t=>t.length>1 && !DUPE_STOP.has(t));
+}
+function dupeEdit1(a,b){            // Damerau-Levenshtein distance ≤ 1 ?
+  if(a===b) return true;
+  const la=a.length, lb=b.length;
+  if(Math.abs(la-lb)>1) return false;
+  let i=0; while(i<la && i<lb && a[i]===b[i]) i++;
+  if(la===lb){
+    if(a.slice(i+1)===b.slice(i+1)) return true;                 // substitution
+    return a[i]===b[i+1] && a[i+1]===b[i] && a.slice(i+2)===b.slice(i+2);  // swap
+  }
+  return la>lb ? a.slice(i+1)===b.slice(i) : b.slice(i+1)===a.slice(i);     // insert/delete
+}
+function dupeTokMatch(t,u){
+  if(t===u) return true;
+  if(t.length>=3 && u.length>=3 && (u.startsWith(t) || t.startsWith(u))) return true;
+  return t.length>=5 && u.length>=5 && dupeEdit1(t,u);
+}
+/* Does a typed name look like a name on file? 0 = no; 2 = all typed words
+   found; 3 = the same words exactly. One typed word must be exact + 4+
+   letters (a bare "lee" would match half the county). */
+function dupeNameScore(typed, onFile){
+  const T=dupeToks(typed); if(!T.length) return 0;
+  const names=String(onFile||'').split('|').map(x=>x.trim()).filter(Boolean);
+  let best=0;
+  names.forEach(n=>{
+    const U=dupeToks(n); if(!U.length) return;
+    if(T.length===1){
+      if(T[0].length>=4 && U.includes(T[0])) best=Math.max(best, U.length===1?3:2);
+      return;
+    }
+    const all=T.every(t=>U.some(u=>dupeTokMatch(t,u)));
+    if(!all) return;
+    const exact=T.length===U.length && T.every(t=>U.includes(t));
+    best=Math.max(best, exact?3:2);
+  });
+  return best;
+}
+function dupeAddrParts(a){
+  const k=streetKey(a); if(!k) return null;
+  const m=k.match(/^(\d+[a-z]?)\s+(.+)$/); if(!m) return null;
+  const words=stripSuffixWords(m[2]).split(' ').filter(w=>w && !/^(n|s|e|w|ne|nw|se|sw)$/.test(w));
+  return {num:m[1], words};
+}
+function dupeAddrMatch(typed, onFile){
+  const a=dupeAddrParts(typed), b=dupeAddrParts(onFile);
+  if(!a || !b || a.num!==b.num) return false;
+  return a.words.length && b.words.length &&
+    a.words.some(w=>b.words.some(v=>dupeTokMatch(w,v)));
+}
+/* The scan. Returns up to 3 candidates, best first. */
+async function dupeScan(name, phone, address, excludeKey){
+  const digits=String(phone||'').replace(/\D/g,'').slice(-10);
+  const cands=new Map();   // key → {score, why:Set, row}
+  const add=(key,row,score,why)=>{
+    if(!key) return;
+    if(excludeKey && key===excludeKey) return;
+    const c=cands.get(key)||{score:0, why:new Set(), row};
+    c.score+=score; c.why.add(why);
+    if(!c.row.customer_name && row.customer_name) c.row.customer_name=row.customer_name;
+    if(!c.row.cust_id && row.cust_id) c.row.cust_id=row.cust_id;
+    if(!c.row.phone && row.phone) c.row.phone=row.phone;
+    cands.set(key,c);
+  };
+  const rows=State.index||[];
+  const typedName=String(name||'').trim(), typedAddr=String(address||'').trim();
+  if(typedName || typedAddr){
+    for(const r of rows){
+      let sc=0, why=null;
+      if(typedName){
+        const ns=dupeNameScore(typedName, (r.customer_name||'')+'|'+(r.all_names||''));
+        if(ns){ sc+=ns; why='name'; }
+      }
+      if(typedAddr && dupeAddrMatch(typedAddr, r.address1)){ sc+=2; why=why?why+'+address':'address'; }
+      if(sc) add(r.site_key, r, sc, why);
+    }
+  }
+  if(digits.length>=7 && DB.findByPhone){
+    let ph=[]; try{ ph=await DB.findByPhone(digits); }catch(e){}
+    ph.forEach(r=>{
+      const key=r.site_key || ('cust:'+r.cust_id);
+      add(key, Object.assign({site_key:r.site_key||null}, r), 5, 'phone');
+    });
+  }
+  /* An ERP customer hit (no site key) whose address IS one of the site
+     candidates is the same person — fold it in, carrying the Cust #. */
+  for(const [key,c] of [...cands.entries()]){
+    if(!key.startsWith('cust:')) continue;
+    const sk=streetKey(c.row.address1||''); if(!sk) continue;
+    const host=cands.get(sk); if(!host) continue;
+    host.score+=c.score; c.why.forEach(w=>host.why.add(w));
+    if(!host.row.cust_id) host.row.cust_id=c.row.cust_id;
+    if(!host.row.phone) host.row.phone=c.row.phone;
+    cands.delete(key);
+  }
+  return [...cands.entries()].map(([key,c])=>Object.assign({key}, c))
+    .filter(c=>!Dupe.dismissed.has(c.key))
+    .sort((a,b)=>b.score-a.score ||
+      String(b.row.last_activity||b.row.when||'').localeCompare(String(a.row.last_activity||a.row.when||'')))
+    .slice(0,3);
+}
+function dupeFmtPhone(p){ const f=pickPhone(p); return f||String(p||''); }
+/* Draw the box. onUse(row) is the form's own fill routine. */
+function dupeRender(box, cands, onUse, onDismissAll){
+  if(!box) return;
+  if(!cands.length){ box.innerHTML=''; return; }
+  box.innerHTML='<div class="note" style="margin-top:4px;padding:9px 12px">'+
+    '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'+
+    '<b>⚠ Looks like a customer already on file</b>'+
+    '<button type="button" class="btn ghost sm" id="'+box.id+'_no" '+
+    'style="padding:2px 9px;flex:0 0 auto" title="It is a different person — hide these">'+
+    'Not them</button></div>'+
+    '<div class="small muted" style="margin:2px 0 6px">Use the record so the quote files under '+
+    'the same customer and site — no second account.</div>'+
+    cands.map((c,i)=>{
+      const r=c.row;
+      const addr=[r.address1, r.city].filter(Boolean).join(', ');
+      const facts=[];
+      if(r.cust_id) facts.push('Cust # '+esc(r.cust_id));
+      if(r.phone) facts.push(esc(dupeFmtPhone(r.phone)));
+      const n=(+r.n_orders||0), q=(+r.n_quotes||0);
+      if(n||q) facts.push((n?n+' delivered':'')+(n&&q?' · ':'')+(q?q+' quoted':''));
+      if(r.last_activity||r.when) facts.push('last '+dfmt(String(r.last_activity||r.when).slice(0,10)));
+      const why=[...c.why].map(w=>w.replace('+',' + ')).join(', ');
+      return '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;'+
+        'padding:6px 0;border-top:1px dashed var(--line)">'+
+        '<div style="flex:1 1 220px;min-width:0"><b>'+esc(r.customer_name||'(no name on file)')+'</b>'+
+        (addr?' <span class="muted">· '+esc(addr)+'</span>':'')+
+        '<div class="small muted">'+facts.join(' · ')+
+        ' <span class="tag" style="margin-left:4px">matched on '+esc(why)+'</span></div></div>'+
+        '<button type="button" class="btn sm" data-dupe="'+i+'" style="flex:0 0 auto;'+
+        'background:var(--good)">Use this</button></div>';
+    }).join('')+'</div>';
+  box.querySelectorAll('[data-dupe]').forEach(b=>{
+    b.onclick=()=>{ const c=cands[Number(b.dataset.dupe)]; box.innerHTML=''; onUse(c.row); };
+  });
+  const no=$('#'+box.id+'_no');
+  if(no) no.onclick=()=>{ cands.forEach(c=>Dupe.dismissed.add(c.key)); box.innerHTML='';
+    if(onDismissAll) onDismissAll(); };
+}
+/* The two forms. Quiet while a saved quote/bid is open untouched; a typed
+   edit lifts the quiet. */
+async function dupeCheckQuote(){
+  const box=$('#dupebox'); if(!box) return;
+  if(Dupe.quiet){ box.innerHTML=''; return; }
+  const name=$('#q_customer').value, phone=$('#q_phone').value, addr=$('#q_address').value;
+  if(!name.trim() && !addr.trim() && phone.replace(/\D/g,'').length<7){ box.innerHTML=''; return; }
+  const my=++Dupe.seq;
+  const loadedKey=State.site && State.site.key;
+  let cands=await dupeScan(name, phone, addr, null);
+  if(my!==Dupe.seq) return;
+  /* The site already loaded in the form is not a duplicate of itself —
+     UNLESS the rep typed a different name than the one on file there
+     (a second account at a known address is exactly the Beth Lee case),
+     in which case it stays listed so one tap adopts the record. */
+  cands=cands.filter(c=>{
+    if(c.key!==loadedKey) return true;
+    if(!name.trim()) return false;
+    return dupeNameScore(name, (c.row.customer_name||'')+'|'+(c.row.all_names||''))<2;
+  });
+  dupeRender(box, cands, r=>{
+    Dupe.quiet=true;      // chosen — stay quiet until the rep types again
+    if(r.site_key){
+      loadSite(r.site_key, {address1:r.address1, city:r.city, zip:r.zip});
+    }else{
+      /* ERP customer with no site on file: carry the account and contact */
+      if(r.customer_name) $('#q_customer').value=r.customer_name;
+      if(r.phone) $('#q_phone').value=dupeFmtPhone(r.phone);
+      if(r.cust_id){ $('#q_custno').value=r.cust_id;
+        $('#q_custno').dispatchEvent(new Event('input')); renderCustJobs(); }
+      if(r.address1 && !$('#q_address').value.trim()){
+        $('#q_address').value=r.address1; $('#q_city').value=r.city||''; $('#q_zip').value=r.zip||'';
+        $('#q_address').dispatchEvent(new Event('change'));
+      }
+    }
+    toast('✓ Using the customer on file — same account, same site.', false);
+  });
+}
+async function dupeCheckBid(){
+  const box=$('#bd_dupebox'); if(!box) return;
+  if(Dupe.quiet){ box.innerHTML=''; return; }
+  const name=$('#bd_customer').value, phone=$('#bd_phone').value, addr=$('#bd_address').value;
+  if(!name.trim() && !addr.trim() && phone.replace(/\D/g,'').length<7){ box.innerHTML=''; return; }
+  const my=++Dupe.seq;
+  const cands=await dupeScan(name, phone, addr, null);
+  if(my!==Dupe.seq) return;
+  /* the worksheet has no site state; an exact-name-and-address pick is quiet */
+  const quietOwn=cands.length && cands.every(c=>
+    String(c.row.customer_name||'').trim().toLowerCase()===name.trim().toLowerCase() &&
+    streetKey(c.row.address1||'')===streetKey(addr));
+  dupeRender(box, quietOwn?[]:cands, r=>{
+    Dupe.quiet=true;      // chosen — stay quiet until the rep types again
+    if(r.site_key) bidFillFromSite(Object.assign({site_key:r.site_key}, r));
+    else{
+      if(r.customer_name) $('#bd_customer').value=r.customer_name;
+      if(r.phone) $('#bd_phone').value=dupeFmtPhone(r.phone);
+      if(r.address1 && !$('#bd_address').value.trim()){
+        $('#bd_address').value=r.address1; $('#bd_city').value=r.city||''; $('#bd_zip').value=r.zip||''; }
+      bdChanged();
+    }
+    toast('✓ Using the customer on file.', false);
+  });
+}
+const dupeCheckQuoteDebounced=debounce(dupeCheckQuote, 450);
+const dupeCheckBidDebounced=debounce(dupeCheckBid, 450);
+
 /* ============================ saved quotes ============================== */
 /* One place to change a quote's status from the list, carrying the calendar
    with it. "Win" is the moment a pending hold becomes sold work: the status is
@@ -4660,6 +4940,7 @@ async function openQuote(r){
     : r.depth_in ? String(r.depth_in) : '2';
 
   State.savedQuoteId = r.id;
+  Dupe.quiet=true; { const db9=$('#dupebox'); if(db9) db9.innerHTML=''; }   // a saved quote is not a duplicate of itself
   State.openedSlots = Array.isArray(r.slots) ? r.slots : null;
   State.scheduled = !!(r.scheduled_date && r.crew_id);
   $('#q_scheddate').value = r.scheduled_date || '';
@@ -8457,6 +8738,7 @@ function bidReset(){
   const cv9=$('#bd_convert'); if(cv9) cv9.classList.add('hide');
   renderBidMeas(); renderBidPhotos();
   BdAuto.gen++; bdDraftClear();
+  Dupe.quiet=false; { const db9=$('#bd_dupebox'); if(db9) db9.innerHTML=''; }
 }
 /* Wait out any save in flight, then save whatever is still pending.
    true = the worksheet is in the database (or had nothing to save). */
@@ -8704,6 +8986,7 @@ function openBid(b){
   if(BdAuto.t) bdAutosave(false);   // flush the OLD bid's pending edits first (payload is read now)
   BdAuto.gen++;
   bdQuiet=true;
+  Dupe.quiet=true; { const db9=$('#bd_dupebox'); if(db9) db9.innerHTML=''; }
   try{ openBidFill(b); }finally{ bdQuiet=false; }
   bdSnapshot();                            // a refresh brings this bid straight back
   show('bids');
@@ -10602,6 +10885,11 @@ function wire(){
      stands — no prompt, no putting the original back. Wrong names get
      cleaned up in the data later; a prompt mid-quote caused mistakes. */
   $('#q_customer').addEventListener('change',()=>{ State.prefill.customer=null; });
+  /* Duplicate guard: re-scan as the who-and-where is typed. */
+  ['q_customer','q_phone','q_address','q_city'].forEach(id=>
+    $('#'+id).addEventListener('input', ()=>{ Dupe.quiet=false; dupeCheckQuoteDebounced(); }));
+  ['bd_customer','bd_phone','bd_address','bd_city'].forEach(id=>{
+    const el2=$('#'+id); if(el2) el2.addEventListener('input', ()=>{ Dupe.quiet=false; dupeCheckBidDebounced(); }); });
   $('#q_address').addEventListener('change',()=>{
     State.prefill.address=null;
     const k=resolveSiteKey($('#q_address').value);
@@ -10671,6 +10959,7 @@ function wire(){
     State.site=null; State.savedQuoteId=null; State.scheduled=false; State.calendarLive=false;
     State.openedSlots=null;
     State.qstatus='draft'; State.prefill={customer:null,address:null}; renderCustJobs();
+    Dupe.quiet=false; { const db9=$('#dupebox'); if(db9) db9.innerHTML=''; }
     /* The QUOTE resets too -- product, volume, crew sizing back to the same
        defaults a fresh page shows. Clear that left the calculator untouched
        looked like a button that did nothing. */
