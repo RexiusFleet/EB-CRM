@@ -672,7 +672,13 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
   <section id="view-bids" class="hide">
     <div class="grid" style="gap:16px">
       <div class="card">
-        <h3>New bid <span class="muted small" id="bd_state"></span></h3>
+        <!-- New bid moved up here, green (per Taylor 2026-10-22). The
+             worksheet AUTOSAVES, so this never throws work away: it flushes
+             any pending save first, then clears for the next site. -->
+        <h3><span>New bid <span class="muted small" id="bd_state"></span></span>
+          <button type="button" class="btn sm" id="bd_new"
+            style="background:var(--good);color:#fff;flex:0 0 auto"
+            title="Finish saving this bid, then start a fresh worksheet">+ New bid</button></h3>
         <div class="body">
           <div class="row">
             <div style="flex:2"><label class="f">Customer</label>
@@ -728,10 +734,11 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             <textarea id="bd_notes" rows="3"
               placeholder="Slope on the north side, second drop spot, homeowner wants a call first…"></textarea></div>
           <div class="saverow">
-            <button class="btn" id="bd_save" style="background:var(--good)">Save bid</button>
+            <button class="btn" id="bd_save" style="background:var(--good)"
+              title="The worksheet autosaves as you type — this just saves right now">Save bid</button>
             <button class="btn hide" id="bd_convert" style="background:var(--accent);color:var(--accent-ink)"
               title="Carries everything on this worksheet into a quote">→ Convert to quote</button>
-            <button class="btn ghost" id="bd_new">New bid</button>
+            <span class="small muted" style="align-self:center">autosaves as you type</span>
             <div id="bd_msg" style="flex:1 1 100%"></div>
           </div>
         </div>
@@ -1297,7 +1304,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-12-16-crewisdriver';   // shown in the header; check it after deploying
+const BUILD = '2026-10-22-bidautosave';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2803,7 +2810,7 @@ function show(v){
   document.body.classList.toggle('calwide', v==='cal');
   ['quote','bids','bidlist','quotes','cal','dash','rates','reports','todo','sugg'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
-  if(v==='bids')   fillBidProducts();
+  if(v==='bids'){  fillBidProducts(); bdDraftRestore(); }
   if(v==='bidlist') renderBidsList();
   if(v==='cal')    renderCal();
   if(v==='quotes') renderQuotesList();
@@ -8397,6 +8404,139 @@ function bidReset(){
   $('#bd_state').textContent='';
   const cv9=$('#bd_convert'); if(cv9) cv9.classList.add('hide');
   renderBidMeas(); renderBidPhotos();
+  BdAuto.gen++; bdDraftClear();
+}
+/* Wait out any save in flight, then save whatever is still pending.
+   true = the worksheet is in the database (or had nothing to save). */
+async function bdFlush(){
+  while(BdAuto.busy) await new Promise(r=>setTimeout(r,120));
+  if(BdAuto.t || BdAuto.again){ BdAuto.again=false; return bdAutosave(false); }
+  return true;
+}
+
+/* ---- BID AUTOSAVE (2026-10-22-bidautosave, per Taylor) ----------------
+   Field report: a rep filled in every measurement, pressed New bid before
+   Save bid, and lost the lot — nothing was anywhere but the screen. Now:
+   (1) every keystroke snapshots the worksheet to THIS browser
+       (localStorage rx_bid_draft) and the snapshot comes back on the next
+       visit to the tab — a dead phone, a closed tab or a refresh mid
+       walk-through no longer costs the measurements;
+   (2) 1.5 s after the last change the worksheet saves to the bids table
+       (POST the first time, PATCH after — one in-flight save at a time, a
+       change during a save queues one more). The only bid that cannot
+       reach the database is one with neither a customer nor an address;
+       the draft keeps it until one is typed.
+   Save bid is now just "save right now"; New bid flushes first. */
+const BdAuto = { t:null, busy:false, again:false, fails:0, gen:0 };
+const BD_DRAFT_KEY = 'rx_bid_draft';
+let bdQuiet = false;                       // openBid/bidReset: not a user edit
+function bdHasContent(){
+  return !!(BidSt.meas.length || BidSt.photos.length ||
+    ['bd_customer','bd_phone','bd_address','bd_city','bd_zip','bd_notes']
+      .some(i=>{ const el2=$('#'+i); return el2 && el2.value.trim(); }) ||
+    ($('#bd_product')&&$('#bd_product').value));
+}
+function bdState(t){ const s=$('#bd_state'); if(s) s.textContent=t||''; }
+function bdSnapshot(){
+  if(bdQuiet) return;
+  try{
+    if(!bdHasContent()){ localStorage.removeItem(BD_DRAFT_KEY); return; }
+    localStorage.setItem(BD_DRAFT_KEY, JSON.stringify({
+      id:BidSt.id, meas:BidSt.meas, photos:BidSt.photos, at:Date.now(),
+      f:{ customer:$('#bd_customer').value, phone:$('#bd_phone').value,
+          address:$('#bd_address').value, city:$('#bd_city').value,
+          zip:$('#bd_zip').value, product:$('#bd_product').value,
+          depth:$('#bd_depth').value, notes:$('#bd_notes').value }
+    }));
+  }catch(e){}
+}
+function bdDraftClear(){ clearTimeout(BdAuto.t); BdAuto.t=null;
+  try{ localStorage.removeItem(BD_DRAFT_KEY); }catch(e){} }
+/* Called on every user edit of the worksheet. */
+function bdChanged(){
+  if(bdQuiet) return;
+  bdSnapshot();
+  clearTimeout(BdAuto.t);
+  if(!bdHasContent()){ BdAuto.t=null; bdState(''); return; }
+  const pl=bidPayload();
+  if(!pl.customer_name && !pl.address_raw){
+    bdState('· kept on this device — add a customer or address to save it');
+    BdAuto.t=null; return;
+  }
+  bdState('· unsaved changes…');
+  BdAuto.t=setTimeout(()=>bdAutosave(false), 1500);
+}
+/* Save the worksheet now. Returns true when the row is in the database.
+   manual=true is the Save bid button: it also reports in the message box. */
+async function bdAutosave(manual){
+  clearTimeout(BdAuto.t); BdAuto.t=null;
+  if(BdAuto.busy){ BdAuto.again=true; return false; }
+  const pl=bidPayload();
+  if(!pl.customer_name && !pl.address_raw){
+    if(manual) bdMsg('Give the bid at least a customer or an address.', true);
+    return false;
+  }
+  /* gen: if the rep opens another bid (or presses New bid) while this
+     save is in flight, the reply must not stamp ITS id or status onto
+     the worksheet that replaced it. */
+  const gen=BdAuto.gen, id=BidSt.id;
+  BdAuto.busy=true; bdState('· saving…');
+  let ok=false;
+  try{
+    const saved=await DB.saveBid(pl, id);
+    if(DB.mode!=='demo' && !saved) throw new Error('nothing came back from the database');
+    BdAuto.fails=0; ok=true;
+    if(gen===BdAuto.gen){
+      BidSt.id=(saved&&saved.id)||BidSt.id;
+      bdSnapshot();                                 // the draft now carries the id
+      const cv=$('#bd_convert'); if(cv && BidSt.id) cv.classList.remove('hide');
+      bdState('· ✓ saved '+new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}));
+      if(manual) bdMsg('Bid saved — it is on the Saved Bids tab.'+(pl.measurements?' Suggests '+
+        pl.measurements.suggested_yards+' yd when it becomes a quote.':''), false);
+    }
+  }catch(e){
+    BdAuto.fails++;
+    const why=/bids/.test(e.message||'')
+      ? 'The bids table is missing — run sql/29_bids.sql in Supabase.' : (e.message||'save failed');
+    if(gen===BdAuto.gen){
+      bdState('· ⚠ NOT saved — '+why+' (kept on this device)');
+      if(manual || BdAuto.fails===1) bdMsg('⚠ Could not save the bid: '+why+
+        ' Your work is kept on this device — it will retry as you keep working.', true);
+    }
+  }
+  BdAuto.busy=false;
+  if(BdAuto.again){ BdAuto.again=false; BdAuto.t=setTimeout(()=>bdAutosave(false), 800); }
+  return ok;
+}
+/* The draft comes back the first time the tab is shown after a reload —
+   silently when it belongs to a saved bid, with a note when it was never
+   saved. Drafts older than 3 days are dropped (a long-gone walk-through
+   should not greet a rep weeks later). */
+let bdDraftRestored=false;
+function bdDraftRestore(){
+  if(bdDraftRestored) return; bdDraftRestored=true;
+  let d=null; try{ d=JSON.parse(localStorage.getItem(BD_DRAFT_KEY)||'null'); }catch(e){}
+  if(!d || !d.f) return;
+  if(Date.now()-(d.at||0) > 3*86400000){ bdDraftClear(); return; }
+  if(bdHasContent()) return;                        // something is already open
+  bdQuiet=true;
+  try{
+    BidSt.id=d.id||null;
+    BidSt.meas=Array.isArray(d.meas)?d.meas:[];
+    BidSt.photos=Array.isArray(d.photos)?d.photos:[];
+    $('#bd_customer').value=d.f.customer||''; $('#bd_phone').value=d.f.phone||'';
+    $('#bd_address').value=d.f.address||''; $('#bd_city').value=d.f.city||'';
+    $('#bd_zip').value=d.f.zip||''; $('#bd_notes').value=d.f.notes||'';
+    fillBidProducts();
+    if(d.f.product && [...$('#bd_product').options].some(o=>o.value===d.f.product))
+      $('#bd_product').value=d.f.product;
+    $('#bd_depth').value=d.f.depth||'2';
+    const cv=$('#bd_convert'); if(cv) cv.classList.toggle('hide', !BidSt.id);
+    renderBidMeas(); renderBidPhotos();
+  }finally{ bdQuiet=false; }
+  bdState(BidSt.id ? '· editing a saved bid (restored)' : '· restored — never saved yet');
+  if(!BidSt.id) bdMsg('Restored the bid you were working on. It will save itself once it has '+
+    'a customer or an address.', false);
 }
 function bidTotals(){
   const sqft = BidSt.meas.reduce((t,m)=>t+(m.off?0:svSqft(m)), 0);
@@ -8441,11 +8581,11 @@ function renderBidMeas(){
       row.style.opacity=m.off?'.55':'';
       const sf=Math.round(svSqft(m));
       row.querySelector('.m_sf').textContent=sf?sf.toLocaleString():'—';
-      renderBidTotal(); };
+      renderBidTotal(); bdChanged(); };
     row.querySelectorAll('input').forEach(inp=>inp.addEventListener('input', upd));
     row.querySelector('.m_on').addEventListener('change', upd);
     row.querySelector('.m_del').onclick=()=>{ BidSt.meas.splice(Number(row.dataset.bmi),1);
-      renderBidMeas(); };
+      renderBidMeas(); bdChanged(); };
   });
   renderBidTotal();
 }
@@ -8478,7 +8618,7 @@ function renderBidPhotos(){
     svThumbUrl(p2).then(u=>{ if(!u) return;
       const img=card.querySelector('.pimg'); img.src=u; img.style.display='block';
       card.querySelector('.pfall').style.display='none'; });
-    card.querySelector('.pdel').onclick=()=>{ BidSt.photos.splice(i,1); renderBidPhotos(); };
+    card.querySelector('.pdel').onclick=()=>{ BidSt.photos.splice(i,1); renderBidPhotos(); bdChanged(); };
   });
 }
 function bidPayload(){
@@ -8509,6 +8649,14 @@ function bdMsg(t,bad){ const b=$('#bd_msg'); if(!b) return;
   b.innerHTML='<div class="note '+(bad?'bad':'ok')+'">'+esc(t)+'</div>';
   clearTimeout(bdMsgTimer); bdMsgTimer=setTimeout(()=>{b.innerHTML='';},6000); }
 function openBid(b){
+  if(BdAuto.t) bdAutosave(false);   // flush the OLD bid's pending edits first (payload is read now)
+  BdAuto.gen++;
+  bdQuiet=true;
+  try{ openBidFill(b); }finally{ bdQuiet=false; }
+  bdSnapshot();                            // a refresh brings this bid straight back
+  show('bids');
+}
+function openBidFill(b){
   BidSt.id=b.id;
   BidSt.meas=(b.measurements&&Array.isArray(b.measurements.areas))
     ? b.measurements.areas.map(a=>({label:a.label||'', l:a.l??'', w:a.w??'',
@@ -8694,6 +8842,7 @@ async function bidFillFromSite(r){
     const ph = pickPhone(pick(first&&first.phone, cu&&cu.phone, st&&st.phone));
     if(ph) $('#bd_phone').value = ph;
   }catch(e){ /* the picked row's own fields are already in — good enough */ }
+  bdChanged();                                 // a picked site is an edit too
 }
 function fillBidProducts(){
   const sel=$('#bd_product'); if(!sel || sel.options.length>1) return;
@@ -10499,9 +10648,35 @@ function wire(){
     bdSearchTerm = $('#bdsearch').value.trim();
     renderBidsList();
   }, 150));
-  $('#bd_measadd').onclick=()=>{ BidSt.meas.push({label:'',l:'',w:'',sf:''}); renderBidMeas(); };
+  $('#bd_measadd').onclick=()=>{ BidSt.meas.push({label:'',l:'',w:'',sf:''}); renderBidMeas(); bdChanged(); };
   $('#bd_depth').addEventListener('change', renderBidTotal);
-  $('#bd_new').onclick=()=>{ bidReset(); bdMsg('New bid.', false); };
+  /* Every typed field on the worksheet feeds the autosave (the measurement
+     rows and photos call bdChanged themselves). */
+  ['bd_customer','bd_phone','bd_address','bd_city','bd_zip','bd_notes','bd_product','bd_depth']
+    .forEach(i=>{ const el2=$('#'+i); if(!el2) return;
+      el2.addEventListener('input', bdChanged); el2.addEventListener('change', bdChanged); });
+  /* New bid never discards work: it finishes saving the open bid first.
+     The one bid that cannot be saved — no customer AND no address — asks. */
+  $('#bd_new').onclick=async()=>{
+    const btn=$('#bd_new'); btn.disabled=true;
+    try{
+      if(bdHasContent()){
+        const pl=bidPayload();
+        if(!pl.customer_name && !pl.address_raw){
+          if(!confirm('This bid has no customer or address yet, so it could not be saved.\n'+
+            'Start a new bid and discard it?')) return;
+        }else if(!(await bdFlush())){
+          bdMsg('⚠ The open bid could not be saved — fix that (or add a customer/address) '+
+            'before starting a new one, so nothing is lost.', true);
+          return;
+        }
+      }
+      const had=!!BidSt.id;
+      bidReset();
+      bdMsg(had ? 'New bid — the last one is saved on the Saved Bids tab.' : 'New bid.', false);
+      try{ $('#bd_customer').focus(); }catch(e){}
+    }finally{ btn.disabled=false; }
+  };
   $('#bd_photoadd').onclick=()=>{
     if(DB.mode==='demo'){ $('#bd_photomsg').textContent='demo mode — no photo storage'; return; }
     if(!State.token){ $('#bd_photomsg').textContent='sign in first'; return; }
@@ -10516,15 +10691,10 @@ function wire(){
       try{ BidSt.photos.push(await svUploadPhoto(files[i])); renderBidPhotos(); }
       catch(err){ pm.textContent='⚠ '+err.message; return; }
     }
-    /* A photo added to a SAVED bid records itself immediately — losing a
-       photo because "Save bid" wasn't pressed again cost a real field test. */
-    if(BidSt.id){
-      try{ await DB.patchBid(BidSt.id, {photos: bidPayload().photos}); }catch(err){}
-      pm.textContent=files.length+' photo'+(files.length>1?'s':'')+' saved on the bid.';
-    }else{
-      pm.textContent=files.length+' photo'+(files.length>1?'s':'')+
-        ' on the bid — press Save bid to keep everything.';
-    }
+    /* Photos ride the same autosave as everything else (losing a photo
+       because "Save bid" wasn't pressed again cost a real field test). */
+    bdChanged();
+    pm.textContent=files.length+' photo'+(files.length>1?'s':'')+' on the bid.';
   });
   $('#bd_convert').onclick=async()=>{
     if(!BidSt.id) return;
@@ -10533,22 +10703,14 @@ function wire(){
     catch(e){ bdMsg('⚠ '+e.message, true); }
     btn.disabled=false;
   };
+  /* Save bid = save right now (the autosave does the same thing 1.5 s
+     after the last keystroke). */
   $('#bd_save').onclick=async()=>{
-    const pl=bidPayload();
-    if(!pl.customer_name && !pl.address_raw){
-      bdMsg('Give the bid at least a customer or an address.', true); return; }
     $('#bd_save').disabled=true;
     try{
-      const saved=await DB.saveBid(pl, BidSt.id);
-      BidSt.id=saved&&saved.id||BidSt.id;
-      $('#bd_state').textContent='· editing a saved bid';
-      bdMsg('Bid saved — it is on the Saved Bids tab.'+(pl.measurements?' Suggests '+
-        pl.measurements.suggested_yards+' yd when it becomes a quote.':''), false);
-    }catch(e){
-      bdMsg(/bids/.test(e.message||'')
-        ? 'The bids table is missing — run sql/29_bids.sql in Supabase.' : e.message, true);
-    }
-    $('#bd_save').disabled=false;
+      while(BdAuto.busy) await new Promise(r=>setTimeout(r,120));
+      await bdAutosave(true);
+    }finally{ $('#bd_save').disabled=false; }
   };
   $('#q_depth').addEventListener('change', renderBidPanel);
   $('#q_yards').addEventListener('input', renderBidPanel);
