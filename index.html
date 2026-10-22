@@ -201,6 +201,13 @@ body.bidmode .bid-convert{display:none}
 body.bidmode #tabs button{display:none}
 body.bidmode #tabs button[data-view="bids"],
 body.bidmode #tabs button[data-view="bidlist"]{display:inline-block}
+/* Bid + calendar role (sql/55, per Taylor 2026-10-22): the bid portal
+   plus the Calendar tab in the DRIVER flavor — read-only board, phone,
+   truck picker, day view, job totals — never the builder, never a
+   booking verb. The rep's own calendar tools stay hidden. */
+body.bidcal #tabs button[data-view="cal"]{display:inline-block}
+body.bidcal #cal_block,body.bidcal #cal_crew,body.bidcal #cal_import,
+body.bidcal #calsearchwrap{display:none}
 /* Office portal (#office): the CALENDAR only (per Taylor 2026-11-02 —
    Saved Quotes is hidden from the office). One tab is no menu, so the
    whole bar goes, like the crew view; the board is look-don't-touch,
@@ -1304,7 +1311,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-22-bidautosave';   // shown in the header; check it after deploying
+const BUILD = '2026-10-22-bidcal';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2803,10 +2810,15 @@ function show(v){
   // The tab bar scrolls sideways on phones -- keep the active tab in sight.
   const cur=$('#tabs button[aria-current="true"]');
   if(cur && cur.scrollIntoView) try{ cur.scrollIntoView({block:'nearest',inline:'nearest'}); }catch(e){}
-  /* The bid portal never leaves its two views, whatever asks. */
-  if(typeof BidPortal!=='undefined' && BidPortal && v!=='bids' && v!=='bidlist') v='bids';
+  /* The bid portal never leaves its two views (three with the calendar
+     role), whatever asks. */
+  if(typeof BidPortal!=='undefined' && BidPortal && v!=='bids' && v!=='bidlist' &&
+     !(typeof BidCal!=='undefined' && BidCal && v==='cal')) v='bids';
   if(typeof OfficePortal!=='undefined' && OfficePortal && v!=='cal') v='cal';
-  if(typeof Cal!=='undefined' && Cal.crew && v!=='cal') v='cal';
+  /* Crew/driver boards are calendar-only — except the bid+calendar role,
+     whose read-only board sits BESIDE its bid tabs. */
+  if(typeof Cal!=='undefined' && Cal.crew && v!=='cal' &&
+     !(typeof BidCal!=='undefined' && BidCal)) v='cal';
   document.body.classList.toggle('calwide', v==='cal');
   ['quote','bids','bidlist','quotes','cal','dash','rates','reports','todo','sugg'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
@@ -5703,8 +5715,9 @@ async function calFetch(from, to){
      pencil mark, shown but NEVER fed to the engine (see bookingsPoolFor). */
   (allBids||[]).forEach(b=>{
     /* Bid visits are the REP'S errand — the drivers' iPads never show
-       them (per Taylor 2026-12-04). */
-    if(DriverView) return;
+       them (per Taylor 2026-12-04). The bid+calendar role DOES see them:
+       they are that person's own errands (2026-10-22). */
+    if(DriverView && !(typeof BidCal!=='undefined' && BidCal)) return;
     if(!b || !b.scheduled_date || b.status==='quoted' || b.archived_at) return;
     if(b.scheduled_date<from || b.scheduled_date>to) return;
     /* A bid visit scheduled from a quote has no truck — it draws in the
@@ -6383,7 +6396,8 @@ function wireTimegrid(grid){
   });
   grid.querySelectorAll('.tgev[data-bidid]').forEach(ch=>{
     ch.onclick = e=>{ e.stopPropagation();
-      if(!Cal.crew && !officeEyes()) bidCardById(ch.dataset.bidid); };
+      if((!Cal.crew || (typeof BidCal!=='undefined' && BidCal)) && !officeEyes())
+        bidCardById(ch.dataset.bidid); };
   });
   /* Empty grid space opens the two-action chooser (per Taylor: never the
      quote builder): pencil a BID onto the slot, or BLOCK the time out. */
@@ -6928,8 +6942,9 @@ async function calAddCard(date, crewId, time){
 async function bidReminders(){
   const host=$('#bidremind'); if(!host) return;
   if(typeof OfficePortal!=='undefined' && OfficePortal) return;
-  if(typeof BidPortal!=='undefined' && BidPortal) return;
-  if(typeof Cal!=='undefined' && Cal.crew) return;
+  const bidCal = (typeof BidCal!=='undefined' && BidCal);   // their OWN visits — keep
+  if(typeof BidPortal!=='undefined' && BidPortal && !bidCal) return;
+  if(typeof Cal!=='undefined' && Cal.crew && !bidCal) return;
   host.innerHTML='';
   const today=calFmt(new Date());
   let snooze=''; try{ snooze=localStorage.getItem('rx_bidremind')||''; }catch(e){}
@@ -7005,9 +7020,9 @@ async function bidCardById(id){
     (b.notes?'<div style="margin-top:10px"><b class="small">Bid notes</b>'+
       '<div class="small">'+esc(b.notes)+'</div></div>':'')+
     '<div class="row" style="margin-top:14px">'+
-    '<button type="button" class="btn" id="bc_conv" style="background:var(--good)">Convert to quote</button>'+
+    '<button type="button" class="btn bid-convert" id="bc_conv" style="background:var(--good)">Convert to quote</button>'+
     '<button type="button" class="btn ghost" id="bc_open">Open bid</button>'+
-    '<button type="button" class="btn ghost" id="bc_unpin" style="color:var(--danger)">Un-pencil</button>'+
+    '<button type="button" class="btn ghost bid-convert" id="bc_unpin" style="color:var(--danger)">Un-pencil</button>'+
     '</div></div>';
   document.body.appendChild(wrap);
   $('#bc_x').onclick=()=>wrap.remove();
@@ -8352,15 +8367,48 @@ function exitDriverMode(){
   updateTruckBtn();
 }
 let BidPortal = false;
-function enterBidMode(){
+/* Bid + CALENDAR role (sql/55 bid_cal_users, or the #bidcal hash for a
+   rep's preview — per Taylor 2026-10-22: "a bid only rep. They can see
+   new bids, saved bids, and the calendar like the drivers"). The two bid
+   tabs plus the Calendar tab; the board runs in the DRIVER flavor
+   (Cal.crew + DriverView: read-only, phone on the card, truck picker, Day
+   view, job totals on chips) and, unlike the drivers' iPads, still draws
+   the dashed BID chips — tapping one opens the worksheet (no Convert, no
+   Un-pencil: .bid-convert stays hidden). The tab bar is kept, so the
+   driver-mode entry helpers (which hide it) are not used here. */
+let BidCal = false;
+function enterBidMode(opts){
+  const wantCal = !!(opts && opts.cal);
+  if(!wantCal && BidCal) exitBidMode();     // #bidcal → #bid: drop the board cleanly
   BidPortal = true;
-  document.body.classList.add('bidmode');   // CSS leaves only the two bid tabs
+  document.body.classList.add('bidmode');   // CSS leaves only the bid tabs
+  if(wantCal){
+    if(!BidCal){
+      BidCal = true;
+      document.body.classList.add('bidcal');
+      if(!DriverTruck.get()) DriverTruck.set('all');   // the bid rep wants every truck
+    }
+    /* Re-asserted on every apply: the exit helpers that run first on a
+       hashchange clear these flags. */
+    Cal.crew = true; DriverView = true;      // read-only driver-flavor board
+    bustCalCache();
+    try{ updateTruckBtn(); }catch(e){}
+  }
   show('bids');
 }
 function exitBidMode(){
   if(!BidPortal) return;
   BidPortal = false;
   document.body.classList.remove('bidmode');
+  if(BidCal){
+    BidCal = false;
+    document.body.classList.remove('bidcal');
+    Cal.crew = false; DriverView = false;
+    if(Cal.view==='day') Cal.view='week';
+    bustCalCache();
+    const tp=$('#truckpick'); if(tp) tp.remove();
+    try{ updateTruckBtn(); }catch(e){}
+  }
 }
 /* Who is this sign-in? Asks the security-definer role functions from
    sql/29 / 33 / 34; a 404 (sql file not run yet) simply means "not that
@@ -8369,9 +8417,10 @@ async function detectRole(){
   if(!LIVE || !State.user || DB.mode==='demo') return null;
   const ask = fn => SB.rest('rpc/'+fn, {method:'POST', body:'{}'})
     .then(v=>v===true).catch(()=>false);
-  const [o,d,b] = await Promise.all([
-    ask('is_office_user'), ask('is_driver_user'), ask('is_bid_only_user')]);
-  return o ? 'office' : d ? 'driver' : b ? 'bid' : null;
+  const [o,d,b,bc] = await Promise.all([
+    ask('is_office_user'), ask('is_driver_user'), ask('is_bid_only_user'),
+    ask('is_bid_cal_user')]);
+  return o ? 'office' : d ? 'driver' : b ? 'bid' : bc ? 'bidcal' : null;
 }
 function applyCrewMode(){
   /* A database-locked role OWNS the view — the hash cannot break out. */
@@ -8379,9 +8428,12 @@ function applyCrewMode(){
   if(role==='office'){ exitCrewMode(); exitDriverMode(); exitBidMode(); enterOfficeMode(); return; }
   if(role==='driver'){ exitBidMode(); exitOfficeMode(); enterDriverMode(); return; }
   if(role==='bid'){ exitCrewMode(); exitDriverMode(); exitOfficeMode(); enterBidMode(); return; }
+  if(role==='bidcal'){ exitCrewMode(); exitDriverMode(); exitOfficeMode(); enterBidMode({cal:true}); return; }
   if(/(^|#|&)driver/.test(location.hash)){ exitBidMode(); exitOfficeMode(); enterDriverMode(); }
   else if(/(^|#|&)crew/.test(location.hash)){ exitBidMode(); exitOfficeMode(); exitDriverMode(); enterCrewMode(); }
   else if(/(^|#|&)office/.test(location.hash)){ exitCrewMode(); exitDriverMode(); exitBidMode(); enterOfficeMode(); }
+  /* #bidcal must be tested BEFORE #bid (the shorter pattern matches it too). */
+  else if(/(^|#|&)bidcal/.test(location.hash)){ exitCrewMode(); exitDriverMode(); exitOfficeMode(); enterBidMode({cal:true}); }
   else if(/(^|#|&)bid/.test(location.hash)){ exitCrewMode(); exitDriverMode(); exitOfficeMode(); enterBidMode(); }
   else { exitCrewMode(); exitDriverMode(); exitBidMode(); exitOfficeMode(); }
 }
