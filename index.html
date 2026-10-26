@@ -575,6 +575,26 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
               <div><label class="f">Project</label>
                 <input type="text" id="q_pn" autocomplete="off"></div>
             </div>
+            <!-- Internal job (per Taylor 2026-10-26): a Rexius-internal
+                 project carries its own number — CC / RC / RM / CM # — in
+                 place of a customer order. The box reveals the fields;
+                 the number prints on the quote and the calendar chip only
+                 when the box is ticked. sql/56. -->
+            <div class="row" style="align-items:flex-end">
+              <label class="small" style="flex:0 0 auto;display:flex;gap:6px;align-items:center;
+                padding-bottom:10px;font-weight:600">
+                <input type="checkbox" id="q_internal"> Internal job
+                <span class="muted" style="font-weight:400">— Rexius project, not a customer order</span></label>
+              <div class="hide" id="q_intkindwrap" style="flex:0 0 110px;max-width:120px">
+                <label class="f">Type</label>
+                <select id="q_intkind">
+                  <option value="CC">CC #</option><option value="RC">RC #</option>
+                  <option value="RM">RM #</option><option value="CM">CM #</option>
+                </select></div>
+              <div class="hide" id="q_intnowrap" style="flex:0 1 220px">
+                <label class="f">Internal project #</label>
+                <input type="text" id="q_intno" autocomplete="off" class="mono" placeholder="e.g. 2026-041"></div>
+            </div>
             <div class="small muted" style="margin-top:-6px">Optional — most jobs are
               scheduled before the ERP assigns these. When they arrive, type them here and
               press <b>Save quote</b>: a booked job's calendar event picks them up.</div>
@@ -1316,7 +1336,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-22-dupeguard';   // shown in the header; check it after deploying
+const BUILD = '2026-10-26-keepbook';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2123,7 +2143,16 @@ const LiveDB = {
       'scheduled_date,scheduled_time,scheduled_hours,equip_hours,crew2_id,scheduled_time2,'+
       'account_no,so_no,project_no,batch_id';
     try{
-      // first choice: everything incl. tbd (sql/45)
+      // first choice: everything incl. the internal job # (sql/56)
+      const r = await SB.rest(base+',closed_out_at,invoice_sent_at,feedback_open,'+
+        'bid_amount,feedback_vol,material_rev,labor_rev,equip_rev,tbd,'+
+        'internal,internal_kind,internal_no,'+
+        'scheduled_date2,scheduled_hours2,slots'+tail);
+      this.hasDate2 = true; this.hasSlots = true;
+      return r;
+    }catch(e56){}
+    try{
+      // everything incl. tbd (sql/45)
       const r = await SB.rest(base+',closed_out_at,invoice_sent_at,feedback_open,'+
         'bid_amount,feedback_vol,material_rev,labor_rev,equip_rev,tbd,'+
         'scheduled_date2,scheduled_hours2,slots'+tail);
@@ -2886,6 +2915,16 @@ function show(v){
 /* The ERP account number IS the customer number with a dash after the
    company prefix: 020104709 -> 02-0104709. One formatter, used by the
    history fill, the live Customer # field and the save fallback. */
+/* Internal job fields show only while the box is ticked. */
+function internalToggle(){
+  const on=!!($('#q_internal')&&$('#q_internal').checked);
+  ['q_intkindwrap','q_intnowrap'].forEach(id=>{ const e2=$('#'+id); if(e2) e2.classList.toggle('hide', !on); });
+}
+/* "CC #2026-041" — the chip/card label for an internal job; '' when off. */
+function internalLabel(r){
+  if(!r || !r.internal) return '';
+  return (r.internal_kind||'')+' #'+(r.internal_no||'?');
+}
 function acctFromCust(c){
   c = String(c||'').replace(/\D/g,'');
   return c.length > 2 ? c.slice(0,2) + '-' + c.slice(2) : '';
@@ -4932,6 +4971,10 @@ async function openQuote(r){
   set('q_bid', r.bid_amount);
   set('q_seedname', r.seed_product); set('q_seedqty', r.seed_qty);
   set('q_seedcost', r.seed_cost);
+  $('#q_internal').checked = !!r.internal;
+  if(r.internal_kind) $('#q_intkind').value = r.internal_kind;
+  set('q_intno', r.internal_no);
+  internalToggle();
   $('#q_pw').value = r.prevailing_wage ? '1' : '0';
   State.qstatus = r.status || 'draft';
   if(r.product && [...$('#q_product').options].some(o=>o.value===r.product))
@@ -5938,6 +5981,7 @@ async function calFetch(from, to){
       lab: b.labor_rev!=null?Number(b.labor_rev):null,
       eqr: b.equip_rev!=null?Number(b.equip_rev):null,
       tbd: !!b.tbd, batch: b.batch_id||null, so: b.so_no||null,
+      intl: internalLabel(b),       // "CC #2026-041" on internal jobs, else ''
       crew_id:String(crew||''), date, time: time?String(time).slice(0,5):null,
       hours: Number(hours)||null, hold, lbl: lbl||'', si: si||0}); };
     if(Array.isArray(b.slots) && b.slots.length){
@@ -6549,6 +6593,7 @@ function tgEvent(it, crew){
       (it.seqN>1 && !Cal.crew ? ' · <b>'+it.seq+' of '+it.seqN+' jobs</b>'
         : (it.yards && it.lbl && !Cal.crew ? ' · '+esc(it.lbl):''))+
       (it.so ? ' · Ord '+esc(it.so) : '')+
+      (it.intl ? ' · <b>'+esc(it.intl)+'</b>' : '')+
       (!Cal.crew && it.yards && it.totYards && it.totYards>it.yards
         ? ' <span style="opacity:.75">(of '+
         (Math.round(it.totYards*10)/10)+')</span>':'')+
@@ -7284,6 +7329,10 @@ async function bidCardById(id){
     '<button type="button" class="btn ghost sm" id="bc_x">✕</button></span></div>'+
     (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" '+
       'href="https://maps.google.com/?q='+encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
+    /* tap-to-call (per Taylor 2026-10-26: the bid card from the calendar
+       shows the customer's phone) */
+    (b.phone?'<div style="margin-top:4px">📞 <a href="tel:'+esc(String(b.phone).replace(/[^\d+]/g,''))+
+      '">'+esc(fmtPhoneTyped(b.phone))+'</a></div>':'')+
     (m.sqft?'<div class="small" style="margin-top:6px">'+Number(m.sqft).toLocaleString()+
       ' sq ft ≈ '+m.suggested_yards+' yd</div>':'')+
     (b.scheduled_date?'<div class="small" style="margin-top:4px">📌 '+
@@ -7779,9 +7828,10 @@ function calCard(r, rep, focusCrew, opts){
       encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':'')+
     /* The job's numbers, at a glance on EVERY flavor (per Taylor
        2026-12-15) — identifiers, not money, so the crew sees them too. */
-    ((r.account_no||r.so_no||r.project_no)
+    ((r.account_no||r.so_no||r.project_no||r.internal)
       ? '<div class="small" style="margin-top:4px;font-weight:600">'+
-        [r.account_no?'Cust '+esc(r.account_no):null,
+        [r.internal?'🏗 Internal job · '+esc(internalLabel(r)):null,
+         r.account_no?'Cust '+esc(r.account_no):null,
          r.so_no?'Order '+esc(r.so_no):null,
          r.project_no?'Project '+esc(r.project_no):null]
         .filter(Boolean).join(' <span class="muted">·</span> ')+'</div>'
@@ -10369,7 +10419,19 @@ async function saveQuote(status, opts){
      however many days (and whichever trucks are picked) it takes. The only
      refusal left is a start time so late that even slot 1 busts the wall. */
   let layout = null, layoutNote = '';
-  if(status==='sent'||status==='won'){
+  /* KEEP THE BOOKING (per Taylor 2026-10-26: "when I update a scheduled
+     quote, it would be great if I didn't have to reschedule all the trucks
+     again"). An Update of a held/booked quote while the Schedule section
+     is in BOOKED mode (no Re-schedule pressed) saves the quote's fields
+     and leaves every scheduling column untouched — the day-1 slot, the
+     second truck, every N-day slot and any hand-dragged times stay
+     exactly as they are on the calendar. The same applies to the booked
+     card's Schedule verb on a HOLD: the status firms up, the slots do
+     not move. Re-schedule → pick mode → the layout runs as before. */
+  const keepBooking = !!State.savedQuoteId && State.scheduled &&
+    (status==='sent'||status==='won') &&
+    (typeof SchedUI!=='undefined' && SchedUI.mode==='booked');
+  if((status==='sent'||status==='won') && !keepBooking){
     /* The layout math needs the truck capacities. A rep who reopens a quote
        and presses Hold immediately used to beat the capacity fetch -- the
        project read as one load and the old (pre-cutoff) shape was rebooked
@@ -10389,7 +10451,7 @@ async function saveQuote(status, opts){
         fmtMin(toMin(t0))+'.';
     }
   }
-  if((status==='sent'||status==='won') && $('#q_schedtime').value &&
+  if((status==='sent'||status==='won') && !keepBooking && $('#q_schedtime').value &&
      projectLoads().loads > 1){
     /* The planner, when on screen, IS the layout: the rep scheduled
        each load by hand (yards included). Refuse an incomplete or
@@ -10498,7 +10560,7 @@ async function saveQuote(status, opts){
      warrants a long day -- but never silent. The warning rides the save
      confirmation, with the arithmetic. */
   let lateNote = '';
-  if(status==='sent'||status==='won'){
+  if((status==='sent'||status==='won') && !keepBooking){
     const over = (timeVal, hrs, label) => {
       if(!timeVal || !(hrs>0)) return '';
       const endMin = toMin(timeVal) + Math.round(hrs*60);
@@ -10558,6 +10620,11 @@ async function saveQuote(status, opts){
       || acctFromCust($('#q_custno').value) || null,
     so_no: $('#q_so').value.trim()||null,
     project_no: $('#q_pn').value.trim()||null,
+    /* Internal job (sql/56): the kind + number save only while the box is
+       ticked; unticking clears them on the row. */
+    internal: $('#q_internal').checked,
+    internal_kind: $('#q_internal').checked ? ($('#q_intkind').value||null) : null,
+    internal_no: $('#q_internal').checked ? ($('#q_intno').value.trim()||null) : null,
     /* The booking lives on the quote like everything else, so one Save carries
        it. In live mode the calendar sync below re-writes these via the script
        (idempotent); in demo mode this is all the booking there is. */
@@ -10594,6 +10661,13 @@ async function saveQuote(status, opts){
     const keep = (layout && layout.nday) ? layout.nday.slots.length : 2;
     retire = State.openedSlots.slice(keep).map(sl=>sl&&sl.event_id).filter(Boolean);
   }
+  if(keepBooking){
+    /* Not a single scheduling key leaves the browser: whatever the row
+       holds (drags included) stays. */
+    ['scheduled_date','crew_id','scheduled_time','scheduled_hours','crew2_id',
+     'scheduled_date2','scheduled_time2','scheduled_hours2','slots'].forEach(k=>{ delete q[k]; });
+    retire = [];
+  }
   if(layout && layout.nday){
     const s0=layout.nday.slots[0], s1=layout.nday.slots[1];
     q.scheduled_time = s0.time; q.scheduled_hours = s0.hours;
@@ -10606,6 +10680,7 @@ async function saveQuote(status, opts){
   /* sql/25 adds scheduled_date2; a database that has not run it yet must
      still save (bookingsBetween's fallback records which world we are in). */
   if(q.scheduled_date2===null && DB.hasDate2===false) delete q.scheduled_date2;
+  if(keepBooking) layoutNote = ' Booking kept as scheduled — the trucks did not move.';
   /* Site visit rides the quote row (sql/27); the bid link (sql/29) too. */
   Object.assign(q, svPayload());
   q.bid_id = State.fromBidId || null;
@@ -10647,6 +10722,11 @@ async function saveQuote(status, opts){
           svWarn += ' ⚠ The seed fields were NOT saved — run sql/54_seed.sql in Supabase.';
           continue;
         }
+        if(tries<=3 && /internal/i.test(em)){
+          delete q.internal; delete q.internal_kind; delete q.internal_no;
+          svWarn += ' ⚠ The internal job # was NOT saved — run sql/56_internal_job.sql in Supabase.';
+          continue;
+        }
         if(tries<=2 && /site_(notes|measurements|photos)/i.test(em)){
           delete q.site_notes; delete q.site_measurements; delete q.site_photos;
           svWarn += ' ⚠ The site-visit fields (measurements, notes, photos) were NOT saved — '+
@@ -10681,7 +10761,7 @@ async function saveQuote(status, opts){
       }else if((await calendarBackend())==='internal'){
         /* Internal backend: the quote row IS the booking. Nothing is sent to
            Google — the Calendar tab renders it, the engine already reads it. */
-        sync = ' Booked on the internal calendar.';
+        sync = keepBooking && status===wasStatus ? '' : ' Booked on the internal calendar.';
         State.scheduled = true;
         State.openedSlots = (saved && Array.isArray(saved.slots)) ? saved.slots : null;
         bustCalCache();
@@ -10738,7 +10818,8 @@ async function saveQuote(status, opts){
     renderSchedState(saved||{});
     bustSuggCache(); bustCalCache(); renderSuggestionsDebounced(); renderCapNoteDebounced();
     updateSchedMode();
-    const verb = status==='won' ? '\u2713 Scheduled \u2014 booked on the calendar.'
+    const verb = (keepBooking && status===wasStatus) ? '\u2713 Quote updated.'
+               : status==='won' ? '\u2713 Scheduled \u2014 booked on the calendar.'
                : status==='sent' ? '\u2713 On hold \u2014 the slot is held on the calendar.'
                : status==='lost' ? '\u2713 Marked lost.'
                : (wasNew?'\u2713 Quote saved.':'\u2713 Quote updated.');
@@ -10931,6 +11012,8 @@ function wire(){
   $('#schedquote').onclick=()=>saveQuote('won');
   $('#lostquote').onclick=()=>saveQuote('lost');
   $('#q_custno').addEventListener('change', renderCustJobs);
+  $('#q_internal').addEventListener('change', ()=>{ internalToggle();
+    if($('#q_internal').checked) try{ $('#q_intno').focus(); }catch(e){} });
   /* Customer # flows DOWN into the quote's Account # as it is typed or
      filled (per Taylor 2026-11-04: it was not populating into the quote
      info or the calendar event). A hand-typed Account # always wins. */
@@ -10955,7 +11038,8 @@ function wire(){
   $('#newquote').onclick=()=>{
     ['q_customer','q_phone','q_email','q_address','q_city','q_zip','q_notes','q_bid',
      'q_account','q_so','q_pn','q_custno',
-     'q_seedname','q_seedqty','q_seedcost'].forEach(i=>$('#'+i).value='');
+     'q_seedname','q_seedqty','q_seedcost','q_intno'].forEach(i=>$('#'+i).value='');
+    $('#q_internal').checked=false; $('#q_intkind').value='CC'; internalToggle();
     State.site=null; State.savedQuoteId=null; State.scheduled=false; State.calendarLive=false;
     State.openedSlots=null;
     State.qstatus='draft'; State.prefill={customer:null,address:null}; renderCustJobs();
