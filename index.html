@@ -88,6 +88,10 @@ main{max-width:1400px;margin:0 auto;padding:20px 18px 80px}
 label.f{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;letter-spacing:.02em}
 input[type=text],input[type=number],input[type=email],input[type=password],input[type=date],input[type=time],select,textarea{
   width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2)}
+/* Crew notes read like a note, not a slit (per Taylor 2026-11-02): bigger
+   type, roomier start, and the box GROWS with the text (snGrow). */
+#q_sitenotes{font-size:16.5px;line-height:1.55;min-height:92px;resize:vertical;
+  overflow-y:hidden}
 /* A <select> defaults to line-height:normal while an <input> inherits 1.5, so
    side by side the dropdown sits ~4px shorter. Pin both to the same height so
    Product and Yards line up in every browser. */
@@ -1336,7 +1340,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-10-26-keepbook';   // shown in the header; check it after deploying
+const BUILD = '2026-11-02-bignotes';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -5010,6 +5014,7 @@ async function openQuote(r){
   setHistoryCollapsed(r.status==='sent' || r.status==='won');
   /* Site visit: measurements, notes and photos ride the row. */
   $('#q_sitenotes').value = r.site_notes || '';
+  try{ snGrow(); }catch(e){}
   /* Legacy quotes may carry old rep-only notes: show them read-only under
      the shared field (they stay on the quote; new text goes to everyone). */
   const on=$('#oldnotes');
@@ -9289,6 +9294,7 @@ async function convertBid(id){
     const sn=$('#q_sitenotes');
     if(sn && sn.value.indexOf(b.notes)<0)
       sn.value=(sn.value.trim()? sn.value.trim()+'\n\n':'')+b.notes;
+    try{ snGrow(); }catch(e){}
   }
   renderBidRef();
   recalc();
@@ -9308,9 +9314,25 @@ function renderBidRef(){ renderBidPanel(); }
    event of the booking. Reps never touch Google — the script owns that. */
 const SiteVisit = { meas: [], photos: [], pool: [] };
 
+/* The crew-notes box grows to fit its text (per Taylor 2026-11-02: "the
+   text box for crew notes on the quote expand ... hard to edit with the
+   small view window in a larger message"). Called on every keystroke AND
+   after every programmatic fill (open, convert, clear). Capped at half
+   the window so a monster note scrolls inside the box instead of eating
+   the form. */
+function snGrow(){
+  const t=$('#q_sitenotes'); if(!t) return;
+  t.style.height='auto';
+  const cap=Math.max(240, Math.round((window.innerHeight||800)*0.5));
+  const want=Math.min((t.scrollHeight||0)+2, cap);
+  t.style.height=Math.max(92, want)+'px';
+  t.style.overflowY=(t.scrollHeight+2>cap)?'auto':'hidden';
+}
+
 function svReset(){
   SiteVisit.meas = []; SiteVisit.photos = []; SiteVisit.pool = [];
   const sn=$('#q_sitenotes'); if(sn) sn.value='';
+  try{ snGrow(); }catch(e){}
   const on2=$('#oldnotes'); if(on2){ on2.classList.add('hide'); on2.innerHTML=''; }
   renderMeas(); renderPhotos();
   try{ renderBidRef(); }catch(e){}
@@ -10961,6 +10983,8 @@ function wire(){
   $('#q_drive').addEventListener('input',()=>{autoFill.drive=false; recalc();});
   $('#q_blow').addEventListener('input',()=>{autoFill.blow=false; recalc();});
   $('#q_bid').addEventListener('input',recalc);
+  { const sn=$('#q_sitenotes');
+    if(sn){ sn.addEventListener('input', snGrow); snGrow(); } }
   /* The edit-confirmation dialog is RETIRED (per Taylor 2026-10-15): a
      typed edit over a record-filled customer name or address simply
      stands — no prompt, no putting the original back. Wrong names get
