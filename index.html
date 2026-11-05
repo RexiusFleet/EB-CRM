@@ -338,6 +338,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
     <button data-view="quotes">Saved Quotes</button>
     <button data-view="cal">Calendar</button>
     <button data-view="todo">To Do</button>
+    <button data-view="multi">Open Multi-Jobs</button>
     <button data-view="reports">Reports</button>
     <button data-view="rates">Rate Card</button>
     <button data-view="sugg">Suggestions<span class="tabdot hide" id="suggdot"></span></button>
@@ -851,6 +852,18 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
       <div class="body"><div class="scroll" id="todolist" style="overflow-x:auto"></div></div></div>
   </section>
 
+  <!-- ======================== OPEN MULTI-JOBS =========================
+       (per Taylor 2026-11-05) One line per master project: who, how many
+       of its jobs are delivered, the combined price; expand a line for
+       the remaining jobs (date · material · volume · address). Projects
+       with every job delivered sink to the Completed section below.
+       Reps/admins only — the portals' tab bars never offer the tab. -->
+  <section id="view-multi" class="hide">
+    <div class="card"><h3>Open Multi-Jobs <span class="muted" id="multicount"></span>
+      <span class="muted small">— master projects with jobs still to run</span></h3>
+      <div class="body"><div id="multilist"></div></div></div>
+  </section>
+
   <!-- ============================= REPORTS =============================
        Export-ready view of the calendar (per Taylor 2026-10-30): one row
        per truck TRIP in the range — the same expansion the board draws,
@@ -1340,7 +1353,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-02-bignotes';   // shown in the header; check it after deploying
+const BUILD = '2026-11-05-multiprod';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1824,6 +1837,9 @@ const DemoDB = {
   async listBatch(batchId){
     return this._quotes.filter(q=>q.batch_id===batchId);
   },
+  async listAllBatches(){
+    return this._quotes.filter(q=>q.batch_id);
+  },
   async driveCache(){ return null; },
   async driveCachePut(){ return null; },
   async listTodo(){
@@ -2297,6 +2313,12 @@ const LiveDB = {
       'scheduled_time,scheduled_hours,archived_at,material_rev,labor_rev,equip_rev,'+
       'labor_hours,equip_hours&batch_id=eq.'+
       encodeURIComponent(batchId)+'&order=created_at&limit=50');
+  },
+  /* Every master-project member in one read — the Open Multi-Jobs tab. */
+  async listAllBatches(){
+    return SB.rest('quotes?select=id,customer_name,address_raw,city,product,yards,'+
+      'status,bid_amount,target_price,project_no,batch_id,scheduled_date,'+
+      'scheduled_time,archived_at&batch_id=not.is.null&order=created_at&limit=500');
   },
   async blocks(from,to){
     return SB.rest('blockouts?select=*&date=gte.'+encodeURIComponent(from)+
@@ -2902,7 +2924,7 @@ function show(v){
   if(typeof Cal!=='undefined' && Cal.crew && v!=='cal' &&
      !(typeof BidCal!=='undefined' && BidCal)) v='cal';
   document.body.classList.toggle('calwide', v==='cal');
-  ['quote','bids','bidlist','quotes','cal','dash','rates','reports','todo','sugg'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  ['quote','bids','bidlist','quotes','cal','dash','rates','reports','todo','sugg','multi'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
   if(v==='bids'){  fillBidProducts(); bdDraftRestore(); }
   if(v==='bidlist') renderBidsList();
@@ -2911,6 +2933,7 @@ function show(v){
   if(v==='dash')   renderDash();
   if(v==='reports') renderReport();
   if(v==='todo')   renderTodo();
+  if(v==='multi')  renderMultiJobs();
   if(v==='rates'){ renderRates(); renderDataStatus(); }
   if(v==='sugg')   renderSugg();
 }
@@ -2924,10 +2947,12 @@ function internalToggle(){
   const on=!!($('#q_internal')&&$('#q_internal').checked);
   ['q_intkindwrap','q_intnowrap'].forEach(id=>{ const e2=$('#'+id); if(e2) e2.classList.toggle('hide', !on); });
 }
-/* "CC #2026-041" — the chip/card label for an internal job; '' when off. */
+/* "CC #2026-041" — the chip/card label for an internal job; '' when off.
+   A blank number still labels the chip (per Taylor 2026-11-03): the kind
+   shows with a dash, and the #s badge goes warn until it is filled. */
 function internalLabel(r){
   if(!r || !r.internal) return '';
-  return (r.internal_kind||'')+' #'+(r.internal_no||'?');
+  return (r.internal_kind||'')+' #'+(r.internal_no||'—');
 }
 function acctFromCust(c){
   c = String(c||'').replace(/\D/g,'');
@@ -3507,29 +3532,61 @@ async function renderBatchPanel(){
   const tot=members.reduce((a,m)=>a+quotePrice(m),0);
   const pns=[...new Set(members.map(m=>m.project_no).filter(Boolean))];
   const sos=[...new Set(members.map(m=>m.so_no).filter(Boolean))];
+  /* Group the linked quotes by LOCATION (per Taylor 2026-11-05: "I want
+     the option to add multiple products to a single location") - one
+     address can carry several products, each its own linked quote with
+     its own price and its own truck on the calendar. */
+  const groups=[], gidx={};
+  members.forEach(m=>{
+    const k=((m.address_raw||'').trim().toLowerCase()+'|'+
+             (m.city||'').trim().toLowerCase());
+    if(!(k in gidx)){
+      gidx[k]=groups.length;
+      groups.push({addr:m.address_raw||'', city:m.city||'', rows:[]});
+    }
+    groups[gidx[k]].rows.push(m);
+  });
   box.innerHTML='<div style="border:1px solid var(--accent);border-radius:10px;'+
     'padding:10px 12px;background:var(--panel-2)">'+
     '<div class="row" style="align-items:center">'+
-    '<b class="small">🔗 Master project · '+members.length+' site'+
-    (members.length===1?'':'s')+'</b>'+
+    '<b class="small">🔗 Master project · '+groups.length+' site'+
+    (groups.length===1?'':'s')+
+    (members.length!==groups.length
+      ? ' · '+members.length+' products':'')+'</b>'+
     '<span style="flex:1 1 auto"></span>'+
     '<button type="button" class="btn sm" id="batchadd" '+
     'style="background:var(--accent);color:var(--accent-ink);flex:0 0 auto">'+
     '+ New linked site quote</button></div>'+
-    members.map(m=>'<div class="kv"><span class="k">'+
-      (String(m.id)===String(State.savedQuoteId)?'▸ ':'')+
-      esc(m.address_raw||'(no address)')+
-      ' <span class="muted">· '+esc((m.yards||0)+' yd '+(m.product||''))+
-      ' · '+esc(m.status==='won'?'scheduled':m.status==='sent'?'on hold':m.status)+
-      (m.project_no?'':' · no Project')+(m.so_no?'':' · no Order Nbr')+'</span></span>'+
-      '<span><b>'+money(quotePrice(m))+'</b> '+
-      (String(m.id)===String(State.savedQuoteId)
-        ? '<span class="muted small">this one</span>'
-        : '<button type="button" class="btn ghost sm" data-bopen="'+esc(m.id)+'">Open</button>'+
-          '<button type="button" class="btn ghost sm" data-bunlink="'+esc(m.id)+'" '+
-          'title="Remove this site from the project (the quote itself stays)" '+
-          'style="color:var(--danger)">✕</button>')+
-      '</span></div>').join('')+
+    groups.map((g,gi)=>{
+      const sub=g.rows.reduce((x,m)=>x+quotePrice(m),0);
+      return '<div class="kv" style="border-top:1px solid var(--line-2);'+
+        'margin-top:6px;padding-top:6px"><span class="k">'+
+        '📍 <b>'+esc(g.addr||'(no address yet)')+'</b>'+
+        (g.city?' <span class="muted">· '+esc(g.city)+'</span>':'')+
+        (g.rows.length>1?' <span class="muted small">· '+g.rows.length+
+          ' products</span>':'')+'</span>'+
+        '<span>'+(g.rows.length>1?'<b>'+money(sub)+'</b> ':'')+
+        (g.addr
+          ? '<button type="button" class="btn ghost sm" data-baddprod="'+gi+'" '+
+            'title="Add another product at this address — a new linked quote '+
+            'with the customer and site already filled">+ product</button>'
+          : '')+'</span></div>'+
+      g.rows.map(m=>'<div class="kv" style="padding-left:16px"><span class="k">'+
+        (String(m.id)===String(State.savedQuoteId)?'▸ ':'')+
+        esc(((m.yards||0)+' yd '+(m.product||'')).trim()||'(no product yet)')+
+        ' <span class="muted">· '+
+        esc(m.status==='won'?'scheduled':m.status==='sent'?'on hold':m.status)+
+        (m.project_no?'':' · no Project')+(m.so_no?'':' · no Order Nbr')+
+        '</span></span>'+
+        '<span><b>'+money(quotePrice(m))+'</b> '+
+        (String(m.id)===String(State.savedQuoteId)
+          ? '<span class="muted small">this one</span>'
+          : '<button type="button" class="btn ghost sm" data-bopen="'+esc(m.id)+'">Open</button>'+
+            '<button type="button" class="btn ghost sm" data-bunlink="'+esc(m.id)+'" '+
+            'title="Remove this product from the project (the quote itself stays)" '+
+            'style="color:var(--danger)">✕</button>')+
+        '</span></div>').join('');
+    }).join('')+
     '<div class="kv" style="border-top:1px solid var(--line-2);margin-top:6px;padding-top:6px">'+
     '<span class="k"><b>Customer total — all sites combined</b></span>'+
     '<b style="font-size:16px">'+money(tot)+'</b></div>'+
@@ -3581,6 +3638,124 @@ async function renderBatchPanel(){
       toast('Unlinked — the quote itself is untouched.', false);
       renderBatchPanel();
     }catch(e){ toast(e.message, true); b2.disabled=false; }
+  });
+  /* + product: a new linked quote at the SAME location — like "New
+     linked site quote" but the address rides along too, so the rep only
+     picks the product and measurements (per Taylor 2026-11-05). */
+  box.querySelectorAll('[data-baddprod]').forEach(b2=>b2.onclick=()=>{
+    const g=groups[Number(b2.dataset.baddprod)]; if(!g) return;
+    if(!State.savedQuoteId){
+      toast('Save this quote first, then add the next product.', true); return;
+    }
+    const keep={ batch: State.batchId,
+      customer:$('#q_customer').value, phone:$('#q_phone').value,
+      custno:$('#q_custno').value, email:$('#q_email').value,
+      account:$('#q_account').value, pn:$('#q_pn').value,
+      so:$('#q_so').value };
+    $('#newquote').click();
+    $('#q_customer').value=keep.customer; $('#q_phone').value=keep.phone;
+    $('#q_custno').value=keep.custno; $('#q_email').value=keep.email;
+    $('#q_account').value=keep.account; $('#q_pn').value=keep.pn;
+    $('#q_so').value=keep.so;
+    $('#q_address').value=g.addr; $('#q_city').value=g.city;
+    State.batchId=keep.batch;
+    renderBatchPanel();
+    toast('🔗 Same site, next product — pick the product and '+
+      'measurements. Saving links it to the master project automatically.', false);
+    try{ $('#q_product').focus(); }catch(e){}
+  });
+}
+/* ==================== OPEN MULTI-JOBS tab (per Taylor 2026-11-05:
+   "a new tab that says Open Multi-Jobs ... name of job, number of jobs
+   completed out of total jobs for that project ... expand the line item
+   to show the remaining jobs scheduled (date, material, volume, address)
+   ... another section that shows completed multi-jobs").
+   One row per master project (batch). A job counts COMPLETED once it is
+   scheduled (won) and its delivery date has passed — the truck went;
+   holds and drafts stay "remaining" whatever their date, and a job with
+   no date shows "not scheduled". Expansion state survives re-renders. */
+const MJ = { open:{} };
+async function renderMultiJobs(){
+  const box=$('#multilist'); if(!box) return;
+  box.innerHTML='<div class="muted small">Loading…</div>';
+  let rows=[];
+  try{ rows=(await DB.listAllBatches())||[]; }
+  catch(e){
+    box.innerHTML='<div class="small" style="color:var(--danger)">Could not load the '+
+      'master projects: '+esc(e.message||'')+'</div>';
+    return;
+  }
+  rows=rows.filter(r=>!r.archived_at && r.batch_id);
+  const t=new Date();
+  const tLoc=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+
+    String(t.getDate()).padStart(2,'0');
+  const done=m=>!!(m.status==='won' && m.scheduled_date && m.scheduled_date<tLoc);
+  const by={};
+  rows.forEach(r=>{ (by[r.batch_id]=by[r.batch_id]||[]).push(r); });
+  const projs=Object.keys(by).map(bid=>{
+    const ms=by[bid];
+    ms.sort((a,b2)=>String(a.scheduled_date||'9999').localeCompare(String(b2.scheduled_date||'9999')));
+    return { bid, ms, d: ms.filter(done).length, n: ms.length,
+      name:(ms.find(m=>m.customer_name)||{}).customer_name||'(no customer)',
+      pn:(ms.find(m=>m.project_no)||{}).project_no||'',
+      tot: ms.reduce((a,m)=>a+quotePrice(m),0),
+      next:((ms.find(m=>!done(m)&&m.scheduled_date)||{}).scheduled_date)||null,
+      last:((ms.filter(m=>m.scheduled_date).slice(-1)[0])||{}).scheduled_date||null };
+  });
+  const open=projs.filter(p=>p.d<p.n)
+    .sort((a,b2)=>String(a.next||'9999').localeCompare(String(b2.next||'9999')));
+  const comp=projs.filter(p=>p.d>=p.n)
+    .sort((a,b2)=>String(b2.last||'').localeCompare(String(a.last||'')));
+  const jobLine=m=>'<div class="kv" style="padding-left:18px"><span class="k">'+
+    (m.scheduled_date
+      ? '<b>'+esc(dfmt(m.scheduled_date))+'</b>'+
+        (m.scheduled_time?' '+esc(String(m.scheduled_time).slice(0,5)):'')
+      : '<span style="color:var(--warn);font-weight:600">not scheduled</span>')+
+    ' <span class="muted">·</span> '+esc(m.product||'(no product)')+
+    ' <span class="muted">·</span> <b>'+esc(String(m.yards||0))+' yd</b>'+
+    ' <span class="muted">· '+esc((m.address_raw||'(no address)')+
+      (m.city?', '+m.city:''))+'</span>'+
+    (done(m)?' <span class="tag">✓ done</span>':'')+
+    '</span><span>'+money(quotePrice(m))+' '+
+    '<button type="button" class="btn ghost sm" data-mjopen="'+esc(m.id)+'">Open</button>'+
+    '</span></div>';
+  const projRow=(p,showAll)=>{
+    const exp=!!MJ.open[p.bid];
+    const rem=p.ms.filter(m=>!done(m));
+    const list=showAll?p.ms:rem;
+    return '<div style="border:1px solid var(--line);border-radius:10px;'+
+      'padding:8px 12px;margin-top:8px;background:var(--panel-2)">'+
+      '<div class="kv" data-mjtog="'+esc(p.bid)+'" style="cursor:pointer">'+
+      '<span class="k">'+(exp?'▾':'▸')+' 🔗 <b>'+esc(p.name)+'</b>'+
+      (p.pn?' <span class="muted">· Project '+esc(p.pn)+'</span>':'')+
+      (!showAll&&p.next?' <span class="muted small">· next '+esc(dfmt(p.next))+'</span>':'')+
+      '</span><span><b class="small">'+p.d+' of '+p.n+' job'+(p.n===1?'':'s')+
+      ' completed</b> · <b>'+money(p.tot)+'</b></span></div>'+
+      (exp?'<div style="margin-top:4px">'+
+        (showAll?'':(rem.length?'<div class="small muted" style="padding-left:18px">'+
+          'Remaining jobs:</div>':''))+
+        list.map(jobLine).join('')+'</div>':'');
+  };
+  box.innerHTML=
+    '<div class="small muted" style="margin-bottom:4px">A job counts completed once '+
+    'it is scheduled and its delivery date has passed. Tap a project line to expand it.</div>'+
+    (open.length
+      ? open.map(p=>projRow(p,false)).join('')
+      : '<div class="muted" style="padding:10px 0">No open multi-jobs — start one from '+
+        'a saved quote with “Make this a master project”.</div>')+
+    '<div style="font-weight:700;margin:20px 0 2px">Completed multi-jobs '+
+    '<span class="muted small">— every job delivered</span></div>'+
+    (comp.length
+      ? comp.map(p=>projRow(p,true)).join('')
+      : '<div class="muted small" style="padding:6px 0">None yet.</div>');
+  const mc=$('#multicount'); if(mc) mc.textContent=open.length?'· '+open.length+' open':'';
+  box.querySelectorAll('[data-mjtog]').forEach(d=>d.onclick=()=>{
+    MJ.open[d.dataset.mjtog]=!MJ.open[d.dataset.mjtog]; renderMultiJobs();
+  });
+  box.querySelectorAll('[data-mjopen]').forEach(b2=>b2.onclick=async ev=>{
+    ev.stopPropagation();
+    let r=null; try{ r=await DB.getQuote(b2.dataset.mjopen); }catch(e){}
+    if(r) openQuote(r);
   });
 }
 /* A PN# — and the SO# (per Taylor 2026-10-31: "one sales order # for
@@ -5972,7 +6147,11 @@ async function calFetch(from, to){
     /* Per Taylor: each calendar entry shows THAT TRIP's yards, not the
        whole project. Slots split by their load counts; a legacy
        two-truck split goes by each leg's hours; one trip = the total. */
-    const erpN = [b.account_no, b.so_no, b.project_no].filter(v=>v&&String(v).trim()).length;
+    /* Internal jobs have no customer numbers — their one needed number
+       is the internal project # (per Taylor 2026-11-03). */
+    const erpN = b.internal
+      ? ((b.internal_no && String(b.internal_no).trim()) ? 3 : 0)
+      : [b.account_no, b.so_no, b.project_no].filter(v=>v&&String(v).trim()).length;
     const push = (crew,date,time,hours,lbl,si,y)=>{ if(date) jobs.push({qid:b.id,
       customer:b.customer_name||'', product:b.product||'',
       addr: b.address_raw||'',
@@ -7354,12 +7533,28 @@ async function bidCardById(id){
       'quote — converting flows back into it</div>':'')+
     (b.notes?'<div style="margin-top:10px"><b class="small">Bid notes</b>'+
       '<div class="small">'+esc(b.notes)+'</div></div>':'')+
+    (Array.isArray(b.photos)&&b.photos.length
+      ? '<div id="bc_ph" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>'
+      : '')+
     '<div class="row" style="margin-top:14px">'+
     '<button type="button" class="btn bid-convert" id="bc_conv" style="background:var(--good)">Convert to quote</button>'+
     '<button type="button" class="btn ghost" id="bc_open">Open bid</button>'+
     '<button type="button" class="btn ghost bid-convert" id="bc_unpin" style="color:var(--danger)">Un-pencil</button>'+
     '</div></div>';
   document.body.appendChild(wrap);
+  /* photo strip: tap one to see it big (per Taylor 2026-11-03) */
+  (Array.isArray(b.photos)?b.photos:[]).forEach(p2=>{
+    svThumbUrl(Object.assign({}, p2)).then(u=>{
+      if(!u) return;
+      const ph=$('#bc_ph'); if(!ph) return;
+      const img=document.createElement('img');
+      img.src=u; img.alt=p2.name||'bid photo';
+      img.style.cssText='width:96px;height:96px;object-fit:cover;border-radius:8px;'+
+        'border:1px solid var(--line);cursor:zoom-in';
+      img.onclick=()=>photoLightbox(u, p2.name);
+      ph.appendChild(img);
+    });
+  });
   $('#bc_x').onclick=()=>wrap.remove();
   wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
   $('#bc_conv').onclick=()=>{ wrap.remove(); convertBid(b.id); };
@@ -8008,6 +8203,13 @@ function calCard(r, rep, focusCrew, opts){
         'autocomplete="off" value="'+esc(r.so_no||'')+'"></div>'+
       '<div><label class="f">Project</label><input type="text" id="cc_pn" '+
         'autocomplete="off" value="'+esc(r.project_no||'')+'"></div>'+
+      /* Internal jobs: the internal # is editable right here, like the
+         other numbers (per Taylor 2026-11-03 — it was display-only). */
+      (r.internal
+        ? '<div><label class="f">🏗 '+esc(r.internal_kind||'Internal')+' #</label>'+
+          '<input type="text" id="cc_intno" autocomplete="off" class="mono" '+
+          'placeholder="e.g. 2026-041" value="'+esc(r.internal_no||'')+'"></div>'
+        : '')+
       '</div>'+
       '<div class="row" style="margin-top:6px;align-items:center">'+
       '<button type="button" class="btn ghost sm" id="cc_saveerp" style="flex:0 0 auto">'+
@@ -8108,6 +8310,7 @@ function calCard(r, rep, focusCrew, opts){
   if(sbtn) sbtn.onclick=async()=>{
     sbtn.disabled=true;
     const vals={ account_no: $('#cc_acct').value.trim()||null,
+                 ...($('#cc_intno')?{internal_no:$('#cc_intno').value.trim()||null}:{}),
                  so_no:      $('#cc_so').value.trim()||null,
                  project_no: $('#cc_pn').value.trim()||null };
     try{
@@ -9004,9 +9207,16 @@ function renderBidPhotos(){
     '</div>').join('');
   box.querySelectorAll('[data-bpi]').forEach(card=>{
     const i=Number(card.dataset.bpi), p2=BidSt.photos[i];
+    card.style.cursor='zoom-in';
     svThumbUrl(p2).then(u=>{ if(!u) return;
+      card._url=u;
       const img=card.querySelector('.pimg'); img.src=u; img.style.display='block';
       card.querySelector('.pfall').style.display='none'; });
+    /* tap the photo = open it big; the ✕ still removes it */
+    card.onclick=e=>{
+      if(e.target.closest('.pdel')) return;
+      if(card._url) photoLightbox(card._url, p2.name);
+    };
     card.querySelector('.pdel').onclick=()=>{ BidSt.photos.splice(i,1); renderBidPhotos(); bdChanged(); };
   });
 }
@@ -9527,6 +9737,31 @@ async function svUploadPhoto(file){
       : 'Photo upload failed: '+t);
   }
   return {path, name:file.name||'photo', size:blob.size, at:new Date().toISOString()};
+}
+/* Tap-to-expand for photos (per Taylor 2026-11-03: "I want to be able
+   to click and open photos from a bid while it is still in a bid
+   stage"). One overlay: the image at up to 95% of the screen, the name
+   underneath, tap anywhere / ✕ / Esc closes. Works from any surface. */
+function photoLightbox(u, name){
+  if(!u) return;
+  const old=$('#photolb'); if(old) old.remove();
+  const wrap=document.createElement('div'); wrap.id='photolb';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:200;'+
+    'display:flex;flex-direction:column;align-items:center;justify-content:center;'+
+    'padding:18px;cursor:zoom-out';
+  wrap.innerHTML='<img alt="" style="max-width:95vw;max-height:86vh;border-radius:10px;'+
+    'box-shadow:0 10px 40px rgba(0,0,0,.6);background:#111">'+
+    '<div class="small" style="color:#eee;margin-top:10px">'+esc(name||'photo')+
+    ' <span style="opacity:.7">— tap anywhere to close</span></div>'+
+    '<button type="button" style="position:absolute;top:14px;right:14px;width:38px;'+
+    'height:38px;border-radius:99px;border:0;background:rgba(255,255,255,.18);'+
+    'color:#fff;font-size:17px;cursor:pointer">✕</button>';
+  wrap.querySelector('img').src=u;
+  wrap.onclick=()=>wrap.remove();
+  const esc9=e=>{ if(e.key==='Escape'){ wrap.remove();
+    document.removeEventListener('keydown', esc9); } };
+  document.addEventListener('keydown', esc9);
+  document.body.appendChild(wrap);
 }
 async function svThumbUrl(p){
   if(p._url) return p._url;
