@@ -1353,7 +1353,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-05c-addprod';   // shown in the header; check it after deploying
+const BUILD = '2026-11-05d-addprod';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3507,12 +3507,21 @@ async function renderBatchPanel(){
        to add another product") — + Add another product starts the
        master project AND opens the next linked quote at the same
        address in one tap. */
-    box.innerHTML = State.savedQuoteId
+    /* The ➕ verb shows as soon as the form has a customer or an address
+       (per Taylor 2026-11-05: "Do we have to save the quote to access
+       the multi-job option?") — tapping it on an unsaved quote saves it
+       first, then opens the next linked quote. */
+    const hasForm = !!(($('#q_customer').value||'').trim() ||
+                       ($('#q_address').value||'').trim());
+    box.innerHTML = (State.savedQuoteId || hasForm)
       ? '<div class="row">'+
         '<button type="button" class="btn ghost sm" id="batchprod">➕ Add another '+
-        'product <span class="muted">— same address, links the quotes</span></button>'+
-        '<button type="button" class="btn ghost sm" id="batchstart">🔗 Make this a '+
-        'master project <span class="muted">— link more site quotes to it</span></button>'+
+        'product <span class="muted">— same address, links the quotes'+
+        (State.savedQuoteId?'':' (saves this quote first)')+'</span></button>'+
+        (State.savedQuoteId
+          ? '<button type="button" class="btn ghost sm" id="batchstart">🔗 Make this a '+
+            'master project <span class="muted">— link more site quotes to it</span></button>'
+          : '')+
         '</div>'
       : '';
     const startBatch=async()=>{
@@ -3538,8 +3547,18 @@ async function renderBatchPanel(){
     const b3=$('#batchprod');
     if(b3) b3.onclick=async()=>{
       b3.disabled=true;
-      const addr=$('#q_address').value.trim(), city=$('#q_city').value.trim();
       try{
+        if(!State.savedQuoteId){
+          await saveQuote();   // the normal Save quote path, validations and all
+          if(!State.savedQuoteId){
+            b3.disabled=false;
+            toast('Could not save this quote yet — finish the first product '+
+              '(product + volume), then tap ➕ again. Any save error shows next '+
+              'to Save quote.', true);
+            return;
+          }
+        }
+        const addr=$('#q_address').value.trim(), city=$('#q_city').value.trim();
         await startBatch();
         batchAddProduct(addr, city);
       }catch(e){ b3.disabled=false; toast(sqlHint(e), true); }
@@ -11173,7 +11192,9 @@ function wire(){
   $('#q_crew').addEventListener('change', renderSchedCalDebounced);
   // the booking banner follows typing immediately (recalc covers the rest)
   ['q_customer','q_address','q_city'].forEach(id=>
-    $('#'+id).addEventListener('input', renderSchedWho));
+    $('#'+id).addEventListener('input', ()=>{ renderSchedWho();
+      /* no network in this state — just shows/hides the ➕ verb */
+      if(!State.batchId) renderBatchPanel(); }));
   /* ---- internal calendar controls ---- */
   const calStep = dir => {
     const a = new Date((Cal.anchor||calFmt(new Date()))+'T00:00:00');
