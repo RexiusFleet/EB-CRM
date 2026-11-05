@@ -1353,7 +1353,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-05b-multiprod';   // shown in the header; check it after deploying
+const BUILD = '2026-11-05c-addprod';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3502,27 +3502,47 @@ function quotePrice(r){
 async function renderBatchPanel(){
   const box=$('#batchpanel'); if(!box) return;
   if(!State.batchId){
+    /* A saved quote that is not a master project yet offers BOTH verbs
+       (per Taylor 2026-11-05: "I am not seeing the button on the quote
+       to add another product") — + Add another product starts the
+       master project AND opens the next linked quote at the same
+       address in one tap. */
     box.innerHTML = State.savedQuoteId
-      ? '<button type="button" class="btn ghost sm" id="batchstart">🔗 Make this a '+
-        'master project <span class="muted">— link more site quotes to it</span></button>'
+      ? '<div class="row">'+
+        '<button type="button" class="btn ghost sm" id="batchprod">➕ Add another '+
+        'product <span class="muted">— same address, links the quotes</span></button>'+
+        '<button type="button" class="btn ghost sm" id="batchstart">🔗 Make this a '+
+        'master project <span class="muted">— link more site quotes to it</span></button>'+
+        '</div>'
       : '';
+    const startBatch=async()=>{
+      const id=(crypto.randomUUID ? crypto.randomUUID()
+        : 'b'+Date.now()+'-'+Math.random().toString(16).slice(2));
+      await DB.patchQuote(State.savedQuoteId, {batch_id:id});
+      State.batchId=id;
+      return id;
+    };
+    const sqlHint=e=>/batch_id/.test(e.message||'')
+      ? 'Master projects need sql/37_batches.sql — run it in Supabase first.'
+      : e.message;
     const b2=$('#batchstart');
     if(b2) b2.onclick=async()=>{
       b2.disabled=true;
-      const id=(crypto.randomUUID ? crypto.randomUUID()
-        : 'b'+Date.now()+'-'+Math.random().toString(16).slice(2));
       try{
-        await DB.patchQuote(State.savedQuoteId, {batch_id:id});
-        State.batchId=id;
+        await startBatch();
         toast('🔗 Master project started — add the next site with '+
           '"New linked site quote".', false);
         renderBatchPanel();
-      }catch(e){
-        b2.disabled=false;
-        toast(/batch_id/.test(e.message||'')
-          ? 'Master projects need sql/37_batches.sql — run it in Supabase first.'
-          : e.message, true);
-      }
+      }catch(e){ b2.disabled=false; toast(sqlHint(e), true); }
+    };
+    const b3=$('#batchprod');
+    if(b3) b3.onclick=async()=>{
+      b3.disabled=true;
+      const addr=$('#q_address').value.trim(), city=$('#q_city').value.trim();
+      try{
+        await startBatch();
+        batchAddProduct(addr, city);
+      }catch(e){ b3.disabled=false; toast(sqlHint(e), true); }
     };
     return;
   }
@@ -3644,26 +3664,33 @@ async function renderBatchPanel(){
      picks the product and measurements (per Taylor 2026-11-05). */
   box.querySelectorAll('[data-baddprod]').forEach(b2=>b2.onclick=()=>{
     const g=groups[Number(b2.dataset.baddprod)]; if(!g) return;
-    if(!State.savedQuoteId){
-      toast('Save this quote first, then add the next product.', true); return;
-    }
-    const keep={ batch: State.batchId,
-      customer:$('#q_customer').value, phone:$('#q_phone').value,
-      custno:$('#q_custno').value, email:$('#q_email').value,
-      account:$('#q_account').value, pn:$('#q_pn').value,
-      so:$('#q_so').value };
-    $('#newquote').click();
-    $('#q_customer').value=keep.customer; $('#q_phone').value=keep.phone;
-    $('#q_custno').value=keep.custno; $('#q_email').value=keep.email;
-    $('#q_account').value=keep.account; $('#q_pn').value=keep.pn;
-    $('#q_so').value=keep.so;
-    $('#q_address').value=g.addr; $('#q_city').value=g.city;
-    State.batchId=keep.batch;
-    renderBatchPanel();
-    toast('🔗 Same site, next product — pick the product and '+
-      'measurements. Saving links it to the master project automatically.', false);
-    try{ $('#q_product').focus(); }catch(e){}
+    batchAddProduct(g.addr, g.city);
   });
+}
+/* Clear the form into a new linked quote at the given address: customer
+   block + shared numbers + batch ride along, product/measurements reset.
+   Used by the per-site + product buttons AND the one-tap "➕ Add another
+   product" on a not-yet-linked saved quote. */
+function batchAddProduct(addr, city){
+  if(!State.savedQuoteId && !State.batchId){
+    toast('Save this quote first, then add the next product.', true); return;
+  }
+  const keep={ batch: State.batchId,
+    customer:$('#q_customer').value, phone:$('#q_phone').value,
+    custno:$('#q_custno').value, email:$('#q_email').value,
+    account:$('#q_account').value, pn:$('#q_pn').value,
+    so:$('#q_so').value };
+  $('#newquote').click();
+  $('#q_customer').value=keep.customer; $('#q_phone').value=keep.phone;
+  $('#q_custno').value=keep.custno; $('#q_email').value=keep.email;
+  $('#q_account').value=keep.account; $('#q_pn').value=keep.pn;
+  $('#q_so').value=keep.so;
+  $('#q_address').value=addr||''; $('#q_city').value=city||'';
+  State.batchId=keep.batch;
+  renderBatchPanel();
+  toast('🔗 Same site, next product — pick the product and '+
+    'measurements. Saving links it to the master project automatically.', false);
+  try{ $('#q_product').focus(); }catch(e){}
 }
 /* ==================== OPEN MULTI-JOBS tab (per Taylor 2026-11-05:
    "a new tab that says Open Multi-Jobs ... name of job, number of jobs
