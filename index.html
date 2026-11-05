@@ -1353,7 +1353,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-05-multiprod';   // shown in the header; check it after deploying
+const BUILD = '2026-11-05b-multiprod';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3734,7 +3734,8 @@ async function renderMultiJobs(){
       (exp?'<div style="margin-top:4px">'+
         (showAll?'':(rem.length?'<div class="small muted" style="padding-left:18px">'+
           'Remaining jobs:</div>':''))+
-        list.map(jobLine).join('')+'</div>':'');
+        list.map(jobLine).join('')+'</div>':'')+
+      '</div>';
   };
   box.innerHTML=
     '<div class="small muted" style="margin-bottom:4px">A job counts completed once '+
