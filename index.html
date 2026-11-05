@@ -1353,7 +1353,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-05d-addprod';   // shown in the header; check it after deploying
+const BUILD = '2026-11-05f-mjrates';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3745,6 +3745,7 @@ async function renderMultiJobs(){
       name:(ms.find(m=>m.customer_name)||{}).customer_name||'(no customer)',
       pn:(ms.find(m=>m.project_no)||{}).project_no||'',
       tot: ms.reduce((a,m)=>a+quotePrice(m),0),
+      yds: ms.reduce((a,m)=>a+(Number(m.yards)||0),0),
       next:((ms.find(m=>!done(m)&&m.scheduled_date)||{}).scheduled_date)||null,
       last:((ms.filter(m=>m.scheduled_date).slice(-1)[0])||{}).scheduled_date||null };
   });
@@ -3768,7 +3769,7 @@ async function renderMultiJobs(){
   const projRow=(p,showAll)=>{
     const exp=!!MJ.open[p.bid];
     const rem=p.ms.filter(m=>!done(m));
-    const list=showAll?p.ms:rem;
+    const fin=p.ms.filter(done);
     return '<div style="border:1px solid var(--line);border-radius:10px;'+
       'padding:8px 12px;margin-top:8px;background:var(--panel-2)">'+
       '<div class="kv" data-mjtog="'+esc(p.bid)+'" style="cursor:pointer">'+
@@ -3777,10 +3778,32 @@ async function renderMultiJobs(){
       (!showAll&&p.next?' <span class="muted small">· next '+esc(dfmt(p.next))+'</span>':'')+
       '</span><span><b class="small">'+p.d+' of '+p.n+' job'+(p.n===1?'':'s')+
       ' completed</b> · <b>'+money(p.tot)+'</b></span></div>'+
+      /* Volume + rate breakdown (per Taylor 2026-11-05: "a breakdown of
+         total job volume and total price/unit (7.5 cu yards) and total
+         price/yard"). */
+      (p.yds>0
+        ? '<div class="small muted" style="padding-left:18px">'+
+          (Math.round(p.yds*10)/10)+' yd total volume · '+
+          '$'+(p.tot/p.yds*7.5).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+
+          '/unit <span style="opacity:.8">(7.5 cu yd)</span> · '+
+          '$'+(p.tot/p.yds).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+
+          '/yd</div>'
+        : '')+
       (exp?'<div style="margin-top:4px">'+
-        (showAll?'':(rem.length?'<div class="small muted" style="padding-left:18px">'+
-          'Remaining jobs:</div>':''))+
-        list.map(jobLine).join('')+'</div>':'')+
+        /* An open project's drop-down shows EVERY line item — the delivered
+           jobs first, then what remains (per Taylor 2026-11-05: "also show
+           the line items in the drop down for the jobs completed"). */
+        (showAll
+          ? p.ms.map(jobLine).join('')
+          : (fin.length
+              ? '<div class="small muted" style="padding-left:18px">Completed:</div>'+
+                fin.map(jobLine).join('')
+              : '')+
+            (rem.length
+              ? '<div class="small muted" style="padding-left:18px">Remaining jobs:</div>'+
+                rem.map(jobLine).join('')
+              : ''))+
+        '</div>':'')+
       '</div>';
   };
   box.innerHTML=
