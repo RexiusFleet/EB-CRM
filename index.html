@@ -1353,7 +1353,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-05f-mjrates';   // shown in the header; check it after deploying
+const BUILD = '2026-11-05g-mjrates';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3778,17 +3778,30 @@ async function renderMultiJobs(){
       (!showAll&&p.next?' <span class="muted small">· next '+esc(dfmt(p.next))+'</span>':'')+
       '</span><span><b class="small">'+p.d+' of '+p.n+' job'+(p.n===1?'':'s')+
       ' completed</b> · <b>'+money(p.tot)+'</b></span></div>'+
-      /* Volume + rate breakdown (per Taylor 2026-11-05: "a breakdown of
-         total job volume and total price/unit (7.5 cu yards) and total
-         price/yard"). */
-      (p.yds>0
-        ? '<div class="small muted" style="padding-left:18px">'+
-          (Math.round(p.yds*10)/10)+' yd total volume · '+
-          '$'+(p.tot/p.yds*7.5).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+
-          '/unit <span style="opacity:.8">(7.5 cu yd)</span> · '+
-          '$'+(p.tot/p.yds).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+
-          '/yd</div>'
-        : '')+
+      /* Volume + rate breakdown, summarized BY PRODUCT (per Taylor
+         2026-11-05: "I want the line item breakdown summary by
+         product") — one line per product with its yards, combined
+         price, $/unit (7.5 cu yd) and $/yd, plus an All-products total
+         line when the project carries more than one product. */
+      (p.yds>0 ? (function(){
+        const two=v=>'$'+v.toLocaleString(undefined,
+          {minimumFractionDigits:2,maximumFractionDigits:2});
+        const rate=(t,y)=>two(t/y*7.5)+'/unit <span style="opacity:.8">(7.5 cu yd)</span> · '+
+          two(t/y)+'/yd';
+        const line=(lbl,y,t,bold)=>'<div class="small muted" style="padding-left:18px">'+
+          (bold?'<b>':'')+esc(lbl)+(bold?'</b>':'')+' · '+(Math.round(y*10)/10)+' yd · '+
+          money(t)+(y>0?' · '+rate(t,y):'')+'</div>';
+        const byP={}, order=[];
+        p.ms.forEach(m=>{
+          const k=m.product||'(no product)';
+          if(!byP[k]){ byP[k]={y:0,t:0}; order.push(k); }
+          byP[k].y+=Number(m.yards)||0; byP[k].t+=quotePrice(m);
+        });
+        return order.length>1
+          ? order.map(k=>line(k,byP[k].y,byP[k].t,false)).join('')+
+            line('All products',p.yds,p.tot,true)
+          : line(order[0]||'',p.yds,p.tot,false);
+      })() : '')+
       (exp?'<div style="margin-top:4px">'+
         /* An open project's drop-down shows EVERY line item — the delivered
            jobs first, then what remains (per Taylor 2026-11-05: "also show
