@@ -868,6 +868,11 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           <button type="button" class="btn ghost sm" id="pb_vlist" style="flex:0 0 auto;background:var(--good);color:#fff">Call list</button>
           <button type="button" class="btn ghost sm" id="pb_vcal" style="flex:0 0 auto"
             title="The whole preliminary season on a calendar — offered slots and reservations, per truck">📅 Plan calendar</button>
+          <button type="button" class="btn ghost sm" id="pb_vvet" style="flex:0 0 auto"
+            title="Walk the list and take off customers who should not be called (one-time projects, etc.)">✂ Vet the list</button>
+          <span style="flex:1 1 auto"></span>
+          <button type="button" class="btn ghost sm" id="pb_reopt" style="flex:0 0 auto"
+            title="Rebuild every open offer's slot — product first — around reservations and real bookings">⟳ Re-optimize schedule</button>
         </div>
         <div id="pb_calwrap" class="hide">
           <div class="row" style="align-items:center;margin-top:10px">
@@ -891,13 +896,20 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
         <div class="row" style="align-items:flex-end;margin-top:12px">
           <div style="flex:2 1 240px"><label class="f">Search</label>
             <input type="text" id="pb_search" autocomplete="off" placeholder="customer, address, phone…"></div>
-          <div style="flex:1 1 150px"><label class="f">Show</label><select id="pb_status">
+          <div style="flex:1 1 150px" id="pb_vetshowwrap" class="hide"><label class="f">Show</label><select id="pb_vetshow">
+            <option value="todo">Still to vet</option><option value="kept">Kept</option>
+            <option value="removed">Removed</option><option value="all">Everything</option></select></div>
+          <div style="flex:1 1 150px" id="pb_statuswrap"><label class="f">Show</label><select id="pb_status">
             <option value="tocall">To call</option>
             <option value="due">Call-backs due</option>
             <option value="reserved">Reserved</option>
             <option value="quoted">Quoted</option>
             <option value="declined">Not this year</option>
+            <option value="removed">Removed in vetting</option>
             <option value="all">Everyone</option></select></div>
+          <div style="flex:1 1 130px"><label class="f">History</label><select id="pb_hist">
+            <option value="">Any</option><option value="1">1 season only</option>
+            <option value="2">2 seasons</option><option value="3">3+ seasons</option></select></div>
           <div style="flex:1 1 120px"><label class="f">Priority</label><select id="pb_tier">
             <option value="">Any</option><option value="A">A — call first</option>
             <option value="B">B</option><option value="C">C</option></select></div>
@@ -907,9 +919,20 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             <option value="">Any product</option></select></div>
           <div style="flex:1 1 140px"><label class="f">Sort</label><select id="pb_sort">
             <option value="score">Priority</option><option value="date">Offered date</option>
-            <option value="name">Customer</option></select></div>
+            <option value="name">Customer</option><option value="thin">Least history first</option></select></div>
           <button type="button" class="btn ghost sm" id="pb_csv" style="flex:0 0 auto"
             title="Download the rows shown as a spreadsheet-ready .csv">⬇ CSV</button>
+        </div>
+        <div id="pb_vetbar" class="hide" style="margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:var(--panel-2)">
+          <div class="row" style="align-items:center">
+            <span class="small" id="pb_vetprog" style="flex:1 1 220px"></span>
+            <span class="small muted" id="pb_vetsel" style="flex:0 0 auto">none selected</span>
+            <button type="button" class="btn ghost sm" id="pb_vetkeep" style="flex:0 0 auto">✓ Keep selected</button>
+            <select id="pb_vetreason" style="flex:0 1 230px" title="The reason saved on removed rows"></select>
+            <button type="button" class="btn ghost sm" id="pb_vetremove" style="flex:0 0 auto;color:var(--danger)">✕ Remove selected</button>
+          </div>
+          <div class="small muted" style="margin-top:4px">Thinnest history first. Remove takes a row off the call list and the plan (never deleted —
+            Show → Removed has Restore). When you are done, press ⟳ Re-optimize schedule so the remaining offers close ranks.</div>
         </div>
         <div class="scroll" id="pblist" style="margin-top:10px;overflow-x:auto"></div>
         </div>
@@ -1417,7 +1440,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-06b-prebookcal';   // shown in the header; check it after deploying
+const BUILD = '2026-11-06c-prebookvet';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1970,6 +1993,12 @@ const DemoDB = {
   async getPrebook(id){ return this._pb().find(r=>String(r.id)===String(id))||null; },
   async patchPrebook(id, patch){ const r=this._pb().find(x=>String(x.id)===String(id));
     if(r) Object.assign(r, patch); return r||null; },
+  async patchPrebookMany(ids, patch){ const set=new Set(ids.map(String));
+    return this._pb().filter(r=>set.has(String(r.id))).map(r=>Object.assign(r, patch)); },
+  async applyPrebookPlan(season, rows){ let n=0; const by=new Map(this._pb().map(r=>[String(r.id), r]));
+    rows.forEach(x=>{ const r=by.get(String(x.id));
+      if(r && ['new','no_answer','callback'].includes(r.status||'new')){ Object.assign(r, x); n++; } });
+    return n; },
   _bids: [],
   async listBids(){ return this._bids.slice().reverse(); },
   async bidForQuote(qid){
@@ -1999,7 +2028,7 @@ const DemoDB = {
   },
   async truckCaps(){
     // Same numbers as sql/17_truck_capacity.sql -- the placement-truck sheet.
-    const base=[['BeautiBark',32,23],['Hemlock',23,18],
+    const base=[['BeautiBark',32,23],['EconoBark',32,23],['Hemlock',23,18],
       ['DecoBark Nuggets',37.5,28],['Fresh Sawdust',37.5,30],['Alder Sawdust',37.5,30],
       ['Flower-n-Garden',15,11],['Primary Planting Soil',23,15],['Turf Start',15,11],
       ['Garden Compost',23,11],['GVO Compost',23,11],['GVO w/Worm Castings',23,11],
@@ -2412,11 +2441,39 @@ const LiveDB = {
   _pbCols:'id,season,kind,cust_id,customer_name,phone,email,cust_class,sales_rep,address,city,zip,'+
     'site_contact,product,product_hist,yards,equip_hours,typical_value,usual_month,seq,seq_n,seasons,'+
     'season_years,last_date,last_descr,score,plan_date,plan_crew_id,plan_time,plan_hours,plan_days,'+
-    'plan_stops,plan_loads,plan_moved,status,attempts,last_call_at,last_call_by,callback_date,'+
+    'plan_stops,plan_loads,plan_group,plan_moved,status,attempts,last_call_at,last_call_by,callback_date,'+
     'call_notes,res_date,res_crew_id,res_time,res_hours,res_slots,res_product,res_yards,quote_id',
   async listPrebook(season){
-    return this._pageAll('prebook?select='+this._pbCols+'&season=eq.'+encodeURIComponent(season)+
-      '&order=score.desc,id');
+    /* sql/59 adds the vetting columns + lat/lon; a database that has not
+       run it yet still lists (vetting and re-optimize then name the file). */
+    const tail='&season=eq.'+encodeURIComponent(season)+'&order=score.desc,id';
+    if(this._pb59!==false){
+      try{ const r=await this._pageAll('prebook?select='+this._pbCols+
+        ',vetted_at,removed_reason,lat,lon'+tail); this._pb59=true; return r; }
+      catch(e){ if(!/vetted_at|removed_reason|lat|lon|column/i.test(String(e.message))) throw e; this._pb59=false; }
+    }
+    return this._pageAll('prebook?select='+this._pbCols+tail);
+  },
+  async patchPrebookMany(ids, patch){
+    const out=[];
+    for(let i=0;i<ids.length;i+=80){
+      const r = await SB.rest('prebook?id=in.('+ids.slice(i,i+80).map(encodeURIComponent).join(',')+')',
+        {method:'PATCH', headers:{Prefer:'return=representation'}, body:JSON.stringify(patch)});
+      out.push(...(r||[]));
+    }
+    this._pb59=undefined;
+    return out;
+  },
+  /* sql/59's prebook_apply_plan: one call re-slots every OPEN offer and
+     refuses to touch a row that was reserved in the meantime. */
+  async applyPrebookPlan(season, rows){
+    let n=0;
+    for(let i=0;i<rows.length;i+=300){
+      const r = await SB.rest('rpc/prebook_apply_plan', {method:'POST',
+        body:JSON.stringify({p_season:season, p_rows:rows.slice(i,i+300)})});
+      n += Number(r)||0;
+    }
+    return n;
   },
   async prebookReserved(season){
     return SB.rest('prebook?select='+this._pbCols+'&season=eq.'+encodeURIComponent(season)+
@@ -11765,6 +11822,328 @@ function wire(){
   });
 }
 
+/* ===================== PRE-BOOK season optimizer ==========================
+   (per Taylor 2026-11-06: "the product logic (filling out loads, or same
+   product on same day, etc.) was not used" — rebuilt PRODUCT-FIRST, and
+   moved into the app so the schedule can be re-optimized after the list is
+   vetted.)  Pure functions: no DOM, no database — the same code runs in the
+   browser and under Node for the checks.
+
+   Order of work, per month:
+     1. LOADS — jobs of one product are packed into truckloads up to the
+        truck's capacity (a sweep around the yard keeps a load's stops in
+        one direction). A multi-load job's last, part-empty load takes
+        ride-alongs too.
+     2. PRODUCT-DAYS — loads of the same product fill a truck-day (up to 3
+        loads, 60 min reload between, done by 5 PM). One product all day:
+        no washout.
+     3. LEFTOVERS — only the part-days left over (a product with too little
+        volume that month) are combined into mixed days.
+     4. DATES — a product's days run back-to-back on one truck, so the truck
+        stays dialed in from one day to the next.
+   Reservations, offers already discussed on a call, real bookings and
+   blockouts are fixed: the optimizer works around them. */
+(function(root){
+const R = { START: 450, MON17: 600, END: 1020, RELOAD: 60, TRAVEL: 15,
+            MAXLOADS: 3, MAXSTOPS: 4, M0: 3, M1: 9, YARD: [44.1466, -123.0590] };
+const pad = n => String(n).padStart(2, '0');
+const iso = d => d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate());
+const D = s => new Date(s + 'T00:00:00Z');
+const hm = m => pad(Math.floor(m / 60)) + ':' + pad(m % 60);
+const tmin = t => { const p = String(t).split(':'); return (+p[0]) * 60 + (+p[1] || 0); };
+function miles(a, b){
+  if(!a || !b) return 10;
+  const r = Math.PI / 180, la1 = a[0] * r, la2 = b[0] * r;
+  const h = Math.sin((la2 - la1) / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin((b[1] - a[1]) * r / 2) ** 2;
+  return 3958.8 * 2 * Math.asin(Math.sqrt(h));
+}
+function holidays(year){
+  const out = new Set();
+  let d = new Date(Date.UTC(year, 4, 31)); while(d.getUTCDay() !== 1) d.setUTCDate(d.getUTCDate() - 1); out.add(iso(d));   // Memorial Day
+  d = new Date(Date.UTC(year, 6, 4)); if(d.getUTCDay() === 0) d.setUTCDate(5); else if(d.getUTCDay() === 6) d.setUTCDate(3); out.add(iso(d));
+  d = new Date(Date.UTC(year, 8, 1)); while(d.getUTCDay() !== 1) d.setUTCDate(d.getUTCDate() + 1); out.add(iso(d));     // Labor Day
+  return out;
+}
+function workdays(year, hol){
+  const out = [];
+  for(let d = new Date(Date.UTC(year, R.M0 - 1, 1)); d.getUTCMonth() < R.M1; d.setUTCDate(d.getUTCDate() + 1)){
+    const s = iso(d); if(d.getUTCDay() >= 1 && d.getUTCDay() <= 5 && !hol.has(s)) out.push(s);
+  }
+  return out;
+}
+
+/* rows: prebook rows to place (open, not yet discussed).
+   o: { season, crews:[{id,name}], caps: Map('crew|product' -> yards),
+        rock: Set(product), prod: name -> rate-card name,
+        busy: [{date, crew_id, start, end, allDay}] }                      */
+function pbOptimize(rows, o){
+  const hol = o.holidays || holidays(o.season);
+  const days = workdays(o.season, hol);
+  const crews = o.crews.map(c => ({ id: String(c.id), name: c.name || '' }));
+  const dayStart = (crew, date) => (D(date).getUTCDay() === 1 && /#17\b/.test(crew.name)) ? R.MON17 : R.START;
+  const crewById = id => crews.find(c => c.id === String(id));
+  const capOf = (cid, prod) => { const v = o.caps.get(cid + '|' + prod); return v > 0 ? Number(v) : null; };
+
+  /* ---- truck-day ledger, seeded with everything that is fixed ---------- */
+  const led = new Map();
+  const cell = (date, cid) => { const k = date + '|' + cid; let c = led.get(k);
+    if(!c){ c = { free: dayStart(crewById(cid), date), loads: 0, blocked: false, touched: false, last: null }; led.set(k, c); }
+    return c; };
+  (o.busy || []).forEach(b => {
+    if(!crewById(b.crew_id) || days.indexOf(b.date) < 0) return;
+    const c = cell(b.date, String(b.crew_id));
+    c.touched = true;
+    if(b.allDay){ c.blocked = true; return; }
+    c.free = Math.max(c.free, b.end + R.RELOAD); c.loads++;
+  });
+
+  /* ---- jobs ------------------------------------------------------------ */
+  const jobs = rows.map(r => {
+    const prod = o.prod ? o.prod(r.res_product || r.product || '') : (r.product || '');
+    const ll = (r.lat != null && r.lon != null) ? [Number(r.lat), Number(r.lon)] : null;
+    const dist = ll ? miles(R.YARD, ll) : 3;
+    const m = Math.min(R.M1, Math.max(R.M0, Number(r.usual_month) || 6));
+    return { id: r.id, r, prod, key: prod || ('~' + (r.product_hist || 'other')),
+      rock: !!(prod && o.rock && o.rock.has(prod)),
+      y: Number(r.yards) || 0, mins: Math.max(30, Math.round((Number(r.equip_hours) || 2) * 60)),
+      month: m, usual: m, score: Number(r.score) || 0, ll, dist,
+      ang: ll ? Math.atan2(ll[0] - R.YARD[0], (ll[1] - R.YARD[1]) * Math.cos(R.YARD[0] * Math.PI / 180)) : 0 };
+  });
+  const eligible = j => {
+    if(!j.rock) return crews;
+    const e = crews.filter(c => capOf(c.id, j.prod) != null);
+    return e.length ? e : crews;
+  };
+  const capMin = j => { const v = eligible(j).map(c => capOf(c.id, j.prod)).filter(x => x != null);
+    return v.length ? Math.min(...v) : null; };
+  const WIN = R.END - R.START;
+
+  const plan = new Map(); let gid = 0; const unplaced = [];
+  for(let month = R.M0; month <= R.M1; month++){
+    /* a job carried over from a full month has had its month moved on */
+    const mj = jobs.filter(j => j.month === month && !plan.has(j.id));
+    /* -------- 1. loads, per product ----------------------------------- */
+    const byKey = new Map();
+    mj.forEach(j => { (byKey.get(j.key) || byKey.set(j.key, []).get(j.key)).push(j); });
+    const units = [];
+    byKey.forEach((list, key) => {
+      const cap = capMin(list[0]);
+      /* sweep order: outlying jobs by compass direction, then the core */
+      const far = list.filter(j => j.dist >= 6).sort((a, b) => a.ang - b.ang || b.dist - a.dist);
+      const core = list.filter(j => j.dist < 6).sort((a, b) => a.ang - b.ang);
+      const order = far.concat(core);
+      const blocks = [];
+      const mk = (j, total) => ({ key, prod: j.prod, rock: j.rock, jobs: [j], yards: j.y, mins: j.mins,
+        room: total != null ? total - j.y : 0, cap, seed: j, long: j.mins > WIN });
+      /* multi-load jobs first: their last load's empty space is fillable */
+      order.filter(j => cap && j.y > cap).forEach(j => blocks.push(mk(j, Math.ceil(j.y / cap) * cap)));
+      order.filter(j => !(cap && j.y > cap)).sort((a, b) => b.y - a.y).forEach(j => {
+        if(!cap || !(j.y > 0) || j.mins > WIN){ blocks.push(mk(j, null)); return; }
+        const near = b => { const s = b.seed; const lim = Math.max(10, 0.6 * Math.max(j.dist, s.dist));
+          return miles(j.ll, s.ll) <= lim; };
+        const fit = blocks.filter(b => !b.long && b.room >= j.y && b.jobs.length < R.MAXSTOPS &&
+          b.mins + R.TRAVEL + j.mins <= WIN - 60 && near(b));
+        if(fit.length){
+          fit.sort((a, b) => (a.room - j.y) - (b.room - j.y));      // best fit: fill it up
+          const b = fit[0]; b.jobs.push(j); b.yards += j.y; b.room -= j.y; b.mins += R.TRAVEL + j.mins;
+        }else blocks.push(mk(j, cap));
+      });
+      /* -------- 2. product-days ------------------------------------- */
+      const pd = [];
+      blocks.filter(b => b.long).forEach(b => pd.push({ key, blocks: [b], mins: b.mins, long: true }));
+      blocks.filter(b => !b.long).sort((a, b) => b.mins - a.mins).forEach(b => {
+        const u = pd.find(u => !u.long && u.blocks.length < R.MAXLOADS && u.mins + R.RELOAD + b.mins <= WIN);
+        if(u){ u.blocks.push(b); u.mins += R.RELOAD + b.mins; }
+        else pd.push({ key, blocks: [b], mins: b.mins });
+      });
+      pd.forEach(u => units.push(u));
+    });
+    /* -------- 3. leftovers: part-days of different products combine ---- */
+    const full = units.filter(u => u.long || u.mins >= WIN * 0.55);
+    const part = units.filter(u => !u.long && u.mins < WIN * 0.55).sort((a, b) => b.mins - a.mins);
+    const mixed = [];
+    part.forEach(u => {
+      const rockU = u.blocks.some(b => b.rock);
+      const m = mixed.find(m => m.blocks.length + u.blocks.length <= R.MAXLOADS && m.mins + R.RELOAD + u.mins <= WIN);
+      if(m){ m.blocks = m.blocks.concat(u.blocks); m.mins += R.RELOAD + u.mins; m.mixed = true; m.rock = m.rock || rockU; }
+      else mixed.push({ key: u.key, blocks: u.blocks.slice(), mins: u.mins, rock: rockU });
+    });
+    const all = full.concat(mixed);
+    all.forEach(u => { u.score = Math.max(...u.blocks.map(b => Math.max(...b.jobs.map(j => j.score))));
+      u.rock = u.blocks.some(b => b.rock);
+      u.ang = u.blocks[0].seed.ang; });
+    /* -------- 4. dates ------------------------------------------------- */
+    const mdays = days.filter(d => Number(d.slice(5, 7)) === month);
+    const fitsOn = (u, date, c) => {
+      const st = cell(date, c.id);
+      if(st.blocked) return false;
+      if(u.rock && !u.blocks.every(b => !b.rock || capOf(c.id, b.prod) != null)) return false;
+      if(!u.blocks.every(b => !(b.jobs.length > 1) || capOf(c.id, b.prod) == null || b.yards <= Math.ceil(b.yards / capOf(c.id, b.prod)) * capOf(c.id, b.prod))) return false;
+      if(st.loads + u.blocks.length > R.MAXLOADS) return false;
+      return st.free + u.mins <= R.END;
+    };
+    const commit = (u, date, c) => {
+      const st = cell(date, c.id); let t = st.free;
+      u.blocks.forEach((b, bi) => {
+        if(bi) t += R.RELOAD;
+        gid++;
+        const capC = capOf(c.id, b.prod);
+        b.jobs.forEach((j, si) => {
+          if(si) t += R.TRAVEL;
+          plan.set(j.id, { plan_date: date, plan_crew_id: c.id, plan_time: hm(t), plan_hours: j.mins / 60,
+            plan_days: 1, plan_slots: null, plan_load: st.loads + bi + 1, plan_stops: b.jobs.length,
+            plan_loads: capC && j.y > capC ? Math.ceil(j.y / capC) : 1, plan_group: gid,
+            plan_moved: Number(date.slice(5, 7)) !== j.usual });
+          t += j.mins;
+        });
+      });
+      st.free = t + R.RELOAD; st.loads += u.blocks.length; st.touched = true; st.last = u.blocks[u.blocks.length - 1].key;
+    };
+    /* a job longer than a working day: consecutive EMPTY days, one truck */
+    const placeLong = (u, pool) => {
+      const j = u.blocks[0].jobs[0];
+      for(const c of eligible(j)){
+        for(let i = 0; i < pool.length; i++){
+          let left = j.mins, k = days.indexOf(pool[i]); const ch = [];
+          while(left > 0 && k < days.length){
+            const st = cell(days[k], c.id);
+            if(st.touched || st.blocked) break;
+            const s0 = dayStart(c, days[k]), take = Math.min(left, R.END - s0);
+            ch.push({ date: days[k], crew_id: c.id, time: hm(s0), hours: Math.round(take / 60 * 100) / 100 });
+            left -= take; k++;
+          }
+          if(left > 0) continue;
+          gid++;
+          ch.forEach(x => { const st = cell(x.date, c.id); st.touched = true; st.blocked = true; });
+          plan.set(j.id, { plan_date: ch[0].date, plan_crew_id: c.id, plan_time: ch[0].time, plan_hours: j.mins / 60,
+            plan_days: ch.length, plan_slots: ch, plan_load: 1, plan_stops: 1,
+            plan_loads: (capOf(c.id, j.prod) && j.y > capOf(c.id, j.prod)) ? Math.ceil(j.y / capOf(c.id, j.prod)) : 1,
+            plan_group: gid, plan_moved: Number(ch[0].date.slice(5, 7)) !== j.usual });
+          return true;
+        }
+      }
+      return false;
+    };
+    const over = [];
+    all.filter(u => u.long).sort((a, b) => b.score - a.score).forEach(u => { if(!placeLong(u, mdays)) over.push(u); });
+    /* more truck-days of work than the month has: the lowest-priority
+       days wait for next month (re-packed there with their own product) */
+    let rest = all.filter(u => !u.long);
+    const freeDays = mdays.reduce((n, d) => n + crews.filter(c => { const s = cell(d, c.id); return !s.blocked && s.loads === 0; }).length, 0);
+    /* Only when the month is short of truck-days do two part-days share
+       one — smallest pair first, same product before a product change. */
+    for(let guard = 0; rest.length > freeDays && guard < 400; guard++){
+      let best = null;
+      for(let i = 0; i < rest.length; i++) for(let k = i + 1; k < rest.length; k++){
+        const a = rest[i], b = rest[k];
+        if(a.blocks.length + b.blocks.length > R.MAXLOADS) continue;
+        const m = a.mins + R.RELOAD + b.mins;
+        if(m > WIN) continue;
+        const cost = m + (a.key === b.key ? 0 : 600);
+        if(!best || cost < best.cost) best = { i, k, cost, m };
+      }
+      if(!best) break;
+      const a = rest[best.i], b = rest[best.k];
+      a.blocks = a.blocks.concat(b.blocks); a.mins = best.m; a.mixed = a.mixed || b.mixed || a.key !== b.key;
+      a.score = Math.max(a.score, b.score); a.rock = a.rock || b.rock;
+      rest.splice(best.k, 1);
+    }
+    if(rest.length > freeDays){
+      rest.sort((a, b) => b.score - a.score);
+      rest.slice(freeDays).forEach(u => over.push(u));
+      rest = rest.slice(0, freeDays);
+    }
+    /* product runs: biggest product first, its days back-to-back on a truck */
+    const vol = new Map(); rest.forEach(u => vol.set(u.key, (vol.get(u.key) || 0) + u.mins));
+    rest.sort((a, b) => (b.rock - a.rock) || (a.mixed ? 1 : 0) - (b.mixed ? 1 : 0) ||
+      (vol.get(b.key) - vol.get(a.key)) || a.key.localeCompare(b.key) || a.ang - b.ang);
+    const used = new Map(crews.map(c => [c.id, 0]));
+    let runKey = null, runCrew = null;
+    rest.forEach(u => {
+      /* stay on the run's truck while it has room; else the emptier truck */
+      const cand = crews.slice().sort((a, b) => (u.key === runKey ? (b.id === runCrew) - (a.id === runCrew) : 0) ||
+        used.get(a.id) - used.get(b.id));
+      let done = false;
+      for(const c of cand){
+        const d = mdays.find(d => fitsOn(u, d, c) && cell(d, c.id).loads === 0) ||
+          mdays.find(d => fitsOn(u, d, c) && cell(d, c.id).last === u.key) || mdays.find(d => fitsOn(u, d, c));
+        if(d){ commit(u, d, c); used.set(c.id, used.get(c.id) + 1); runKey = u.key; runCrew = c.id; done = true; break; }
+      }
+      if(!done) over.push(u);
+    });
+    over.forEach(u => u.blocks.forEach(b => b.jobs.forEach(j => {
+      if(month < R.M1) j.month = month + 1; else unplaced.push(j); })));
+  }
+  /* September's overflow: any open room earlier in the season, else none */
+  unplaced.slice().forEach(j => {
+    for(const d of days){
+      for(const c of eligible(j)){
+        const st = cell(d, c.id);
+        if(st.blocked || st.loads >= R.MAXLOADS || st.free + j.mins > R.END) continue;
+        gid++;
+        const capC = capOf(c.id, j.prod);
+        plan.set(j.id, { plan_date: d, plan_crew_id: c.id, plan_time: hm(st.free), plan_hours: j.mins / 60, plan_days: 1,
+          plan_slots: null, plan_load: st.loads + 1, plan_stops: 1, plan_loads: capC && j.y > capC ? Math.ceil(j.y / capC) : 1,
+          plan_group: gid, plan_moved: Number(d.slice(5, 7)) !== j.usual });
+        st.free += j.mins + R.RELOAD; st.loads++; st.touched = true;
+        unplaced.splice(unplaced.indexOf(j), 1);
+        return;
+      }
+    }
+  });
+  unplaced.forEach(j => plan.set(j.id, { plan_date: null, plan_crew_id: null, plan_time: null, plan_hours: j.mins / 60,
+    plan_days: null, plan_slots: null, plan_load: null, plan_stops: null, plan_loads: null, plan_group: null, plan_moved: false }));
+  return { plan, unplaced: unplaced.length };
+}
+
+/* How product-efficient is a plan? Works on ANY set of slotted rows
+   ({date, crew, group, product, yards, hours, usual, moved}) so the old and
+   the new schedule are scored by the same yardstick. */
+function pbPlanMetrics(slots, caps){
+  const td = new Map(), loads = new Map();
+  slots.forEach(s => {
+    if(!s.date) return;
+    const k = s.date + '|' + s.crew;
+    (td.get(k) || td.set(k, []).get(k)).push(s);
+    const g = k + '|' + s.group;
+    (loads.get(g) || loads.set(g, []).get(g)).push(s);
+  });
+  let pure = 0, multi = 0, pureMulti = 0, runs = 0, runBase = 0;
+  td.forEach(list => {
+    const ps = new Set(list.map(s => s.product));
+    if(ps.size === 1) pure++;
+    if(list.length > 1){ multi++; if(ps.size === 1) pureMulti++; }
+  });
+  /* a truck starting the day on the product it ended the last working day on */
+  const keys = [...td.keys()].sort();
+  const byCrew = new Map();
+  keys.forEach(k => { const [d, c] = k.split('|'); (byCrew.get(c) || byCrew.set(c, []).get(c)).push(d); });
+  byCrew.forEach((ds, c) => { for(let i = 1; i < ds.length; i++){
+    const a = td.get(ds[i - 1] + '|' + c).slice().sort((x, y) => String(x.time).localeCompare(String(y.time)));
+    const b = td.get(ds[i] + '|' + c).slice().sort((x, y) => String(x.time).localeCompare(String(y.time)));
+    runBase++; if(a[a.length - 1].product === b[0].product) runs++; } });
+  let y = 0, capUsed = 0, shared = 0, nLoads = 0;
+  loads.forEach((list, g) => {
+    const crew = g.split('|')[1], cap = caps.get(crew + '|' + list[0].product);
+    if(list.length > 1) shared += list.length;
+    if(!(cap > 0)) return;
+    const sum = list.reduce((a, s) => a + (Number(s.yards) || 0), 0);
+    if(!(sum > 0)) return;
+    const n = Math.ceil(sum / cap - 1e-9); y += sum; capUsed += n * cap; nLoads += n;
+  });
+  const placed = slots.filter(s => s.date);
+  return { jobs: placed.length, unplaced: slots.length - placed.length, truckDays: td.size,
+    pureDays: pure, purePct: td.size ? Math.round(pure / td.size * 100) : 0,
+    multiDays: multi, pureMultiPct: multi ? Math.round(pureMulti / multi * 100) : 0,
+    fillPct: capUsed ? Math.round(y / capUsed * 100) : 0, truckloads: nLoads,
+    shared, runPct: runBase ? Math.round(runs / runBase * 100) : 0,
+    moved: placed.filter(s => s.moved).length,
+    hours: Math.round(placed.reduce((a, s) => a + (Number(s.hours) || 0), 0)) };
+}
+root.pbOptimize = pbOptimize; root.pbPlanMetrics = pbPlanMetrics; root.PBOPT_RULES = R;
+if(typeof module !== 'undefined' && module.exports) module.exports = { pbOptimize, pbPlanMetrics, R };
+})(typeof window !== 'undefined' ? window : globalThis);
+
 /* ============================== PRE-BOOK ================================
    (per Taylor 2026-11-06) A call list for the sales rep to PRELIMINARILY
    book next season's returning customers. Rows live in the prebook table
@@ -11785,10 +12164,12 @@ const PREBOOK_SEASON = 2027;
 const PB_CONFIRM_DAYS = 60;      // enters the To Do pile
 const PB_URGENT_DAYS  = 30;      // turns urgent
 const PB = { rows:null, t:0, missing:null, shown:60, wk:false,
-  filt:{ q:'', status:'tocall', tier:'', month:'', product:'', sort:'score' } };
+  sel:new Set(),
+  filt:{ q:'', status:'tocall', tier:'', month:'', product:'', sort:'score', hist:'', vet:'todo' } };
 const PB_STATUS = { new:['To call',''], no_answer:['No answer','w'],
   callback:['Call back','w'], reserved:['Reserved','g'],
-  declined:['Not this year','d'], quoted:['Quoted','g'], released:['Released','d'] };
+  declined:['Not this year','d'], quoted:['Quoted','g'], released:['Released','d'],
+  removed:['Removed','d'] };
 const PB_MONTHS = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function pbTier(s){ s=Number(s)||0; return s>=60?'A':s>=40?'B':'C'; }
 function pbCrewName(id){ return (((CREWS||[]).find(c=>String(c.id)===String(id)))||{}).name||(id?'truck '+id:''); }
@@ -11843,6 +12224,8 @@ function pbSlotsOf(r){
 }
 function pbErr(e){
   const m=String((e&&e.message)||e||'');
+  if(/vetted_|removed_|prebook_apply_plan|prebook_status_check|"lat"|'lat'/i.test(m))
+    return 'The vetting columns / re-optimize function are missing — run sql/59_prebook_vet.sql in Supabase.';
   return /prebook/i.test(m) && /exist|schema|cache|find|404|relation/i.test(m)
     ? 'The pre-book table is missing — run sql/57_prebook.sql, then sql/58_prebook_seed_2027.sql in Supabase.'
     : m;
@@ -11895,11 +12278,29 @@ function pbFiltered(){
   const words=f.q.toLowerCase().split(/\s+/).filter(Boolean);
   let rows=(PB.rows||[]).filter(r=>{
     const st=r.status||'new';
+    const ns=Array.isArray(r.season_years)?r.season_years.length:(Number(r.seasons)||0);
+    if(f.hist==='1' && ns!==1) return false;
+    if(f.hist==='2' && ns!==2) return false;
+    if(f.hist==='3' && ns<3) return false;
+    if(PB.view==='vet'){
+      /* vetting looks at offers nobody has acted on yet */
+      const open=(st==='new'||st==='no_answer'||st==='callback');
+      if(f.vet==='todo' && !(open && !r.vetted_at)) return false;
+      if(f.vet==='kept' && !(st!=='removed' && r.vetted_at)) return false;
+      if(f.vet==='removed' && st!=='removed') return false;
+    }else{
+      if(st==='removed' && f.status!=='removed') return false;
+      if(f.status==='removed' && st!=='removed') return false;
+    }
+    if(PB.view==='vet'){ /* the Show filter belongs to the call list */ }
+    else
     if(f.status==='tocall' && !(st==='new'||st==='no_answer'||st==='callback')) return false;
-    if(f.status==='due' && !(st==='callback' && r.callback_date && r.callback_date<=today)) return false;
-    if(f.status==='reserved' && st!=='reserved') return false;
-    if(f.status==='quoted' && st!=='quoted') return false;
-    if(f.status==='declined' && !(st==='declined'||st==='released')) return false;
+    if(PB.view!=='vet' && f.status==='due' && !(st==='callback' && r.callback_date && r.callback_date<=today)) return false;
+    if(PB.view!=='vet'){
+      if(f.status==='reserved' && st!=='reserved') return false;
+      if(f.status==='quoted' && st!=='quoted') return false;
+      if(f.status==='declined' && !(st==='declined'||st==='released')) return false;
+    }
     if(f.tier && pbTier(r.score)!==f.tier) return false;
     const d=r.res_date||r.plan_date;
     if(f.month && !(d && Number(d.slice(5,7))===Number(f.month))) return false;
@@ -11916,7 +12317,10 @@ function pbFiltered(){
   const top={}; rows.forEach(r=>{ const k=String(r.cust_id);
     top[k]=Math.max(top[k]||0, Number(r.score)||0); });
   const dkey=r=>(r.res_date||r.plan_date||'9999')+'T'+(pbHM(r.res_time||r.plan_time)||'99');
-  if(f.sort==='date') rows.sort((a,b)=>dkey(a).localeCompare(dkey(b)));
+  const nsOf=r=>Array.isArray(r.season_years)?r.season_years.length:(Number(r.seasons)||0);
+  if(f.sort==='thin') rows.sort((a,b)=>(nsOf(a)-nsOf(b)) ||
+    String(a.last_date||'').localeCompare(String(b.last_date||'')) || (a.score-b.score));
+  else if(f.sort==='date') rows.sort((a,b)=>dkey(a).localeCompare(dkey(b)));
   else if(f.sort==='name') rows.sort((a,b)=>String(a.customer_name).localeCompare(String(b.customer_name))||dkey(a).localeCompare(dkey(b)));
   else rows.sort((a,b)=>(top[String(b.cust_id)]-top[String(a.cust_id)]) ||
     String(a.cust_id).localeCompare(String(b.cust_id)) || (b.score-a.score) || dkey(a).localeCompare(dkey(b)));
@@ -11953,7 +12357,9 @@ async function renderPrebook(){
   updatePrebookBadges().catch(()=>{});
 }
 function pbRenderStats(){
-  const rows=PB.rows||[], today=calFmt(new Date());
+  const allRows=PB.rows||[], today=calFmt(new Date());
+  const rows=allRows.filter(r=>r.status!=='removed');
+  const nRemoved=allRows.length-rows.length;
   const custs=new Set(rows.map(r=>String(r.cust_id)));
   const n=s=>rows.filter(r=>(r.status||'new')===s).length;
   const tocall=rows.filter(r=>['new','no_answer','callback'].includes(r.status||'new')).length;
@@ -11961,7 +12367,7 @@ function pbRenderStats(){
   const res=rows.filter(r=>r.status==='reserved'||r.status==='quoted');
   const due=rows.filter(r=>r.status==='callback' && r.callback_date && r.callback_date<=today).length;
   const stats=[
-    ['On the list', rows.length, custs.size+' customers'],
+    ['On the list', rows.length, custs.size+' customers'+(nRemoved?' · '+nRemoved+' removed in vetting':'')],
     ['To call', tocall, rows.length?Math.round(reached/rows.length*100)+'% worked':''],
     ['Reserved', res.length, money(res.reduce((s,r)=>s+(Number(r.typical_value)||0),0))+' typical value'],
     ['Call-backs due', due, n('callback')+' scheduled'],
@@ -12036,7 +12442,8 @@ function pbStatusHtml(r){
 function pbRenderList(){
   const box=$('#pblist'); if(!box) return;
   const rows=pbFiltered();
-  $('#pbcount').textContent='· '+rows.length+' of '+(PB.rows||[]).length;
+  $('#pbcount').textContent='· '+rows.length+' of '+(PB.rows||[]).filter(r=>r.status!=='removed').length;
+  if(PB.view==='vet'){ pbRenderVet(rows); return; }
   if(!rows.length){ box.innerHTML='<div class="empty">Nothing matches — change the filters above.</div>'; return; }
   const show=rows.slice(0, PB.shown);
   const nSites={}; (PB.rows||[]).forEach(r=>{ nSites[String(r.cust_id)]=(nSites[String(r.cust_id)]||0)+1; });
@@ -12081,11 +12488,15 @@ function pbWireFilters(){
   const s=$('#pb_search'); if(s) s.addEventListener('input', debounce(()=>{
     PB.filt.q=s.value.trim(); PB.shown=60; pbRenderList(); }, 200));
   on('pb_status','status'); on('pb_tier','tier'); on('pb_month','month');
-  on('pb_product','product'); on('pb_sort','sort');
+  on('pb_product','product'); on('pb_sort','sort'); on('pb_hist','hist'); on('pb_vetshow','vet');
   const c=$('#pb_csv'); if(c) c.onclick=pbCsv;
   const bind=(id,fn)=>{ const e2=$('#'+id); if(e2) e2.onclick=fn; };
   bind('pb_vlist', ()=>pbSetView('list'));
   bind('pb_vcal',  ()=>pbSetView('cal'));
+  bind('pb_vvet',  ()=>pbSetView('vet'));
+  bind('pb_reopt', ()=>pbReoptimize());
+  bind('pb_vetkeep',   ()=>pbVetBulk('keep'));
+  bind('pb_vetremove', ()=>pbVetBulk('remove'));
   bind('pbc_month', ()=>{ PB.cal.view='month'; pbRenderCal(); });
   bind('pbc_week',  ()=>{ PB.cal.view='week'; pbRenderCal(); });
   bind('pbc_prev',  ()=>pbCalStep(-1));
@@ -12500,12 +12911,18 @@ function pbFirstPlanDate(){
   return ds.find(d=>d>=today) || ds[0] || today;
 }
 function pbSetView(v){
-  PB.view=v;
+  const was=PB.view; PB.view=v;
   const t=(id,on)=>{ const e2=$('#'+id); if(e2) e2.classList.toggle('hide', !on); };
-  t('pb_listwrap', v==='list'); t('pb_calwrap', v==='cal');
-  [['pb_vlist','list'],['pb_vcal','cal']].forEach(([id,x])=>{ const b=$('#'+id); if(!b) return;
+  t('pb_listwrap', v!=='cal'); t('pb_calwrap', v==='cal');
+  t('pbweeks', v==='list'); t('pb_vetbar', v==='vet');
+  t('pb_statuswrap', v!=='vet'); t('pb_vetshowwrap', v==='vet');
+  [['pb_vlist','list'],['pb_vcal','cal'],['pb_vvet','vet']].forEach(([id,x])=>{ const b=$('#'+id); if(!b) return;
     b.style.background = v===x ? 'var(--good)' : ''; b.style.color = v===x ? '#fff' : ''; });
-  if(v==='cal') pbRenderCal();
+  /* vetting reads thinnest-history first: the likeliest one-time jobs */
+  if(v==='vet' && was!=='vet'){ PB.filt.sort='thin'; PB.shown=60; PB.sel.clear(); }
+  if(v!=='vet' && was==='vet'){ PB.filt.sort='score'; PB.shown=60; }
+  const so=$('#pb_sort'); if(so) so.value=PB.filt.sort;
+  if(v==='cal') pbRenderCal(); else pbRenderList();
 }
 function pbCalStep(n){
   const a=new Date((PB.cal.anchor||pbFirstPlanDate())+'T00:00:00');
@@ -12628,6 +13045,233 @@ async function pbRenderCal(){
       }).join('')+'</div>').join('')+'</div>';
   grid.querySelectorAll('[data-pbday]').forEach(cell=>cell.onclick=()=>{
     PB.cal.view='week'; PB.cal.anchor=cell.dataset.pbday; pbRenderCal(); });
+}
+
+/* ============================ VETTING ====================================
+   (per Taylor 2026-11-06: "vet the customers on the list and remove any
+   unnecessary (ie; customers that we know were a one-time project)". Then
+   re-optimize.) The Vet view walks the list thinnest-history first. Keep
+   marks a row vetted; Remove takes it off the call list, the plan calendar
+   and every count (status 'removed' + the reason) — never deleted, and
+   Restore brings it back. Reserved / quoted rows are not vetted here. */
+const PB_REASONS=['One-time project','Moved / sold the property','Contractor’s client site',
+  'Duplicate of another row','Do not contact','Other'];
+function pbRenderVet(rows){
+  const box=$('#pblist'); if(!box) return;
+  const all=(PB.rows||[]);
+  const open=r=>['new','no_answer','callback'].includes(r.status||'new');
+  const nTodo=all.filter(r=>open(r)&&!r.vetted_at).length,
+        nKept=all.filter(r=>r.status!=='removed'&&r.vetted_at).length,
+        nRem=all.filter(r=>r.status==='removed').length;
+  const pg=$('#pb_vetprog'); if(pg) pg.innerHTML='<b>'+nTodo+'</b> to vet · <b style="color:var(--good)">'+nKept+
+    '</b> kept · <b style="color:var(--danger)">'+nRem+'</b> removed';
+  const rs=$('#pb_vetreason'); if(rs && !rs.options.length)
+    rs.innerHTML=PB_REASONS.map(x=>'<option>'+esc(x)+'</option>').join('');
+  const show=rows.slice(0, PB.shown);
+  /* drop selections that scrolled out of the filter */
+  const ids=new Set(rows.map(r=>String(r.id)));
+  [...PB.sel].forEach(i=>{ if(!ids.has(i)) PB.sel.delete(i); });
+  const sc=$('#pb_vetsel'); if(sc) sc.textContent=PB.sel.size?PB.sel.size+' selected':'none selected';
+  if(!rows.length){
+    box.innerHTML='<div class="empty">'+(PB.filt.vet==='todo'
+      ? 'Nothing left to vet with these filters — re-optimize the schedule when you are done.'
+      : 'Nothing here.')+'</div>'; return; }
+  box.innerHTML='<table><thead><tr><th style="width:28px"><input type="checkbox" id="pb_vetall" title="Select every row shown"></th>'+
+    '<th>Customer</th><th>Job we expect</th><th>History</th><th>Why they are on the list</th><th></th></tr></thead><tbody>'+
+    show.map(r=>{
+      const yrs=Array.isArray(r.season_years)?r.season_years:[];
+      const removed=r.status==='removed';
+      const why=r.kind==='account' ? 'Account — jobs at changing sites'
+        : yrs.length>=2 ? 'Repeat — '+yrs.length+' seasons at this site'
+        : 'Recent only — one job, '+(yrs[0]||'');
+      return '<tr'+(removed?' style="opacity:.6"':'')+'>'+
+        '<td><input type="checkbox" data-pbsel="'+esc(r.id)+'"'+(PB.sel.has(String(r.id))?' checked':'')+'></td>'+
+        '<td><b>'+esc(r.customer_name||'(no name)')+'</b> <span class="tag">'+esc(r.cust_class||'')+'</span>'+
+          (r.kind==='account'?' <span class="tag w">account</span>':'')+
+          '<br><span class="small muted">'+esc(fmtPhoneTyped(r.phone||''))+'</span></td>'+
+        '<td class="small"><b>'+esc(pbJobTxt(r))+'</b>'+(r.equip_hours?' · '+hrs(r.equip_hours):'')+
+          '<br><span class="muted">'+esc([r.address,r.city].filter(Boolean).join(', '))+'</span></td>'+
+        '<td class="small">'+esc(yrs.map(y=>"'"+String(y).slice(2)).join(' '))+
+          '<br><span class="muted">last '+esc(dfmt(String(r.last_date||'').slice(0,10)))+
+          (r.typical_value?' · '+money(r.typical_value):'')+'</span></td>'+
+        '<td class="small">'+(yrs.length<2&&r.kind!=='account'?'<span style="color:var(--warn);font-weight:600">'+esc(why)+'</span>':esc(why))+
+          (r.last_descr&&r.kind!=='account'?'<br><span class="muted">'+esc(String(r.last_descr).slice(0,110))+'</span>':'')+
+          (removed?'<br><span class="tag d">removed — '+esc(r.removed_reason||'')+'</span>'
+            : r.vetted_at?'<br><span class="tag g">✓ kept</span>':'')+'</td>'+
+        '<td><div style="display:flex;gap:4px;white-space:nowrap">'+
+          (removed ? '<button type="button" class="btn ghost sm" data-pbrestore="'+esc(r.id)+'">↩ Restore</button>'
+            : '<button type="button" class="btn ghost sm" data-pbkeep="'+esc(r.id)+'" title="Stays on the call list">✓ Keep</button>'+
+              '<button type="button" class="btn ghost sm" data-pbremove="'+esc(r.id)+'" style="color:var(--danger)" '+
+              'title="Off the call list and the plan — uses the reason picked above">✕ Remove</button>')+
+        '</div></td></tr>';
+    }).join('')+'</tbody></table>'+
+    (rows.length>show.length ? '<div style="text-align:center;margin-top:10px">'+
+      '<button type="button" class="btn ghost sm" id="pb_more">Show '+Math.min(60, rows.length-show.length)+
+      ' more ('+(rows.length-show.length)+' left)</button></div>' : '');
+  const more=$('#pb_more'); if(more) more.onclick=()=>{ PB.shown+=60; pbRenderList(); };
+  const upd=()=>{ const sc2=$('#pb_vetsel'); if(sc2) sc2.textContent=PB.sel.size?PB.sel.size+' selected':'none selected'; };
+  box.querySelectorAll('[data-pbsel]').forEach(cb=>cb.onchange=()=>{
+    if(cb.checked) PB.sel.add(cb.dataset.pbsel); else PB.sel.delete(cb.dataset.pbsel); upd(); });
+  const allCb=$('#pb_vetall'); if(allCb) allCb.onchange=()=>{
+    box.querySelectorAll('[data-pbsel]').forEach(cb=>{ cb.checked=allCb.checked;
+      if(allCb.checked) PB.sel.add(cb.dataset.pbsel); else PB.sel.delete(cb.dataset.pbsel); }); upd(); };
+  box.querySelectorAll('[data-pbkeep]').forEach(b=>b.onclick=()=>pbVetApply([b.dataset.pbkeep],'keep'));
+  box.querySelectorAll('[data-pbremove]').forEach(b=>b.onclick=()=>pbVetApply([b.dataset.pbremove],'remove'));
+  box.querySelectorAll('[data-pbrestore]').forEach(b=>b.onclick=()=>pbVetApply([b.dataset.pbrestore],'restore'));
+}
+function pbVetBulk(kind){
+  if(!PB.sel.size){ toast('Tick the rows first (the box in the header selects every row shown).', true); return; }
+  pbVetApply([...PB.sel], kind);
+}
+async function pbVetApply(ids, kind){
+  const now=new Date().toISOString(), me=pbUser();
+  const byId=new Map((PB.rows||[]).map(r=>[String(r.id), r]));
+  /* a reservation or a quote is past vetting — release it from its card */
+  const okIds=ids.map(String).filter(i=>{ const r=byId.get(i);
+    return r && (kind==='restore' ? r.status==='removed' : !['reserved','quoted'].includes(r.status)); });
+  const skipped=ids.length-okIds.length;
+  if(!okIds.length){ toast(skipped?'Reserved and quoted rows are not vetted here — release them from their card.':'Nothing to change.', true); return; }
+  const reason=(($('#pb_vetreason')||{}).value)||PB_REASONS[0];
+  const patch = kind==='keep' ? { vetted_at:now, vetted_by:me }
+    : kind==='remove' ? { status:'removed', removed_reason:reason, removed_at:now, removed_by:me, vetted_at:now, vetted_by:me, callback_date:null }
+    : { status:'new', removed_reason:null, removed_at:null, removed_by:null, vetted_at:null, vetted_by:null };
+  patch.updated_at=now;
+  try{
+    const out=(await DB.patchPrebookMany(okIds, patch))||[];
+    if(!out.length) throw new Error('⚠ NOT saved — the database changed nothing. Run sql/59_prebook_vet.sql.');
+    out.forEach(u=>{ const r=byId.get(String(u.id)); if(r) Object.assign(r, u); });
+    okIds.forEach(i=>PB.sel.delete(i));
+    bustCalCache(); updatePrebookBadges().catch(()=>{});
+    toast(kind==='keep' ? '✓ '+out.length+' kept on the call list.'
+      : kind==='remove' ? '✕ '+out.length+' removed — '+reason+'. Re-optimize when you are done vetting.'
+      : '↩ '+out.length+' restored to the call list.'+(skipped?' ('+skipped+' skipped)':''), false);
+    pbRenderStats(); pbRenderWeeks(); pbRenderList();
+  }catch(e){ toast(pbErr(e), true); }
+}
+/* ========================= RE-OPTIMIZE ====================================
+   Runs the product-first season optimizer (pbOptimize) in the browser on the
+   offers that are still movable, against the LIVE truck capacities, and
+   shows before/after before anything is written. Fixed, never moved:
+   reservations, offers with a call-back date (a slot was discussed), real
+   bookings and blockouts. Admins and rate-card editors only. */
+function pbCanOptimize(){ return DB.mode==='demo' || !!State.isAdmin || !!State.ratesEditor; }
+async function pbPlanInputs(){
+  await pbLoad(true);
+  try{ await loadSuggData(true); }catch(e){}
+  const crews=(CREWS||[]).filter(c=>!c.backup).map(c=>({id:String(c.id), name:c.name}));
+  const caps=new Map();
+  if(suggData.capMap) suggData.capMap.forEach((row,k)=>{ const v=Number(row.dry_yards); if(v>0) caps.set(k, v); });
+  const rock=new Set(((State.ref&&State.ref.rate_card)||[]).filter(x=>x.category==='rock').map(x=>x.product));
+  const rows=(PB.rows||[]).filter(r=>r.kind!=='account');
+  const movable=rows.filter(r=>r.status==='new'||r.status==='no_answer'||!r.status);
+  const fixed=rows.filter(r=>r.status==='reserved'||(r.status==='callback'&&r.plan_date));
+  const busy=[];
+  fixed.forEach(r=>{
+    const sl=r.status==='reserved' ? pbSlotsOf(r)
+      : pbSlots(r.plan_date, r.plan_crew_id, pbHM(r.plan_time)||null, Number(r.plan_hours)||Number(r.equip_hours)||2);
+    sl.forEach(x=>{ const s0=toMin(pbHM(x.time)||SLOT_RULES.FIRST_START);
+      busy.push({date:x.date, crew_id:String(x.crew_id), start:s0, end:s0+Math.round((Number(x.hours)||2)*60)}); });
+  });
+  /* what is really on the calendar for the season (holds never block) */
+  let real=0;
+  try{
+    const d=await calFetch(PREBOOK_SEASON+'-03-01', PREBOOK_SEASON+'-09-30');
+    d.jobs.filter(j=>!j.hold).forEach(j=>{ real++;
+      const s0=j.time?toMin(j.time):toMin(SLOT_RULES.FIRST_START);
+      busy.push({date:j.date, crew_id:String(j.crew_id), start:s0, end:s0+Math.round((Number(j.hours)||2)*60), allDay:!j.time}); });
+    d.gEvents.filter(g=>g.block).forEach(g=>{
+      const s0=g.time?toMin(g.time):0;
+      busy.push({date:g.date, crew_id:String(g.crew_id), start:s0, end:s0+Math.round((Number(g.hours)||2)*60), allDay:!g.time}); });
+  }catch(e){}
+  return { crews, caps, rock, rows, movable, fixed, busy, real };
+}
+function pbMetricSlots(list, planOf){
+  return list.map(r=>{ const p=planOf(r);
+    return { date:p.plan_date, crew:String(p.plan_crew_id||''), group:p.grp, time:pbHM(p.plan_time),
+      product:pbProd(r.res_product||r.product||'')||('~'+(r.product_hist||'')), yards:Number(r.yards)||0,
+      hours:Number(r.equip_hours)||0, moved:!!p.plan_moved }; });
+}
+async function pbReoptimize(){
+  if(!pbCanOptimize()){ toast('Only an admin or a rates editor can re-optimize the schedule.', true); return; }
+  const old=$('#crewcard'); if(old) old.remove();
+  const wrap=document.createElement('div'); wrap.id='crewcard';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
+    'display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;'+
+    'max-width:680px;width:100%;max-height:92vh;overflow:auto;padding:16px" id="ro_body">'+
+    '<div class="empty"><span class="spin"></span> Building the schedule…</div></div>';
+  document.body.appendChild(wrap);
+  wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
+  let inp, res;
+  try{
+    inp=await pbPlanInputs();
+    if(!inp.crews.length) throw new Error('No trucks are loaded — sign in and try again.');
+    if(!inp.caps.size) throw new Error('The truck capacity table did not load — loads cannot be filled without it.');
+    res=pbOptimize(inp.movable, { season:PREBOOK_SEASON, crews:inp.crews, caps:inp.caps, rock:inp.rock,
+      prod:pbProd, busy:inp.busy });
+  }catch(e){
+    if($('#ro_body')) $('#ro_body').innerHTML='<div class="note bad">'+esc(pbErr(e))+'</div>'+
+      '<div class="row" style="margin-top:10px"><button type="button" class="btn ghost" id="ro_x">Close</button></div>';
+    const x=$('#ro_x'); if(x) x.onclick=()=>wrap.remove();
+    return;
+  }
+  const both=inp.movable.concat(inp.fixed);
+  const fixedPlan=r=>r.status==='reserved'
+    ? {plan_date:r.res_date, plan_crew_id:r.res_crew_id, plan_time:r.res_time, grp:'f'+r.id, plan_moved:false}
+    : {plan_date:r.plan_date, plan_crew_id:r.plan_crew_id, plan_time:r.plan_time, grp:'f'+(r.plan_group||r.id), plan_moved:r.plan_moved};
+  const before=pbPlanMetrics(pbMetricSlots(both, r=>inp.fixed.includes(r)?fixedPlan(r)
+    : Object.assign({grp:'o'+(r.plan_group!=null?r.plan_group:r.id)}, r)), inp.caps);
+  const after=pbPlanMetrics(pbMetricSlots(both, r=>{ if(inp.fixed.includes(r)) return fixedPlan(r);
+    const p=res.plan.get(r.id); return Object.assign({grp:'n'+p.plan_group}, p); }), inp.caps);
+  const line=(lbl, a, b, unit, goodUp)=>{
+    const better = a===b ? '' : ((b>a)===goodUp ? 'color:var(--good);font-weight:700' : 'color:var(--warn);font-weight:700');
+    return '<tr><td>'+lbl+'</td><td class="num">'+a+(unit||'')+'</td><td class="num" style="'+better+'">'+b+(unit||'')+'</td></tr>'; };
+  $('#ro_body').innerHTML=
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'+
+    '<b style="font-size:18px">Re-optimize the '+PREBOOK_SEASON+' pre-book schedule</b>'+
+    '<button type="button" class="btn ghost sm" id="ro_x">✕</button></div>'+
+    '<div class="small muted" style="margin-top:4px">Product first: jobs of one product fill truckloads to capacity, '+
+    'loads of one product fill the truck’s day, and a product’s days run back-to-back on one truck. '+
+    'Mixed days are only the leftovers.</div>'+
+    '<table style="margin-top:10px"><thead><tr><th></th><th class="num">Now</th><th class="num">After</th></tr></thead><tbody>'+
+    line('Offers with a slot', before.jobs, after.jobs, '', true)+
+    line('Truck-days used', before.truckDays, after.truckDays, '', false)+
+    line('Truck-days on ONE product', before.purePct, after.purePct, '%', true)+
+    line('Average truckload fill', before.fillPct, after.fillPct, '%', true)+
+    line('Truckloads', before.truckloads, after.truckloads, '', false)+
+    line('Jobs sharing a load', before.shared, after.shared, '', true)+
+    line('Days starting on yesterday’s product', before.runPct, after.runPct, '%', true)+
+    line('Moved off their usual month', before.moved, after.moved, '', false)+
+    line('Could not be placed', before.unplaced, after.unplaced, '', false)+
+    '</tbody></table>'+
+    '<div class="small" style="margin-top:10px"><b>'+inp.movable.length+'</b> open offers get a new slot. Staying exactly where they are: <b>'+
+    inp.fixed.filter(r=>r.status==='reserved').length+'</b> reservations, <b>'+
+    inp.fixed.filter(r=>r.status==='callback').length+'</b> call-backs (a slot was discussed), <b>'+inp.real+
+    '</b> real bookings. Removed and declined rows are left out. Capacities: the Rate Card’s DRY yards, live.</div>'+
+    '<div id="ro_msg"></div>'+
+    '<div class="row" style="margin-top:12px">'+
+    '<button type="button" class="btn" id="ro_apply" style="background:var(--good);flex:0 0 auto">Apply the new schedule</button>'+
+    '<button type="button" class="btn ghost" id="ro_cancel" style="flex:0 0 auto">Cancel — keep the current one</button></div>';
+  $('#ro_x').onclick=$('#ro_cancel').onclick=()=>wrap.remove();
+  $('#ro_apply').onclick=async()=>{
+    const b=$('#ro_apply'); b.disabled=true; b.textContent='Saving…';
+    try{
+      const payload=inp.movable.map(r=>{ const p=res.plan.get(r.id);
+        return { id:r.id, plan_date:p.plan_date, plan_crew_id:p.plan_crew_id, plan_time:p.plan_time,
+          plan_hours:Math.round(p.plan_hours*100)/100, plan_days:p.plan_days, plan_slots:p.plan_slots,
+          plan_load:p.plan_load, plan_stops:p.plan_stops, plan_loads:p.plan_loads, plan_group:p.plan_group,
+          plan_moved:!!p.plan_moved }; });
+      const n=await DB.applyPrebookPlan(PREBOOK_SEASON, payload);
+      if(!(n>0)) throw new Error('⚠ NOT saved — the database changed nothing. Run sql/59_prebook_vet.sql.');
+      await pbLoad(true);
+      wrap.remove();
+      toast('✓ Schedule re-optimized — '+n+' offers re-slotted.', false);
+      pbRenderStats(); pbRenderWeeks(); if(PB.view==='cal') pbRenderCal(); else pbRenderList();
+    }catch(e){
+      b.disabled=false; b.textContent='Apply the new schedule';
+      $('#ro_msg').innerHTML='<div class="note bad" style="margin-top:8px">'+esc(pbErr(e))+'</div>';
+    }
+  };
 }
 
 boot();
