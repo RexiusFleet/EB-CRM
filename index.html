@@ -864,6 +864,29 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
       <span class="muted small">— returning customers to call; reserving never books the truck</span></h3>
       <div class="body">
         <div class="stat" id="pbstats"></div>
+        <div class="row" style="align-items:center;margin-top:12px">
+          <button type="button" class="btn ghost sm" id="pb_vlist" style="flex:0 0 auto;background:var(--good);color:#fff">Call list</button>
+          <button type="button" class="btn ghost sm" id="pb_vcal" style="flex:0 0 auto"
+            title="The whole preliminary season on a calendar — offered slots and reservations, per truck">📅 Plan calendar</button>
+        </div>
+        <div id="pb_calwrap" class="hide">
+          <div class="row" style="align-items:center;margin-top:10px">
+            <button type="button" class="btn ghost sm" id="pbc_prev" style="flex:0 0 auto">‹</button>
+            <button type="button" class="btn ghost sm" id="pbc_start" style="flex:0 0 auto" title="Jump to the first offered slot">Season start</button>
+            <button type="button" class="btn ghost sm" id="pbc_next" style="flex:0 0 auto">›</button>
+            <b id="pbc_label" style="align-self:center;margin-left:6px"></b>
+            <span style="flex:1 1 auto"></span>
+            <label class="small" style="flex:0 0 auto;display:inline-flex;gap:5px;align-items:center">
+              <input type="checkbox" id="pbc_real" checked> show real bookings</label>
+            <button type="button" class="btn ghost sm" id="pbc_month" style="flex:0 0 auto">Month</button>
+            <button type="button" class="btn ghost sm" id="pbc_week" style="flex:0 0 auto">Week</button>
+          </div>
+          <div class="small muted" style="margin-top:6px"><span id="pbc_sum"></span> &nbsp;—&nbsp;
+            dotted = slot on offer · <span style="color:var(--resv)">dashed purple = reserved</span> · grey = really booked.
+            Tap a day for its week; tap a chip for the call card. Preliminary — nothing here is booked.</div>
+          <div id="pbcalgrid" style="margin-top:10px;overflow-x:auto"></div>
+        </div>
+        <div id="pb_listwrap">
         <div id="pbweeks" style="margin-top:12px"></div>
         <div class="row" style="align-items:flex-end;margin-top:12px">
           <div style="flex:2 1 240px"><label class="f">Search</label>
@@ -889,6 +912,7 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             title="Download the rows shown as a spreadsheet-ready .csv">⬇ CSV</button>
         </div>
         <div class="scroll" id="pblist" style="margin-top:10px;overflow-x:auto"></div>
+        </div>
       </div></div>
   </section>
 
@@ -1393,7 +1417,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-06-prebook';   // shown in the header; check it after deploying
+const BUILD = '2026-11-06b-prebookcal';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -6926,10 +6950,11 @@ function tgEvent(it, crew){
   if(it.resv){
     /* Pre-book reservation: dashed purple, the only purple on the board. */
     return '<div class="tgev" data-pbid="'+esc(it.pbId)+'" title="'+esc(it.summary||'')+
-      ' — pre-book reservation (not booked), tap for details" style="'+pos+
-      'background:color-mix(in srgb, var(--resv) 12%, transparent);cursor:pointer;'+
-      'border:2px dashed var(--resv)">'+
-      '<b style="color:var(--resv)">'+esc(fmtMin(it.s))+' RESERVED</b><br>'+esc(it.customer||'')+
+      (it.offer?' — slot on offer, tap for the call card':' — pre-book reservation (not booked), tap for details')+'" style="'+pos+
+      'background:color-mix(in srgb, var(--resv) '+(it.offer?'5':'14')+'%, transparent);cursor:pointer;'+
+      'border:'+(it.offer?'1px dotted':'2px dashed')+' var(--resv)">'+
+      '<b style="color:var(--resv)">'+esc(fmtMin(it.s))+(it.offer?'':' RESERVED')+'</b>'+
+      (it.offer?' ':'<br>')+esc(it.customer||'')+
       '<div class="muted" style="font-size:10.5px">'+(it.yards?(Math.round(it.yards*10)/10)+'yd ':'')+
       esc(it.product||'')+'</div></div>';
   }
@@ -11924,6 +11949,7 @@ async function renderPrebook(){
   const prods=[...new Set(rows.map(r=>r.product||r.product_hist).filter(Boolean))].sort();
   fill('pb_product', [['','Any product']].concat(prods.map(p=>[p,p])), PB.filt.product);
   pbRenderStats(); pbRenderWeeks(); pbRenderList();
+  if(PB.view==='cal') pbRenderCal();
   updatePrebookBadges().catch(()=>{});
 }
 function pbRenderStats(){
@@ -11972,11 +11998,11 @@ function pbRenderWeeks(){
         crews.map(c=>{ const x=w.crew[String(c.id)]; return '<td class="num">'+(x?x.n+' · '+hrs(x.h):'—')+'</td>'; }).join('')+
         '<td class="num">'+w.n+'</td><td class="num">'+hrs(w.h)+'</td>'+
         '<td class="num">'+(w.res?'<b style="color:var(--resv)">'+w.res+'</b> · '+hrs(w.resH):'—')+'</td>'+
-        '<td><button type="button" class="btn ghost sm" data-pbwk="'+k+'">Calendar →</button></td></tr>'; }).join('')+
+        '<td><button type="button" class="btn ghost sm" data-pbwk="'+k+'">Plan week →</button></td></tr>'; }).join('')+
     '</tbody></table></div></details>';
   const dd=$('#pbwkd'); if(dd) dd.ontoggle=()=>{ PB.wk=dd.open; };
   host.querySelectorAll('[data-pbwk]').forEach(b=>b.onclick=()=>{
-    Cal.view='week'; Cal.anchor=b.dataset.pbwk; show('cal'); });
+    PB.cal.view='week'; PB.cal.anchor=b.dataset.pbwk; pbSetView('cal'); });
 }
 function pbOfferHtml(r){
   const live=r.status==='reserved'||r.status==='quoted';
@@ -12057,6 +12083,15 @@ function pbWireFilters(){
   on('pb_status','status'); on('pb_tier','tier'); on('pb_month','month');
   on('pb_product','product'); on('pb_sort','sort');
   const c=$('#pb_csv'); if(c) c.onclick=pbCsv;
+  const bind=(id,fn)=>{ const e2=$('#'+id); if(e2) e2.onclick=fn; };
+  bind('pb_vlist', ()=>pbSetView('list'));
+  bind('pb_vcal',  ()=>pbSetView('cal'));
+  bind('pbc_month', ()=>{ PB.cal.view='month'; pbRenderCal(); });
+  bind('pbc_week',  ()=>{ PB.cal.view='week'; pbRenderCal(); });
+  bind('pbc_prev',  ()=>pbCalStep(-1));
+  bind('pbc_next',  ()=>pbCalStep(1));
+  bind('pbc_start', ()=>{ PB.cal.anchor=pbFirstPlanDate(); pbRenderCal(); });
+  const rl=$('#pbc_real'); if(rl) rl.onchange=()=>{ PB.cal.real=rl.checked; pbRenderCal(); };
 }
 function pbCsv(){
   const cc=v=>{ v=v==null?'':String(v); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
@@ -12283,7 +12318,8 @@ async function pbCard(id){
       try{
         await pbPatch(r.id, patch);
         close(); toast(typeof okMsg==='function'?okMsg(patch):okMsg, false);
-        if(!$('#view-prebook').classList.contains('hide')){ pbRenderStats(); pbRenderWeeks(); pbRenderList(); }
+        if(!$('#view-prebook').classList.contains('hide')){ pbRenderStats(); pbRenderWeeks(); pbRenderList();
+          if(PB.view==='cal') pbRenderCal(); }
         if(!$('#view-todo').classList.contains('hide')) renderTodo();
         if(!$('#view-cal').classList.contains('hide')) renderCal();
       }catch(e){
@@ -12445,6 +12481,153 @@ function pbTodoWire(box){
         toast('Spot released — the dashed chip is off the calendar.', false); renderTodo(); }
       catch(e){ toast(pbErr(e), true); b.disabled=false; } };
   });
+}
+
+/* ---- Plan calendar (per Taylor 2026-11-06: "I want to see a calendar
+   preliminary schedule for the pre-book") ---------------------------------
+   The whole preliminary season on a calendar, inside the Pre-book tab:
+   every slot still on offer (dotted "OFFER" chips), every reservation
+   (dashed "RESERVED" chips) and — greyed, for context — whatever is really
+   booked. Month = a Mon–Fri wall with each truck's jobs and hours per day;
+   Week = the same truck-by-truck time grid as the Calendar tab. Tapping a
+   chip opens the call card. Nothing here is on the real calendar except
+   reservations; declined / released rows drop off the plan. */
+PB.view='list';
+PB.cal={ view:'month', anchor:null, real:true };
+function pbFirstPlanDate(){
+  const ds=(PB.rows||[]).map(r=>r.status==='reserved'?r.res_date:r.plan_date).filter(Boolean).sort();
+  const today=calFmt(new Date());
+  return ds.find(d=>d>=today) || ds[0] || today;
+}
+function pbSetView(v){
+  PB.view=v;
+  const t=(id,on)=>{ const e2=$('#'+id); if(e2) e2.classList.toggle('hide', !on); };
+  t('pb_listwrap', v==='list'); t('pb_calwrap', v==='cal');
+  [['pb_vlist','list'],['pb_vcal','cal']].forEach(([id,x])=>{ const b=$('#'+id); if(!b) return;
+    b.style.background = v===x ? 'var(--good)' : ''; b.style.color = v===x ? '#fff' : ''; });
+  if(v==='cal') pbRenderCal();
+}
+function pbCalStep(n){
+  const a=new Date((PB.cal.anchor||pbFirstPlanDate())+'T00:00:00');
+  if(PB.cal.view==='week') a.setDate(a.getDate()+7*n);
+  else { a.setDate(1); a.setMonth(a.getMonth()+n); }
+  PB.cal.anchor=calFmt(a); pbRenderCal();
+}
+/* Plan rows -> calendar events in the board's own shape. */
+function pbPlanEvents(from, to){
+  const out=[];
+  (PB.rows||[]).forEach(r=>{
+    const st=r.status||'new';
+    let slots=null, offer=false;
+    if(st==='reserved') slots=pbSlotsOf(r);
+    else if((st==='new'||st==='no_answer'||st==='callback') && r.plan_date){
+      offer=true;
+      slots=pbSlots(r.plan_date, r.plan_crew_id, pbHM(r.plan_time)||null, Number(r.plan_hours)||Number(r.equip_hours)||2);
+    }
+    (slots||[]).forEach((sl,i)=>{
+      if(sl.date<from || sl.date>to) return;
+      out.push({ gid:'pp'+r.id+'_'+i, resv:true, offer, pbId:r.id,
+        summary:(offer?'OFFER ':'RESERVED ')+(r.customer_name||''),
+        customer:r.customer_name||'', product:r.res_product||r.product||r.product_hist||'',
+        yards:Number(r.res_yards!=null?r.res_yards:r.yards)||0,
+        addr:[r.address,r.city].filter(Boolean).join(', '), city:r.city||'', score:r.score,
+        crew_id:String(sl.crew_id||''), date:sl.date,
+        time:sl.time?String(sl.time).slice(0,5):SLOT_RULES.FIRST_START,
+        hours:Number(sl.hours)||2, allDay:false });
+    });
+  });
+  return out;
+}
+async function pbRenderCal(){
+  const grid=$('#pbcalgrid'); if(!grid) return;
+  if(!PB.rows) return;
+  if(!PB.cal.anchor) PB.cal.anchor=pbFirstPlanDate();
+  [['pbc_month','month'],['pbc_week','week']].forEach(([id,v])=>{ const b=$('#'+id); if(!b) return;
+    const on=PB.cal.view===v; b.style.background=on?'var(--good)':''; b.style.color=on?'#fff':''; });
+  let from, to; const days=[];
+  const a=new Date(PB.cal.anchor+'T00:00:00');
+  if(PB.cal.view==='week'){
+    const ws=calWeekStart(PB.cal.anchor);
+    for(let i=0;i<5;i++){ const d=new Date(ws); d.setDate(d.getDate()+i); days.push(calFmt(d)); }
+    from=days[0]; to=days[4];
+    $('#pbc_label').textContent=dfmt(from)+' – '+dfmt(to);
+  }else{
+    from=calFmt(new Date(a.getFullYear(), a.getMonth(), 1));
+    to=calFmt(new Date(a.getFullYear(), a.getMonth()+1, 0));
+    $('#pbc_label').textContent=a.toLocaleDateString([], {month:'long', year:'numeric'});
+  }
+  const my=(pbRenderCal.seq=(pbRenderCal.seq||0)+1);
+  const plan=pbPlanEvents(from, to);
+  /* what is REALLY booked, greyed for context (never draggable here) */
+  let real=[];
+  if(PB.cal.real){
+    try{
+      const d=await calFetch(from, to);
+      real=d.jobs.map((j,i)=>({ gid:'rj'+i, internal:true, real:true,
+          summary:(j.hold?'HOLD ':'BOOKED ')+j.customer+(j.yards?' · '+(Math.round(j.yards*10)/10)+'yd '+(j.product||''):''),
+          crew_id:String(j.crew_id), date:j.date, time:j.time, hours:j.hours||2, allDay:!j.time }))
+        .concat(d.gEvents.filter(g=>g.block));
+    }catch(e){}
+  }
+  if(my!==pbRenderCal.seq) return;
+  const data={ jobs:[], gEvents:plan.concat(real) };
+  /* count JOBS, not day-slots: a multi-day job is one offer */
+  const nOffer=new Set(plan.filter(p=>p.offer).map(p=>p.pbId)).size,
+        nRes=new Set(plan.filter(p=>!p.offer).map(p=>p.pbId)).size;
+  const hOffer=plan.filter(p=>p.offer).reduce((s2,p)=>s2+p.hours,0);
+  $('#pbc_sum').innerHTML='<b>'+nOffer+'</b> offered slot'+(nOffer===1?'':'s')+' · '+hrs(hOffer)+
+    ' &nbsp;·&nbsp; <b style="color:var(--resv)">'+nRes+'</b> reserved'+
+    (PB.cal.real?' &nbsp;·&nbsp; '+real.filter(x=>x.real).length+' really booked':'');
+  if(PB.cal.view==='week'){
+    renderCalWeek(grid, days, data);
+    /* open space does nothing here: this is a plan, not the booking board */
+    if(!grid.dataset.guard){ grid.dataset.guard='1';
+      grid.addEventListener('click', e=>{ if(!e.target.closest('.tgev')) e.stopPropagation(); }, true); }
+    return;
+  }
+  /* ---- month wall, Mon–Fri ---- */
+  const crews=visibleCrews(data, []).filter(c=>!c.backup ||
+    data.gEvents.some(g=>String(g.crew_id)===String(c.id)));
+  const today=calFmt(new Date()), month=from.slice(0,7);
+  const rows=[]; const c=calWeekStart(from);
+  while(calFmt(c)<=to){ const row=[];
+    for(let i=0;i<5;i++){ row.push(calFmt(c)); c.setDate(c.getDate()+1); }
+    c.setDate(c.getDate()+2); rows.push(row); }
+  const dayCap=(SLOT_RULES.DAY_END_MIN-toMin(SLOT_RULES.FIRST_START))/60;
+  grid.innerHTML='<div style="min-width:760px">'+
+    '<div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px">'+
+    ['Mon','Tue','Wed','Thu','Fri'].map(n=>'<div class="small muted" style="text-align:center;font-weight:600">'+n+'</div>').join('')+'</div>'+
+    rows.map(row=>'<div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:6px">'+
+      row.map(date=>{
+        const evs=data.gEvents.filter(g=>g.date===date);
+        const dim=date.slice(0,7)!==month;
+        const lines=crews.map(cr=>{
+          const mine=evs.filter(g=>String(g.crew_id)===String(cr.id));
+          const pl=mine.filter(g=>g.resv), rs=pl.filter(g=>!g.offer), bk=mine.filter(g=>g.real), blk=mine.filter(g=>g.block);
+          if(!mine.length) return '<div class="small muted" style="margin-top:3px"><b style="color:'+(cr.color||'var(--ink)')+
+            '">'+esc((String(cr.name).match(/#\S+/)||[cr.name])[0])+'</b> open</div>';
+          const h=pl.reduce((s2,g)=>s2+g.hours,0)+bk.reduce((s2,g)=>s2+(g.hours||0),0);
+          const prods=[...new Set(pl.map(g=>g.product).filter(Boolean))];
+          return '<div class="small" style="margin-top:3px" title="'+esc(pl.map(g=>fmtMin(toMin(g.time))+' '+g.customer+
+              ' — '+(g.yards?g.yards+'yd ':'')+g.product+(g.city?' ('+g.city+')':'')).join('\n'))+'">'+
+            '<b style="color:'+(cr.color||'var(--ink)')+'">'+esc((String(cr.name).match(/#\S+/)||[cr.name])[0])+'</b> '+
+            (pl.length?pl.length+' job'+(pl.length>1?'s':'')+' · '+hrs(Math.round(h*100)/100):'')+
+            (rs.length?' <b style="color:var(--resv)">● '+rs.length+' res.</b>':'')+
+            (bk.length?' <span class="muted">+'+bk.length+' booked</span>':'')+
+            (blk.length?' <span style="color:var(--danger)">🚫</span>':'')+
+            '<div style="height:4px;border-radius:3px;background:var(--line-2);margin-top:2px;overflow:hidden">'+
+              '<div style="height:4px;width:'+Math.min(100,Math.round(h/dayCap*100))+'%;background:'+
+              (h>dayCap?'var(--warn)':(cr.color||'var(--accent)'))+'"></div></div>'+
+            (prods.length?'<div class="muted" style="font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+
+              esc(prods.join(' · '))+'</div>':'')+'</div>';
+        }).join('');
+        return '<div data-pbday="'+date+'" style="border:1px solid var(--line);border-radius:8px;padding:5px 7px;'+
+          'min-height:92px;cursor:pointer;'+(dim?'opacity:.4;':'')+
+          (date===today?'outline:2px solid var(--good);':'')+'">'+
+          '<div class="small" style="font-weight:600">'+Number(date.slice(8))+'</div>'+lines+'</div>';
+      }).join('')+'</div>').join('')+'</div>';
+  grid.querySelectorAll('[data-pbday]').forEach(cell=>cell.onclick=()=>{
+    PB.cal.view='week'; PB.cal.anchor=cell.dataset.pbday; pbRenderCal(); });
 }
 
 boot();
