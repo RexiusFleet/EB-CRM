@@ -12,7 +12,7 @@
   --bg:#f6f7f5; --panel:#ffffff; --panel-2:#fbfcfa; --ink:#1b2019; --muted:#5f6b5c;
   --line:#e0e4dd; --line-2:#eef1ec; --accent:#2f6b3c; --accent-ink:#ffffff;
   --accent-soft:#e8f1e9; --warn:#a8620f; --warn-soft:#fdf1e2; --danger:#a32f2f;
-  --bid:#111;
+  --bid:#111; --resv:#6a3fb5;
   --danger-soft:#fbeaea; --good:#2f6b3c; --star:#b58a00; --thisq:#1d5fd6;
   --shadow:0 1px 2px rgba(20,30,18,.06),0 4px 14px rgba(20,30,18,.05);
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -22,7 +22,7 @@
   --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
   --line:#2a3025; --line-2:#222719; --accent:#6fbf7f; --accent-ink:#0f1410;
   --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585; --star:#e0c34d;
-  --bid:#d9ded4;
+  --bid:#d9ded4; --resv:#b79cf0;
   --danger-soft:#2a1717; --good:#6fbf7f; --thisq:#7fb0f5;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
 }}
@@ -30,7 +30,7 @@
   --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
   --line:#2a3025; --line-2:#222719; --accent:#6fbf7f; --accent-ink:#0f1410;
   --accent-soft:#1e2a1f; --warn:#e0a256; --warn-soft:#2a2013; --danger:#e08585; --star:#e0c34d;
-  --bid:#d9ded4;
+  --bid:#d9ded4; --resv:#b79cf0;
   --danger-soft:#2a1717; --good:#6fbf7f; --thisq:#7fb0f5;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
 }
@@ -337,7 +337,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
     <button data-view="bidlist">Saved Bids</button>
     <button data-view="quotes">Saved Quotes</button>
     <button data-view="cal">Calendar</button>
-    <button data-view="todo">To Do</button>
+    <button data-view="todo">To Do<span class="tabdot hide" id="tododot"></span></button>
+    <button data-view="prebook">Pre-book<span class="tabdot hide" id="pbdot"></span></button>
     <button data-view="multi">Open Multi-Jobs</button>
     <button data-view="reports">Reports</button>
     <button data-view="rates">Rate Card</button>
@@ -848,8 +849,47 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
        (office/crew/driver/bid) already routes away from this view. -->
   <section id="view-todo" class="hide">
     <div class="card"><h3>To Do <span class="muted" id="todocount"></span>
-      <span class="muted small">— holds and TBD events waiting on a decision</span></h3>
+      <span class="muted small">— pre-book confirmations, holds and TBD events waiting on a decision</span></h3>
       <div class="body"><div class="scroll" id="todolist" style="overflow-x:auto"></div></div></div>
+  </section>
+
+  <!-- ============================ PRE-BOOK =============================
+       (per Taylor 2026-11-06) The sales rep's call list for next season's
+       returning customers, each with an optimizer-offered slot. A call
+       never books: "Reserve" pencils a dashed chip on the calendar and
+       queues a confirmation on the To Do tab 60 days before the date.
+       Reps/admins only — no portal's tab bar offers the tab. -->
+  <section id="view-prebook" class="hide">
+    <div class="card"><h3>Pre-book — 2027 season <span class="muted" id="pbcount"></span>
+      <span class="muted small">— returning customers to call; reserving never books the truck</span></h3>
+      <div class="body">
+        <div class="stat" id="pbstats"></div>
+        <div id="pbweeks" style="margin-top:12px"></div>
+        <div class="row" style="align-items:flex-end;margin-top:12px">
+          <div style="flex:2 1 240px"><label class="f">Search</label>
+            <input type="text" id="pb_search" autocomplete="off" placeholder="customer, address, phone…"></div>
+          <div style="flex:1 1 150px"><label class="f">Show</label><select id="pb_status">
+            <option value="tocall">To call</option>
+            <option value="due">Call-backs due</option>
+            <option value="reserved">Reserved</option>
+            <option value="quoted">Quoted</option>
+            <option value="declined">Not this year</option>
+            <option value="all">Everyone</option></select></div>
+          <div style="flex:1 1 120px"><label class="f">Priority</label><select id="pb_tier">
+            <option value="">Any</option><option value="A">A — call first</option>
+            <option value="B">B</option><option value="C">C</option></select></div>
+          <div style="flex:1 1 120px"><label class="f">Slot month</label><select id="pb_month">
+            <option value="">Any month</option></select></div>
+          <div style="flex:1 1 160px"><label class="f">Product</label><select id="pb_product">
+            <option value="">Any product</option></select></div>
+          <div style="flex:1 1 140px"><label class="f">Sort</label><select id="pb_sort">
+            <option value="score">Priority</option><option value="date">Offered date</option>
+            <option value="name">Customer</option></select></div>
+          <button type="button" class="btn ghost sm" id="pb_csv" style="flex:0 0 auto"
+            title="Download the rows shown as a spreadsheet-ready .csv">⬇ CSV</button>
+        </div>
+        <div class="scroll" id="pblist" style="margin-top:10px;overflow-x:auto"></div>
+      </div></div>
   </section>
 
   <!-- ======================== OPEN MULTI-JOBS =========================
@@ -1353,7 +1393,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-05g-mjrates';   // shown in the header; check it after deploying
+const BUILD = '2026-11-06-prebook';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1896,6 +1936,16 @@ const DemoDB = {
   async blocks(){ return []; },
   async addBlock(){ throw new Error('Blockouts need live mode.'); },
   async delBlock(){ return null; },
+  /* Pre-book (sql/57): the demo bundle may carry a prebook array. */
+  _pb(){ if(!this._prebook) this._prebook=((this.B&&this.B.prebook)||[]).map(r=>Object.assign({},r));
+    return this._prebook; },
+  async listPrebook(season){ return this._pb().filter(r=>Number(r.season)===Number(season)); },
+  async prebookReserved(season){ return this._pb().filter(r=>Number(r.season)===Number(season) && r.status==='reserved'); },
+  async prebookOpen(season){ return this._pb().filter(r=>Number(r.season)===Number(season) &&
+    (r.status==='reserved'||r.status==='callback')); },
+  async getPrebook(id){ return this._pb().find(r=>String(r.id)===String(id))||null; },
+  async patchPrebook(id, patch){ const r=this._pb().find(x=>String(x.id)===String(id));
+    if(r) Object.assign(r, patch); return r||null; },
   _bids: [],
   async listBids(){ return this._bids.slice().reverse(); },
   async bidForQuote(qid){
@@ -2332,6 +2382,35 @@ const LiveDB = {
   async listBids(){
     return SB.rest('bids?select=*&order=created_at.desc&limit=200');
   },
+  /* Pre-book (sql/57). The list read leaves the heavy columns (history,
+     order note) behind — the call card fetches its one row whole. Paged:
+     a season can pass PostgREST's 1,000-row cap. */
+  _pbCols:'id,season,kind,cust_id,customer_name,phone,email,cust_class,sales_rep,address,city,zip,'+
+    'site_contact,product,product_hist,yards,equip_hours,typical_value,usual_month,seq,seq_n,seasons,'+
+    'season_years,last_date,last_descr,score,plan_date,plan_crew_id,plan_time,plan_hours,plan_days,'+
+    'plan_stops,plan_loads,plan_moved,status,attempts,last_call_at,last_call_by,callback_date,'+
+    'call_notes,res_date,res_crew_id,res_time,res_hours,res_slots,res_product,res_yards,quote_id',
+  async listPrebook(season){
+    return this._pageAll('prebook?select='+this._pbCols+'&season=eq.'+encodeURIComponent(season)+
+      '&order=score.desc,id');
+  },
+  async prebookReserved(season){
+    return SB.rest('prebook?select='+this._pbCols+'&season=eq.'+encodeURIComponent(season)+
+      '&status=eq.reserved&order=res_date&limit=1000');
+  },
+  async prebookOpen(season){
+    return SB.rest('prebook?select=id,status,res_date,callback_date&season=eq.'+
+      encodeURIComponent(season)+'&status=in.(reserved,callback)&limit=1000');
+  },
+  async getPrebook(id){
+    const r = await SB.rest('prebook?select=*&id=eq.'+encodeURIComponent(id));
+    return r && r[0];
+  },
+  async patchPrebook(id, patch){
+    const r = await SB.rest('prebook?id=eq.'+encodeURIComponent(id),
+      {method:'PATCH', headers:{Prefer:'return=representation'}, body:JSON.stringify(patch)});
+    return r && r[0];
+  },
   async bidForQuote(qid){
     /* The open bid this quote spawned (sql/50). A database without the
        column answers with an error — callers treat that as "none". */
@@ -2613,10 +2692,12 @@ async function boot(){
   if(LIVE) setInterval(()=>{ if(State.user){
     updateSuggBadge().catch(()=>{});
     bidReminders().catch(()=>{});
+    updatePrebookBadges().catch(()=>{});
   } }, 5*60*1000);
   await loadData();       // 2. data load may fail; the app survives it
   updateSuggBadge().catch(()=>{});
   bidReminders().catch(()=>{});
+  updatePrebookBadges().catch(()=>{});
 }
 
 /* Password recovery (per Taylor 2026-11-25): the reset email's link lands
@@ -2924,7 +3005,7 @@ function show(v){
   if(typeof Cal!=='undefined' && Cal.crew && v!=='cal' &&
      !(typeof BidCal!=='undefined' && BidCal)) v='cal';
   document.body.classList.toggle('calwide', v==='cal');
-  ['quote','bids','bidlist','quotes','cal','dash','rates','reports','todo','sugg','multi'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
+  ['quote','bids','bidlist','quotes','cal','dash','rates','reports','todo','sugg','multi','prebook'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
   if(v==='bids'){  fillBidProducts(); bdDraftRestore(); }
   if(v==='bidlist') renderBidsList();
@@ -2934,6 +3015,7 @@ function show(v){
   if(v==='reports') renderReport();
   if(v==='todo')   renderTodo();
   if(v==='multi')  renderMultiJobs();
+  if(v==='prebook'){ pbWireFilters(); renderPrebook(); }
   if(v==='rates'){ renderRates(); renderDataStatus(); }
   if(v==='sugg')   renderSugg();
 }
@@ -5290,6 +5372,7 @@ async function openQuote(r){
   SiteVisit.photos = Array.isArray(r.site_photos) ? r.site_photos.map(p=>Object.assign({},p)) : [];
   renderMeas(); renderPhotos();
   State.fromBidId = r.bid_id || null;
+  State.fromPrebookId = null;      // pbStartQuote re-arms it after opening
   State.bidNotes = r.bid_notes || null;
   if(State.fromBidId){
     DB.getBid(State.fromBidId).then(b=>{
@@ -6217,10 +6300,16 @@ async function calFetch(from, to){
   const hit = calCache.get(key);
   if(hit && Date.now()-hit.t < 60000) return hit.data;
   const backend = await calendarBackend();
-  const [raw, iblocks, allBids] = await Promise.all([
+  /* Pre-book reservations are the REP'S pencil marks: never on a crew,
+     driver, bid-portal or office-portal board. */
+  const wantResv = !DriverView && !Cal.crew &&
+    !(typeof OfficePortal!=='undefined' && OfficePortal) &&
+    !(typeof BidPortal!=='undefined' && BidPortal);
+  const [raw, iblocks, allBids, resv] = await Promise.all([
     DB.bookingsBetween(from, to).catch(e=>({__err:(e&&e.message)||'failed'})),
     DB.blocks(from, to).catch(()=>[]),      // the table, whatever the backend
-    (DB.listBids ? DB.listBids().catch(()=>[]) : Promise.resolve([]))
+    (DB.listBids ? DB.listBids().catch(()=>[]) : Promise.resolve([])),
+    (wantResv ? pbReservedBetween(from, to).catch(()=>[]) : Promise.resolve([]))
   ]);
   const jobs = [];
   const bookErr = (raw && raw.__err) ? String(raw.__err) : null;
@@ -6320,6 +6409,22 @@ async function calFetch(from, to){
       crew_id:String(b.crew_id || ((CREWS||[])[0]||{}).id || '1'), date:b.scheduled_date,
       time:b.scheduled_time?String(b.scheduled_time).slice(0,5):null,
       hours:Number(b.scheduled_hours)||2, allDay:!b.scheduled_time });
+  });
+  /* Pre-book reservations (per Taylor 2026-11-06): a dashed RESERVED chip
+     per reserved day — shown, tappable, and NEVER fed to the engine
+     (bookingsPoolFor drops them, exactly like penciled bids). */
+  (resv||[]).forEach(r=>{
+    pbSlotsOf(r).forEach((sl,i)=>{
+      if(sl.date<from || sl.date>to) return;
+      gEvents.push({ gid:'pb'+r.id+'_'+i, resv:true, pbId:r.id,
+        summary:'RESERVED '+(r.customer_name||'(no name)'),
+        customer:r.customer_name||'', product:r.res_product||r.product||r.product_hist||'',
+        yards:Number(r.res_yards!=null?r.res_yards:r.yards)||0,
+        addr:[r.address,r.city].filter(Boolean).join(', '),
+        crew_id:String(sl.crew_id||r.res_crew_id||((CREWS||[])[0]||{}).id||'1'), date:sl.date,
+        time:sl.time?String(sl.time).slice(0,5):SLOT_RULES.FIRST_START,
+        hours:Number(sl.hours)||2, allDay:false });
+    });
   });
   /* GOOGLE OVERLAY: OFF (per Taylor 2026-10-17, after the import) — the
      board shows only the app's own world: bookings, blockouts, penciled
@@ -6575,8 +6680,12 @@ async function renderTodo(){
   try{ rows=(await DB.listTodo())||[]; }
   catch(e){ box.innerHTML='<div class="note bad">Could not load: '+
     esc(e.message)+'</div>'; return; }
-  $('#todocount').textContent = rows.length ? '· '+rows.length : '';
-  if(!rows.length){
+  /* Pre-book reservations inside their confirmation window lead the tab. */
+  const pbDue = await pbDueRows();
+  const nAll = rows.length + pbDue.due.length;
+  $('#todocount').textContent = nAll ? '· '+nAll : '';
+  updatePrebookBadges().catch(()=>{});
+  if(!nAll && !pbDue.later){
     box.innerHTML='<div class="empty">Nothing waiting — no holds, nothing TBD.</div>';
     return;
   }
@@ -6616,7 +6725,7 @@ async function renderTodo(){
         '<td><div style="display:flex;flex-direction:column;gap:4px">'+btns(r)+'</div></td>'+
         '</tr>').join('')+'</tbody></table>';
   };
-  box.innerHTML=
+  box.innerHTML= pbTodoHtml(pbDue) +
     section('⏳ TBD — awaiting a date', tbdRows, 'Days on TBD', r=>{
       if(!r.created_at) return '<span class="muted">—</span>';
       const n=days(today, new Date(String(r.created_at).slice(0,10)+'T12:00:00'));
@@ -6643,6 +6752,7 @@ async function renderTodo(){
       '<button type="button" class="btn ghost sm" data-tdopenq="'+esc(r.id)+'">Open quote</button>'+
       '<button type="button" class="btn ghost sm" data-tdlost="'+esc(r.id)+'" '+
         'style="color:var(--danger)">Lost</button>');
+  pbTodoWire(box);
   box.querySelectorAll('[data-tdn]').forEach(ta=>{
     ta.addEventListener('change', async ()=>{
       try{
@@ -6812,6 +6922,16 @@ function tgEvent(it, crew){
       'background:color-mix(in srgb, var(--bid) 10%, transparent);cursor:pointer;'+
       'border:2px dashed var(--bid);color:var(--bid);font-weight:600">'+
       '<b>'+esc(fmtMin(it.s))+'</b> '+esc(String(it.summary||'').slice(0,40))+'</div>';
+  }
+  if(it.resv){
+    /* Pre-book reservation: dashed purple, the only purple on the board. */
+    return '<div class="tgev" data-pbid="'+esc(it.pbId)+'" title="'+esc(it.summary||'')+
+      ' — pre-book reservation (not booked), tap for details" style="'+pos+
+      'background:color-mix(in srgb, var(--resv) 12%, transparent);cursor:pointer;'+
+      'border:2px dashed var(--resv)">'+
+      '<b style="color:var(--resv)">'+esc(fmtMin(it.s))+' RESERVED</b><br>'+esc(it.customer||'')+
+      '<div class="muted" style="font-size:10.5px">'+(it.yards?(Math.round(it.yards*10)/10)+'yd ':'')+
+      esc(it.product||'')+'</div></div>';
   }
   if(it.google || it.internal || it.block){
     return '<div class="tgev" title="'+esc(it.summary||'')+'" style="'+pos+
@@ -6986,6 +7106,9 @@ function wireTimegrid(grid){
   grid.querySelectorAll('.tgev[data-qid]:not(.app)').forEach(ch=>{
     ch.onclick = e=>{ e.stopPropagation();
       openCalItem(ch.dataset.qid, null, ch.dataset.lastevt!=='0'); };
+  });
+  grid.querySelectorAll('.tgev[data-pbid]').forEach(ch=>{
+    ch.onclick = e=>{ e.stopPropagation(); pbCard(ch.dataset.pbid); };
   });
   grid.querySelectorAll('.tgev[data-bidid]').forEach(ch=>{
     ch.onclick = e=>{ e.stopPropagation();
@@ -7757,7 +7880,7 @@ async function bookingsPoolFor(anchor, d){
       scheduled_time:j.time, scheduled_hours:j.hours, equip_hours:j.hours,
       yards:j.yards, product:j.product, customer_name:j.customer,
       status:j.hold?'sent':'won', hold:j.hold }))
-    .concat(w.gEvents.filter(g=>!g.bid).map((g,i)=>({ id:'wk'+i, fromCalendar:true,
+    .concat(w.gEvents.filter(g=>!g.bid && !g.resv).map((g,i)=>({ id:'wk'+i, fromCalendar:true,
       block:!!g.block, hold:!!g.hold && !g.block,
       product:null, yards:0, customer_name:g.summary||'calendar event',
       status:g.hold?'sent':'won', crew_id:g.crew_id,
@@ -7854,7 +7977,7 @@ async function renderSchedCal(){
       '" style="position:absolute;inset:0;background:repeating-linear-gradient(45deg,'+
       'rgba(150,155,165,.15) 0 6px,transparent 6px 12px)"></div>';
     items.forEach(it=>{
-      const col=it.block?'var(--danger)':(it.google||it.internal)?'#9aa2ad':((c.color)||'#888');
+      const col=it.block?'var(--danger)':it.resv?'var(--resv)':(it.google||it.internal)?'#9aa2ad':((c.color)||'#888');
       /* Per Taylor: read like the Calendar tab — customer, product +
          volume, address. The tooltip carries the full text. */
       const l1=String(it.customer||it.summary||'');
@@ -7862,8 +7985,8 @@ async function renderSchedCal(){
       const l3=it.addr||'';
       cell+='<div title="'+esc([l1,l2,l3].filter(Boolean).join(' · '))+
         '" style="position:absolute;left:1px;right:1px;'+pos(it.time,it.hours)+
-        'background:'+(it.qid?col+'2e':'rgba(150,155,165,.2)')+
-        ';border-left:2px solid '+col+';border-radius:3px;overflow:hidden;'+
+        'background:'+(it.qid?col+'2e':it.resv?'color-mix(in srgb, var(--resv) 12%, transparent)':'rgba(150,155,165,.2)')+
+        ';border-left:2px '+(it.resv?'dashed ':'solid ')+col+';border-radius:3px;overflow:hidden;'+
         'padding:0 3px;'+(it.hold?'opacity:.55;':'')+'">'+
         '<b>'+esc(l1)+'</b>'+
         (l2?'<br>'+esc(l2):'')+
@@ -7971,6 +8094,7 @@ function renderCalMonth(grid, from, to, d){
       const chips = items.slice(0,3).map(it=>{
         const cr = (CREWS||[]).find(x=>String(x.id)===String(it.crew_id));
         const col = it.block ? 'var(--danger)' : it.bid ? 'var(--bid)'
+                  : it.resv ? 'var(--resv)'
                   : (it.google||it.internal) ? '#9aa2ad' : ((cr&&cr.color)||'#888');
         const label = it.qid ? it.customer : String(it.summary||'').replace(/^🚫\s*/,'🚫');
         /* The month wall has no truck columns, so the color alone said which
@@ -11083,6 +11207,10 @@ async function saveQuote(status, opts){
       try{ await DB.patchBid(State.fromBidId,
         {status:'quoted', quote_id: saved && saved.id}); }catch(e){}
     }
+    /* A quote started from a pre-book reservation links back to it; once
+       it is held or scheduled the reservation is "quoted" and its dashed
+       chip clears (never blocks the quote save). */
+    try{ await pbAfterQuoteSave(saved, status); }catch(e){}
     State.savedQuoteId = saved && saved.id;
     State.qstatus = status;
     State.scheduled = !!(saved && saved.scheduled_date);
@@ -11406,6 +11534,7 @@ function wire(){
     SchedUI.forcePick=false; updateSchedMode();
     setHistoryCollapsed(false);
     State.fromBidId=null; State.bidNotes=null; renderBidRef();
+    State.fromPrebookId=null;
     State.batchId=null; try{ renderBatchPanel(); }catch(e){}
     svReset();
     autoFill={drive:true,blow:true,prep:true}; renderHistory(); recalc();
@@ -11606,7 +11735,715 @@ function wire(){
       await loadData();          // re-read now that we have a token
       updateSuggBadge().catch(()=>{});
       bidReminders().catch(()=>{});
+      PB.missing=null; PB.t=0; updatePrebookBadges().catch(()=>{});
     }catch(err){ $('#autherr').innerHTML='<div class="note bad">'+esc(err.message)+'</div>'; }
+  });
+}
+
+/* ============================== PRE-BOOK ================================
+   (per Taylor 2026-11-06) A call list for the sales rep to PRELIMINARILY
+   book next season's returning customers. Rows live in the prebook table
+   (sql/57 creates it, sql/58 seeds the 2027 season from the Dept 02 order
+   history): one row per customer job site, each carrying the job we
+   expect (product, yards, equipment hours = the slot's duration) and an
+   OFFERED slot from the season optimizer — truck-days packed under the
+   same rules the suggestion engine uses (truck capacity, one product per
+   load, 60-min reloads, 7:30 start / #17 Mondays 10:00, done by 5 PM).
+
+   A call NEVER books business. "Reserve" pencils a dashed RESERVED chip on
+   the calendar (rep-side only; the engine and the drivers never see it —
+   exactly like a penciled bid). 60 days before the date the reservation
+   lands on the To Do tab's "Pre-book confirmations" pile; "Start quote"
+   there opens a prefilled quote, and Hold/Schedule on that quote is what
+   finally books the truck. */
+const PREBOOK_SEASON = 2027;
+const PB_CONFIRM_DAYS = 60;      // enters the To Do pile
+const PB_URGENT_DAYS  = 30;      // turns urgent
+const PB = { rows:null, t:0, missing:null, shown:60, wk:false,
+  filt:{ q:'', status:'tocall', tier:'', month:'', product:'', sort:'score' } };
+const PB_STATUS = { new:['To call',''], no_answer:['No answer','w'],
+  callback:['Call back','w'], reserved:['Reserved','g'],
+  declined:['Not this year','d'], quoted:['Quoted','g'], released:['Released','d'] };
+const PB_MONTHS = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function pbTier(s){ s=Number(s)||0; return s>=60?'A':s>=40?'B':'C'; }
+function pbCrewName(id){ return (((CREWS||[]).find(c=>String(c.id)===String(id)))||{}).name||(id?'truck '+id:''); }
+function pbHM(t){ return t ? String(t).slice(0,5) : ''; }
+function pbDaysTo(d){ if(!d) return null;
+  return Math.round((new Date(d+'T12:00:00')-new Date(calFmt(new Date())+'T12:00:00'))/86400000); }
+function pbWhen(date, time){
+  if(!date) return '';
+  const d=new Date(date+'T12:00:00');
+  return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})+
+    (d.getFullYear()!==new Date().getFullYear()?', '+d.getFullYear():'')+
+    (time?' · '+fmtMin(toMin(pbHM(time))):'');
+}
+function pbJobTxt(r){
+  const prod=r.res_product||r.product||r.product_hist||'';
+  const y=Number(r.res_yards!=null?r.res_yards:r.yards)||0;
+  return (y?y+' yd ':'')+prod;
+}
+/* The seed spells products the way the rate card did when it was built;
+   a renamed row ("EconoBark" -> "Econo-Bark") still resolves — exact name
+   first, then the same letters and digits ignoring punctuation and case. */
+function pbProd(name){
+  if(!name) return '';
+  const rc=((State.ref&&State.ref.rate_card)||[]).filter(x=>x.active!==false).map(x=>x.product);
+  if(rc.indexOf(name)>=0) return name;
+  const norm=v=>String(v).toLowerCase().replace(/[^a-z0-9]/g,'');
+  const n=norm(name);
+  return rc.find(p=>norm(p)===n) || name;
+}
+function pbUser(){ return (State.user&&State.user.email)||(DB.mode==='demo'?'demo@rexius.com':null); }
+/* A job longer than one working day runs on consecutive working days on
+   the same truck, each from its first start to 5 PM (the optimizer's rule). */
+function pbSlots(date, crewId, time, hours){
+  const crew=((CREWS||[]).find(c=>String(c.id)===String(crewId)))||{name:''};
+  let left=Math.round((Number(hours)||0)*60), ds=date, first=true;
+  const out=[];
+  for(let guard=0; left>0 && guard<15; guard++){
+    const st=first && time ? toMin(pbHM(time)) : toMin(firstStartFor(crew, ds));
+    const room=Math.max(30, SLOT_RULES.DAY_END_MIN-st);
+    /* a job that merely runs a little past 5 stays one day (soft warning) */
+    const take=(first && left<=room+60) ? left : Math.min(left, room);
+    out.push({date:ds, crew_id:String(crewId), time:toHM(st), hours:Math.round(take/60*100)/100});
+    left-=take; first=false; ds=nextWorkingDay(ds);
+  }
+  return out;
+}
+function pbSlotsOf(r){
+  if(Array.isArray(r.res_slots) && r.res_slots.length) return r.res_slots;
+  if(!r.res_date) return [];
+  return [{date:r.res_date, crew_id:String(r.res_crew_id||''), time:pbHM(r.res_time)||SLOT_RULES.FIRST_START,
+           hours:Number(r.res_hours)||Number(r.equip_hours)||2}];
+}
+function pbErr(e){
+  const m=String((e&&e.message)||e||'');
+  return /prebook/i.test(m) && /exist|schema|cache|find|404|relation/i.test(m)
+    ? 'The pre-book table is missing — run sql/57_prebook.sql, then sql/58_prebook_seed_2027.sql in Supabase.'
+    : m;
+}
+async function pbLoad(force){
+  if(!force && PB.rows && Date.now()-PB.t<60000) return PB.rows;
+  const rows=(await DB.listPrebook(PREBOOK_SEASON))||[];
+  PB.rows=rows; PB.t=Date.now(); PB.missing=false;
+  return rows;
+}
+/* Reserved rows for the calendar. A missing table (sql/57 not run) must not
+   cost every calendar load a failed request — remember it for 10 minutes. */
+async function pbReservedBetween(from, to){
+  if(!DB.prebookReserved) return [];
+  if(PB.missing && Date.now()-PB.missing<600000) return [];
+  try{ const r=(await DB.prebookReserved(PREBOOK_SEASON))||[]; PB.missing=false;
+    return r.filter(x=>pbSlotsOf(x).some(s=>s.date>=from && s.date<=to)); }
+  catch(e){ PB.missing=Date.now(); return []; }
+}
+async function pbPatch(id, patch){
+  patch=Object.assign({updated_at:new Date().toISOString()}, patch);
+  const r=await DB.patchPrebook(id, patch);
+  if(!r) throw new Error('⚠ NOT saved — the database changed nothing. Run sql/57_prebook.sql (it carries the update policy).');
+  if(PB.rows){ const ex=PB.rows.find(x=>String(x.id)===String(id)); if(ex) Object.assign(ex, r); }
+  bustCalCache();
+  updatePrebookBadges().catch(()=>{});
+  return r;
+}
+/* Red pills: To Do = reservations inside the 60-day confirmation window;
+   Pre-book = call-backs that have come due. Everyone on the rep side. */
+async function updatePrebookBadges(){
+  const td=$('#tododot'), pd=$('#pbdot');
+  let nT=0, nP=0;
+  if(!(typeof BidPortal!=='undefined'&&BidPortal) && !(typeof OfficePortal!=='undefined'&&OfficePortal) &&
+     !(typeof Cal!=='undefined'&&Cal.crew) && !(PB.missing && Date.now()-PB.missing<600000)){
+    try{
+      /* a two-status, four-column read — light enough for the 5-minute poll */
+      const rows=(await DB.prebookOpen(PREBOOK_SEASON))||[];
+      PB.missing=false;
+      const today=calFmt(new Date());
+      nT=rows.filter(r=>r.status==='reserved' && r.res_date && pbDaysTo(r.res_date)<=PB_CONFIRM_DAYS).length;
+      nP=rows.filter(r=>r.status==='callback' && r.callback_date && r.callback_date<=today).length;
+    }catch(e){ PB.missing=Date.now(); }
+  }
+  if(td){ td.textContent=nT?String(nT):''; td.classList.toggle('hide', !nT); }
+  if(pd){ pd.textContent=nP?String(nP):''; pd.classList.toggle('hide', !nP); }
+}
+function pbFiltered(){
+  const f=PB.filt, today=calFmt(new Date());
+  const words=f.q.toLowerCase().split(/\s+/).filter(Boolean);
+  let rows=(PB.rows||[]).filter(r=>{
+    const st=r.status||'new';
+    if(f.status==='tocall' && !(st==='new'||st==='no_answer'||st==='callback')) return false;
+    if(f.status==='due' && !(st==='callback' && r.callback_date && r.callback_date<=today)) return false;
+    if(f.status==='reserved' && st!=='reserved') return false;
+    if(f.status==='quoted' && st!=='quoted') return false;
+    if(f.status==='declined' && !(st==='declined'||st==='released')) return false;
+    if(f.tier && pbTier(r.score)!==f.tier) return false;
+    const d=r.res_date||r.plan_date;
+    if(f.month && !(d && Number(d.slice(5,7))===Number(f.month))) return false;
+    if(f.product && (r.product||r.product_hist||'')!==f.product) return false;
+    if(words.length){
+      const hay=[r.customer_name,r.address,r.city,r.phone,r.cust_id,r.site_contact,r.product,r.product_hist]
+        .join(' ').toLowerCase();
+      const dig=String(r.phone||'').replace(/\D/g,'');
+      if(!words.every(w=>hay.indexOf(w)>=0 || (/^\d{4,}$/.test(w) && dig.indexOf(w)>=0))) return false;
+    }
+    return true;
+  });
+  /* A customer's sites stay together: one call covers all of them. */
+  const top={}; rows.forEach(r=>{ const k=String(r.cust_id);
+    top[k]=Math.max(top[k]||0, Number(r.score)||0); });
+  const dkey=r=>(r.res_date||r.plan_date||'9999')+'T'+(pbHM(r.res_time||r.plan_time)||'99');
+  if(f.sort==='date') rows.sort((a,b)=>dkey(a).localeCompare(dkey(b)));
+  else if(f.sort==='name') rows.sort((a,b)=>String(a.customer_name).localeCompare(String(b.customer_name))||dkey(a).localeCompare(dkey(b)));
+  else rows.sort((a,b)=>(top[String(b.cust_id)]-top[String(a.cust_id)]) ||
+    String(a.cust_id).localeCompare(String(b.cust_id)) || (b.score-a.score) || dkey(a).localeCompare(dkey(b)));
+  return rows;
+}
+async function renderPrebook(){
+  const box=$('#pblist'); if(!box) return;
+  if(!PB.rows) box.innerHTML='<div class="empty"><span class="spin"></span> Loading…</div>';
+  try{ await pbLoad(); }
+  catch(e){
+    PB.missing=Date.now();
+    box.innerHTML='<div class="note bad">Could not load the pre-book list: '+esc(pbErr(e))+'</div>';
+    $('#pbstats').innerHTML=''; return;
+  }
+  const rows=PB.rows;
+  if(!rows.length){
+    box.innerHTML='<div class="empty">No '+PREBOOK_SEASON+' pre-book rows yet — run '+
+      'sql/58_prebook_seed_2027.sql in Supabase to load the call list.</div>';
+    $('#pbstats').innerHTML=''; return;
+  }
+  try{ await loadSuggData(); }catch(e){}
+  /* filter options, once the data is in */
+  const fill=(id, opts, cur)=>{ const s=$('#'+id); if(!s) return;
+    const want=opts.map(o=>o[0]).join('|');
+    if(s.dataset.k!==want){ s.innerHTML=opts.map(o=>'<option value="'+esc(o[0])+'">'+esc(o[1])+'</option>').join('');
+      s.dataset.k=want; }
+    s.value=cur; };
+  const months=[...new Set(rows.map(r=>(r.res_date||r.plan_date||'').slice(5,7)).filter(Boolean))].sort();
+  fill('pb_month', [['','Any month']].concat(months.map(m=>[String(Number(m)),PB_MONTHS[Number(m)]])), PB.filt.month);
+  const prods=[...new Set(rows.map(r=>r.product||r.product_hist).filter(Boolean))].sort();
+  fill('pb_product', [['','Any product']].concat(prods.map(p=>[p,p])), PB.filt.product);
+  pbRenderStats(); pbRenderWeeks(); pbRenderList();
+  updatePrebookBadges().catch(()=>{});
+}
+function pbRenderStats(){
+  const rows=PB.rows||[], today=calFmt(new Date());
+  const custs=new Set(rows.map(r=>String(r.cust_id)));
+  const n=s=>rows.filter(r=>(r.status||'new')===s).length;
+  const tocall=rows.filter(r=>['new','no_answer','callback'].includes(r.status||'new')).length;
+  const reached=rows.filter(r=>(r.status||'new')!=='new').length;
+  const res=rows.filter(r=>r.status==='reserved'||r.status==='quoted');
+  const due=rows.filter(r=>r.status==='callback' && r.callback_date && r.callback_date<=today).length;
+  const stats=[
+    ['On the list', rows.length, custs.size+' customers'],
+    ['To call', tocall, rows.length?Math.round(reached/rows.length*100)+'% worked':''],
+    ['Reserved', res.length, money(res.reduce((s,r)=>s+(Number(r.typical_value)||0),0))+' typical value'],
+    ['Call-backs due', due, n('callback')+' scheduled'],
+    ['No answer', n('no_answer'), 'try again'],
+    ['Not this year', n('declined')+n('released'), '']];
+  $('#pbstats').innerHTML=stats.map(x=>'<div class="s"><div class="l">'+esc(x[0])+
+    '</div><div class="v">'+esc(String(x[1]))+'</div><div class="sub">'+esc(x[2])+'</div></div>').join('');
+}
+/* Season plan, one line per week: what the optimizer laid out per truck
+   and how much of it customers have actually reserved. */
+function pbRenderWeeks(){
+  const host=$('#pbweeks'); if(!host) return;
+  const wk={};
+  (PB.rows||[]).forEach(r=>{
+    const live=r.status==='reserved'||r.status==='quoted';
+    const d=live ? r.res_date : (['declined','released'].includes(r.status)?null:r.plan_date);
+    if(!d) return;
+    const k=calFmt(calWeekStart(d));
+    const w=wk[k]=wk[k]||{n:0,h:0,res:0,resH:0,crew:{}};
+    const cr=String((live?r.res_crew_id:r.plan_crew_id)||'');
+    const h=Number(live?r.res_hours:r.plan_hours)||0;
+    w.n++; w.h+=h; (w.crew[cr]=w.crew[cr]||{n:0,h:0}); w.crew[cr].n++; w.crew[cr].h+=h;
+    if(live){ w.res++; w.resH+=h; }
+  });
+  const keys=Object.keys(wk).sort();
+  const crews=(CREWS||[]).filter(c=>!c.backup);
+  host.innerHTML='<details'+(PB.wk?' open':'')+' id="pbwkd"><summary class="small" style="cursor:pointer;font-weight:600">'+
+    'Season plan by week <span class="muted" style="font-weight:400">— offered slots still open + reserved, per truck</span></summary>'+
+    '<div class="scroll" style="overflow-x:auto;margin-top:6px"><table><thead><tr><th>Week of</th>'+
+    crews.map(c=>'<th class="num">'+esc(c.name)+'</th>').join('')+
+    '<th class="num">Jobs</th><th class="num">Equip hr</th><th class="num">Reserved</th><th></th></tr></thead><tbody>'+
+    keys.map(k=>{ const w=wk[k];
+      return '<tr><td style="white-space:nowrap">'+esc(dfmt(k))+'</td>'+
+        crews.map(c=>{ const x=w.crew[String(c.id)]; return '<td class="num">'+(x?x.n+' · '+hrs(x.h):'—')+'</td>'; }).join('')+
+        '<td class="num">'+w.n+'</td><td class="num">'+hrs(w.h)+'</td>'+
+        '<td class="num">'+(w.res?'<b style="color:var(--resv)">'+w.res+'</b> · '+hrs(w.resH):'—')+'</td>'+
+        '<td><button type="button" class="btn ghost sm" data-pbwk="'+k+'">Calendar →</button></td></tr>'; }).join('')+
+    '</tbody></table></div></details>';
+  const dd=$('#pbwkd'); if(dd) dd.ontoggle=()=>{ PB.wk=dd.open; };
+  host.querySelectorAll('[data-pbwk]').forEach(b=>b.onclick=()=>{
+    Cal.view='week'; Cal.anchor=b.dataset.pbwk; show('cal'); });
+}
+function pbOfferHtml(r){
+  const live=r.status==='reserved'||r.status==='quoted';
+  if(live && r.res_date){
+    const sl=pbSlotsOf(r);
+    return '<b style="color:var(--resv)">✓ '+esc(pbWhen(r.res_date, r.res_time))+'</b><br>'+
+      '<span class="small muted">'+esc(pbCrewName(r.res_crew_id))+' · '+hrs(r.res_hours)+
+      (sl.length>1?' · '+sl.length+' days':'')+'</span>';
+  }
+  if(!r.plan_date) return '<span class="muted small">'+(r.kind==='account'
+    ? 'no slot — pipeline call' : 'no slot offered')+'</span>';
+  return esc(pbWhen(r.plan_date, r.plan_time))+'<br><span class="small muted">'+
+    esc(pbCrewName(r.plan_crew_id))+' · '+hrs(r.plan_hours)+
+    (Number(r.plan_loads)>1?' · '+r.plan_loads+' loads':'')+
+    (Number(r.plan_days)>1?' · '+r.plan_days+' days':'')+
+    (Number(r.plan_stops)>1?' · shares a load':'')+
+    (r.plan_moved && r.usual_month?' · usually '+PB_MONTHS[r.usual_month]:'')+'</span>';
+}
+function pbStatusHtml(r){
+  const st=PB_STATUS[r.status||'new']||PB_STATUS.new;
+  const today=calFmt(new Date());
+  let extra='';
+  if(r.status==='callback' && r.callback_date)
+    extra='<br><span class="small" style="'+(r.callback_date<=today?'color:var(--danger);font-weight:600':'color:var(--muted)')+
+      '">'+(r.callback_date<=today?'due ':'')+esc(dfmt(r.callback_date))+'</span>';
+  else if(Number(r.attempts)>0)
+    extra='<br><span class="small muted">'+r.attempts+' call'+(r.attempts>1?'s':'')+
+      (r.last_call_at?' · '+esc(dfmt(String(r.last_call_at).slice(0,10))):'')+'</span>';
+  return '<span class="tag '+st[1]+'">'+esc(st[0])+'</span>'+extra;
+}
+function pbRenderList(){
+  const box=$('#pblist'); if(!box) return;
+  const rows=pbFiltered();
+  $('#pbcount').textContent='· '+rows.length+' of '+(PB.rows||[]).length;
+  if(!rows.length){ box.innerHTML='<div class="empty">Nothing matches — change the filters above.</div>'; return; }
+  const show=rows.slice(0, PB.shown);
+  const nSites={}; (PB.rows||[]).forEach(r=>{ nSites[String(r.cust_id)]=(nSites[String(r.cust_id)]||0)+1; });
+  box.innerHTML='<table><thead><tr><th>Priority</th><th>Customer</th><th>Job we expect</th>'+
+    '<th>History</th><th>Offered slot</th><th>Status</th><th></th></tr></thead><tbody>'+
+    show.map((r,i)=>{
+      const t=pbTier(r.score);
+      const sameAsPrev=i>0 && String(show[i-1].cust_id)===String(r.cust_id);
+      const yrs=Array.isArray(r.season_years)?r.season_years:[];
+      const tel=String(r.phone||'').replace(/[^\d+]/g,'');
+      return '<tr data-pbrow="'+esc(r.id)+'" style="cursor:pointer'+(sameAsPrev?';border-top:0':'')+'">'+
+        '<td style="white-space:nowrap"><span class="tag '+(t==='A'?'g':t==='B'?'w':'')+'">'+t+'</span> '+
+          '<span class="small muted">'+(Number(r.score)||0)+'</span></td>'+
+        '<td>'+(sameAsPrev ? '<span class="muted small">↳ same customer</span>'
+          : '<b>'+esc(r.customer_name||'(no name)')+'</b>'+
+            (nSites[String(r.cust_id)]>1?' <span class="tag">'+nSites[String(r.cust_id)]+' jobs</span>':'')+
+            (r.kind==='account'?' <span class="tag w">account</span>':'')+
+            (tel?'<br><a class="small" href="tel:'+esc(tel)+'" data-pbtel="1">'+esc(fmtPhoneTyped(r.phone))+'</a>':''))+'</td>'+
+        '<td class="small"><b>'+esc(pbJobTxt(r))+'</b>'+
+          (r.kind==='account' ? '<br><span class="muted">'+esc(r.last_descr||'')+'</span>'
+            : '<br><span class="muted">'+esc([r.address,r.city].filter(Boolean).join(', '))+'</span>')+'</td>'+
+        '<td class="small">'+(yrs.length?esc(yrs.length+' season'+(yrs.length>1?'s':'')+' · '+
+            yrs.map(y=>"'"+String(y).slice(2)).join(' ')):'')+
+          '<br><span class="muted">last '+esc(dfmt(String(r.last_date||'').slice(0,10)))+
+          (r.typical_value?' · '+money(r.typical_value):'')+'</span></td>'+
+        '<td>'+pbOfferHtml(r)+'</td>'+
+        '<td>'+pbStatusHtml(r)+'</td>'+
+        '<td><button type="button" class="btn sm" data-pbopen="'+esc(r.id)+'" style="white-space:nowrap">📞 Call</button></td></tr>';
+    }).join('')+'</tbody></table>'+
+    (rows.length>show.length ? '<div style="text-align:center;margin-top:10px">'+
+      '<button type="button" class="btn ghost sm" id="pb_more">Show '+Math.min(60, rows.length-show.length)+
+      ' more ('+(rows.length-show.length)+' left)</button></div>' : '');
+  box.querySelectorAll('[data-pbrow]').forEach(tr=>tr.onclick=e=>{
+    if(e.target.closest('[data-pbtel]')) return;
+    pbCard(tr.dataset.pbrow); });
+  const more=$('#pb_more'); if(more) more.onclick=()=>{ PB.shown+=60; pbRenderList(); };
+}
+function pbWireFilters(){
+  if(pbWireFilters.done) return; pbWireFilters.done=true;
+  const on=(id, key, ev)=>{ const e2=$('#'+id); if(!e2) return;
+    e2.addEventListener(ev||'change', ()=>{ PB.filt[key]=e2.value; PB.shown=60; pbRenderList(); }); };
+  const s=$('#pb_search'); if(s) s.addEventListener('input', debounce(()=>{
+    PB.filt.q=s.value.trim(); PB.shown=60; pbRenderList(); }, 200));
+  on('pb_status','status'); on('pb_tier','tier'); on('pb_month','month');
+  on('pb_product','product'); on('pb_sort','sort');
+  const c=$('#pb_csv'); if(c) c.onclick=pbCsv;
+}
+function pbCsv(){
+  const cc=v=>{ v=v==null?'':String(v); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const head=['Priority','Score','Customer','Customer #','Phone','Email','Class','Address','City','ZIP',
+    'Product','Yards','Equip hours','Typical value','Seasons','Last job','Offered date','Offered time',
+    'Offered truck','Status','Calls','Last call','Call back','Reserved date','Reserved time','Reserved truck','Notes'];
+  const lines=[head.map(cc).join(',')].concat(pbFiltered().map(r=>[pbTier(r.score), r.score, r.customer_name,
+    r.cust_id, r.phone, r.email, r.cust_class, r.address, r.city, r.zip, r.res_product||r.product||r.product_hist,
+    r.res_yards!=null?r.res_yards:r.yards, r.equip_hours, r.typical_value,
+    (Array.isArray(r.season_years)?r.season_years.join(' '):''), String(r.last_date||'').slice(0,10),
+    r.plan_date, pbHM(r.plan_time), pbCrewName(r.plan_crew_id), (PB_STATUS[r.status||'new']||[''])[0],
+    r.attempts||0, String(r.last_call_at||'').slice(0,10), r.callback_date, r.res_date, pbHM(r.res_time),
+    pbCrewName(r.res_crew_id), r.call_notes].map(cc).join(',')));
+  const blob=new Blob(['﻿'+lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='prebook_'+PREBOOK_SEASON+'_call-list.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+}
+/* What else is on that truck that day, whether the job fits the truck, and
+   where the day ends — the same facts the suggestion engine weighs. */
+async function pbCheckSlot(o, selfId){
+  const out=[]; let block=false;
+  if(!o.date) return {html:'<span class="muted">Pick a date to check the truck’s day.</span>', block:true};
+  if(!o.crew) return {html:'<span class="muted">Pick a truck.</span>', block:true};
+  const crew=((CREWS||[]).find(c=>String(c.id)===String(o.crew)))||{name:'That truck'};
+  const dow=new Date(o.date+'T12:00:00').getDay();
+  if(dow===0||dow===6) out.push('<span style="color:var(--warn)">⚠ '+(dow===0?'Sunday':'Saturday')+' — crews run Mon–Fri.</span>');
+  const today=calFmt(new Date());
+  if(o.date<today) out.push('<span style="color:var(--danger)">⚠ That date is in the past.</span>');
+  try{ await loadSuggData(); }catch(e){}
+  const prod=o.product||'';
+  if(prod && !crewCanPlace(o.crew, prod)){
+    out.push('<span style="color:var(--danger)">⚠ '+esc(crew.name)+' can’t place '+esc(prod)+' — pick the rock truck.</span>');
+    block=true;
+  }
+  const capRow=prod && suggData.capMap ? suggData.capMap.get(String(o.crew)+'|'+prod) : null;
+  const cap=capRow ? Number(suggData.mode==='wet'?capRow.wet_yards:capRow.dry_yards) : null;
+  if(cap>0 && o.yards>0){
+    const loads=Math.ceil(o.yards/cap);
+    out.push(loads>1 ? o.yards+' yd = <b>'+loads+' loads</b> of '+cap+' yd on '+esc(crew.name)
+      : o.yards+' yd fits one load ('+cap+' yd on '+esc(crew.name)+')');
+  }
+  const slots=pbSlots(o.date, o.crew, o.time, o.hours);
+  if(slots.length>1) out.push('Runs <b>'+slots.length+' working days</b>: '+
+    slots.map(s=>esc(pbWhen(s.date))+' '+hrs(s.hours)).join(' · '));
+  const last=slots[slots.length-1];
+  let clash=0;
+  for(const s of slots){
+    let d=null; try{ d=await calFetch(s.date, s.date); }catch(e){}
+    if(!d) continue;
+    const s0=toMin(s.time), s1=s0+Math.round(s.hours*60);
+    const onTruck=x=>String(x.crew_id)===String(o.crew) && x.date===s.date;
+    const span=x=>{ const a=x.time?toMin(pbHM(x.time)):toMin(firstStartFor(crew, s.date));
+      return [a, a+Math.round((Number(x.hours)||(x.time?2:10))*60)]; };
+    const hits=[];
+    d.jobs.filter(onTruck).forEach(j=>{ const [a,b]=span(j);
+      hits.push({a,b,lbl:(j.hold?'HOLD ':'booked ')+j.customer, hard:!j.hold}); });
+    d.gEvents.filter(onTruck).forEach(g=>{
+      if(g.bid) return;
+      if(g.resv && String(g.pbId)===String(selfId)) return;
+      const [a,b]=span(g);
+      hits.push({a,b,lbl:g.block?String(g.summary||'blocked'):String(g.summary||''), hard:!!g.block, resv:!!g.resv});
+    });
+    const over=hits.filter(h=>h.a<s1 && s0<h.b);
+    if(hits.length) out.push('<span class="muted">'+esc(pbWhen(s.date))+' on '+esc(crew.name)+': '+
+      hits.sort((x,y)=>x.a-y.a).map(h=>esc(fmtMin(h.a)+'–'+fmtMin(h.b)+' '+h.lbl)).join(' · ')+'</span>');
+    over.forEach(h=>{ clash++; out.push('<span style="color:var(--warn)">⚠ Overlaps '+esc(h.lbl)+' ('+
+      esc(fmtMin(h.a)+'–'+fmtMin(h.b))+')'+(h.resv?' — another reservation':'')+'.</span>'); });
+  }
+  const end=toMin(last.time)+Math.round(last.hours*60);
+  if(end>SLOT_RULES.DAY_END_MIN) out.push('<span style="color:var(--warn)">⚠ Runs to '+esc(fmtMin(end))+' — past 5 PM.</span>');
+  if(!clash && !block) out.push('<span style="color:var(--good);font-weight:600">✓ Open — '+esc(fmtMin(toMin(slots[0].time)))+
+    ' → '+esc(fmtMin(end))+(slots.length>1?' on the last day':'')+'.</span>');
+  return {html:out.join('<br>'), block, slots};
+}
+/* The call card: who they are, what they bought, the spot we are offering,
+   and the outcome buttons. Nothing here books a truck. */
+async function pbCard(id){
+  let r=null;
+  try{ r=await DB.getPrebook(id); }catch(e){ toast('⚠ '+pbErr(e), true); return; }
+  if(!r){ toast('That pre-book row was not found.', true); return; }
+  try{ await loadSuggData(); }catch(e){}
+  const old=$('#crewcard'); if(old) old.remove();
+  const wrap=document.createElement('div'); wrap.id='crewcard';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
+    'display:flex;align-items:center;justify-content:center;padding:16px';
+  const live=r.status==='reserved'||r.status==='quoted';
+  const st=PB_STATUS[r.status||'new']||PB_STATUS.new;
+  const o={ date: (live&&r.res_date)||r.plan_date||'', crew:String((live&&r.res_crew_id)||r.plan_crew_id||''),
+    time: pbHM((live&&r.res_time)||r.plan_time)||'', hours: Number((live&&r.res_hours)||r.plan_hours||r.equip_hours)||2,
+    product: pbProd(r.res_product||r.product||''), yards: Number(r.res_yards!=null?r.res_yards:r.yards)||0 };
+  const tel=String(r.phone||'').replace(/[^\d+]/g,'');
+  const addr=[r.address,r.city,r.zip].filter(Boolean).join(', ');
+  const hist=Array.isArray(r.history)?r.history:[];
+  const yrs=Array.isArray(r.season_years)?r.season_years:[];
+  const rc=((State.ref&&State.ref.rate_card)||[]).filter(x=>x.active!==false).map(x=>x.product).sort();
+  const prodOpts=(o.product && rc.indexOf(o.product)<0 ? [o.product] : []).concat(rc);
+  const crewOpts=(CREWS||[]).map(c=>'<option value="'+esc(String(c.id))+'"'+
+    (String(c.id)===o.crew?' selected':'')+'>'+esc(crewLabel(c))+'</option>').join('');
+  const first=String(r.customer_name||'').split(/[ ,]/)[0];
+  wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);'+
+    'border-radius:12px;max-width:640px;width:100%;max-height:92vh;overflow:auto;padding:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'+
+      '<b style="font-size:18px">'+esc(r.customer_name||'(no name)')+'</b>'+
+      '<span style="display:flex;gap:6px;align-items:center">'+
+      '<span class="tag '+(pbTier(r.score)==='A'?'g':pbTier(r.score)==='B'?'w':'')+'">priority '+pbTier(r.score)+' · '+(Number(r.score)||0)+'</span>'+
+      '<span class="tag '+st[1]+'">'+esc(st[0])+'</span>'+
+      '<button type="button" class="btn ghost sm" id="pc_x">✕</button></span></div>'+
+    (tel?'<div style="margin-top:6px;font-size:17px">📞 <a href="tel:'+esc(tel)+'">'+esc(fmtPhoneTyped(r.phone))+'</a>'+
+      (r.site_contact?' <span class="small muted">· site contact: '+esc(r.site_contact)+'</span>':'')+'</div>':'')+
+    '<div class="small muted" style="margin-top:2px">'+
+      [r.email, r.cust_id?'Cust # '+r.cust_id:'', r.cust_class?'class '+r.cust_class:'',
+       r.sales_rep?'rep '+r.sales_rep:''].filter(Boolean).map(esc).join(' · ')+'</div>'+
+    (r.kind==='account'
+      ? '<div class="note" style="margin-top:8px">Account customer — their jobs land at different sites every season ('+
+        esc(r.last_descr||'')+'). Ask what they have coming in '+PREBOOK_SEASON+'; reserve a spot below for a job '+
+        'they already know about, and quote the rest as it comes.</div>'+
+        '<div style="margin-top:8px"><label class="f">Job site for this reservation</label>'+
+        '<input type="text" id="pc_addr" value="'+esc(r.address||'')+'" placeholder="address, city"></div>'
+      : (addr?'<div style="margin-top:6px"><a target="_blank" rel="noopener" href="https://maps.google.com/?q='+
+          encodeURIComponent(addr)+'">'+esc(addr)+'</a></div>':''))+
+    '<div class="small" style="margin-top:8px">'+
+      (yrs.length?'<b>'+yrs.length+' season'+(yrs.length>1?'s':'')+'</b> ('+yrs.join(', ')+') · ':'')+
+      'last job '+esc(dfmt(String(r.last_date||'').slice(0,10)))+
+      (r.typical_value?' · typical job '+money(r.typical_value):'')+
+      (r.usual_month?' · usually '+PB_MONTHS[r.usual_month]:'')+
+      (Number(r.seq_n)>1?' · job '+r.seq+' of '+r.seq_n+' a season':'')+'</div>'+
+    (r.last_descr && r.kind!=='account'?'<div class="small muted" style="margin-top:2px">Last time: '+esc(r.last_descr)+'</div>':'')+
+    (hist.length?'<details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">Past jobs · '+
+      hist.length+'</summary><table style="margin-top:4px"><thead><tr><th>Date</th><th>Product</th>'+
+      '<th class="num">Qty</th><th class="num">Equip hr</th><th class="num">Invoiced</th><th>Truck</th></tr></thead><tbody>'+
+      hist.map(h=>'<tr><td style="white-space:nowrap">'+esc(dfmt(h.date))+'</td><td>'+esc(h.product||'')+'</td>'+
+        '<td class="num">'+(h.unit==='yd'?(h.yards||0)+' yd':(h.qty||0)+' '+esc(h.unit||''))+'</td>'+
+        '<td class="num">'+hrs(h.hours)+'</td><td class="num">'+money(h.total)+'</td>'+
+        '<td>'+(h.truck?'#'+esc(h.truck):'')+'</td></tr>').join('')+'</tbody></table>'+
+      (r.last_note?'<div class="small muted" style="margin-top:4px;white-space:pre-wrap">Order note: '+esc(r.last_note)+'</div>':'')+
+      '</details>':'')+
+    /* ---- the spot ---- */
+    '<div style="margin-top:12px;border:2px dashed var(--resv);border-radius:10px;padding:10px 12px">'+
+      '<b class="small" style="color:var(--resv)">'+(live?'RESERVED SPOT':'THE SPOT TO OFFER')+'</b>'+
+      (!live && r.plan_date ? '<div class="small muted" style="margin-top:2px">“'+esc(first||'Hi')+
+        ', we’re lining up next season for returning customers and can hold '+
+        esc(pbWhen(o.date, o.time))+' for you — about '+esc(pbJobTxt(r))+
+        ', same as last time. No commitment today: we’ll call 30–60 days ahead with your quote to confirm.”</div>':'')+
+      '<div class="row" style="margin-top:8px;align-items:flex-end">'+
+        '<div style="flex:1 1 140px"><label class="f">Date</label><input type="date" id="pc_date" value="'+esc(o.date)+'"></div>'+
+        '<div style="flex:1 1 140px"><label class="f">Truck</label><select id="pc_crew"><option value="">— truck —</option>'+crewOpts+'</select></div>'+
+        '<div style="flex:1 1 110px"><label class="f">Start</label><input type="time" id="pc_time" step="900" value="'+esc(o.time)+'"></div>'+
+        '<div style="flex:1 1 90px"><label class="f">Hours</label><input type="number" id="pc_hours" min="0.25" step="0.25" value="'+o.hours+'"></div>'+
+      '</div>'+
+      '<div class="row" style="margin-top:6px;align-items:flex-end">'+
+        '<div style="flex:2 1 220px"><label class="f">Product</label><select id="pc_prod">'+
+          '<option value="">— product —</option>'+prodOpts.map(p=>'<option value="'+esc(p)+'"'+
+          (p===o.product?' selected':'')+'>'+esc(p)+'</option>').join('')+'</select></div>'+
+        '<div style="flex:1 1 90px"><label class="f">Yards</label><input type="number" id="pc_yards" min="0" step="0.5" value="'+o.yards+'"></div>'+
+      '</div>'+
+      (!o.product && r.product_hist?'<div class="small muted" style="margin-top:4px">Bought before: '+esc(r.product_hist)+
+        ' — no longer on the rate card; pick today’s product.</div>':'')+
+      '<div class="small" id="pc_check" style="margin-top:8px;line-height:1.55"><span class="muted">Checking the truck’s day…</span></div>'+
+    '</div>'+
+    '<div style="margin-top:10px"><label class="f">Call notes <span class="muted">— rep-only</span></label>'+
+      '<textarea id="pc_notes" rows="2" placeholder="what they said, who to ask for, gate codes…">'+esc(r.call_notes||'')+'</textarea></div>'+
+    (Number(r.attempts)>0?'<div class="small muted" style="margin-top:4px">'+r.attempts+' call'+(r.attempts>1?'s':'')+
+      ' logged'+(r.last_call_at?' · last '+esc(dfmt(String(r.last_call_at).slice(0,10))):'')+
+      (r.last_call_by?' by '+esc(String(r.last_call_by).split('@')[0]):'')+'</div>':'')+
+    '<div id="pc_msg"></div>'+
+    (live
+      ? '<div class="row" style="margin-top:12px">'+
+        (r.status==='reserved'
+          ? '<button type="button" class="btn" id="pc_quote" style="background:var(--good);flex:0 0 auto" '+
+            'title="Opens a prefilled quote — Hold or Schedule on the quote is what books the truck">'+
+            (r.quote_id?'Open the quote →':'Start quote →')+'</button>'+
+            '<button type="button" class="btn ghost" id="pc_move" style="flex:0 0 auto">Save changes</button>'+
+            '<button type="button" class="btn ghost" id="pc_release" style="color:var(--danger);flex:0 0 auto">Release spot</button>'
+          : '<button type="button" class="btn ghost" id="pc_quote" style="flex:0 0 auto">Open the quote →</button>')+
+        '</div>'
+      : '<div class="row" style="margin-top:12px">'+
+        '<button type="button" class="btn" id="pc_reserve" style="background:var(--resv);color:#fff;flex:0 0 auto" '+
+          'title="Pencils a dashed Reserved chip on the calendar — it never blocks a real booking">✓ Reserve this spot</button>'+
+        '<button type="button" class="btn ghost" id="pc_noans" style="flex:0 0 auto">No answer</button>'+
+        '<button type="button" class="btn ghost" id="pc_decline" style="color:var(--danger);flex:0 0 auto">Not this year</button>'+
+        '</div>'+
+        '<div class="row" style="margin-top:8px;align-items:flex-end">'+
+        '<div style="flex:0 1 170px"><label class="f">Call back on</label><input type="date" id="pc_cbdate" value="'+
+          esc(r.callback_date||calFmt(new Date(Date.now()+7*86400000)))+'"></div>'+
+        '<button type="button" class="btn ghost" id="pc_callback" style="flex:0 0 auto">↻ Call back then</button>'+
+        ((r.status||'new')!=='new'?'<button type="button" class="btn ghost" id="pc_reset" style="flex:0 0 auto" '+
+          'title="Back to the To call pile">↩ Back to To call</button>':'')+
+        '</div>')+
+    '<div class="small muted" style="margin-top:10px">Reserving never books the truck. The reservation shows as a dashed chip on the '+
+      'calendar and lands on the To Do tab '+PB_CONFIRM_DAYS+' days before the date for the confirmation call and quote.</div>'+
+    '</div>';
+  document.body.appendChild(wrap);
+  const cur=()=>({ date:$('#pc_date').value, crew:$('#pc_crew').value, time:$('#pc_time').value,
+    hours:parseFloat($('#pc_hours').value)||0, product:$('#pc_prod').value,
+    yards:parseFloat($('#pc_yards').value)||0 });
+  let chk={block:true}, seq=0;
+  const check=async()=>{ if(!$('#pc_date')) return;     // the card closed under a pending check
+    const my=++seq; const c=cur();
+    if(c.date && c.crew && !c.time){
+      const cw=(CREWS||[]).find(x=>String(x.id)===String(c.crew));
+      if(cw){ c.time=firstStartFor(cw, c.date); $('#pc_time').value=c.time; } }
+    const res=await pbCheckSlot(c, r.id);
+    if(my!==seq || !$('#pc_check')) return;
+    chk=res; $('#pc_check').innerHTML=res.html; };
+  const deb=debounce(check, 250);
+  ['pc_date','pc_crew','pc_time','pc_hours','pc_prod','pc_yards'].forEach(i=>{
+    const e2=$('#'+i); if(e2){ e2.addEventListener('change', deb); e2.addEventListener('input', deb); } });
+  check();
+  const close=()=>wrap.remove();
+  $('#pc_x').onclick=close;
+  wrap.onclick=e=>{ if(e.target===wrap) close(); };
+  const cmsg=(t,bad)=>{ const m=$('#pc_msg'); if(m) m.innerHTML='<div class="note '+(bad?'bad':'ok')+
+    '" style="margin-top:8px">'+esc(t)+'</div>'; };
+  const called=()=>({ attempts:(Number(r.attempts)||0)+1, last_call_at:new Date().toISOString(),
+    last_call_by:pbUser(), call_notes:$('#pc_notes').value.trim()||null });
+  const act=async(btn, patchFn, okMsg)=>{
+    if(!btn) return;
+    btn.onclick=async()=>{
+      let patch; try{ patch=await patchFn(); }catch(e){ cmsg(e.message, true); return; }
+      if(!patch) return;
+      wrap.querySelectorAll('button').forEach(b=>b.disabled=true);
+      try{
+        await pbPatch(r.id, patch);
+        close(); toast(typeof okMsg==='function'?okMsg(patch):okMsg, false);
+        if(!$('#view-prebook').classList.contains('hide')){ pbRenderStats(); pbRenderWeeks(); pbRenderList(); }
+        if(!$('#view-todo').classList.contains('hide')) renderTodo();
+        if(!$('#view-cal').classList.contains('hide')) renderCal();
+      }catch(e){
+        wrap.querySelectorAll('button').forEach(b=>b.disabled=false);
+        cmsg(pbErr(e), true);
+      }
+    };
+  };
+  const slotPatch=async()=>{
+    const c=cur();
+    if(!c.date) throw new Error('Pick the date being reserved.');
+    if(!c.crew) throw new Error('Pick the truck.');
+    if(!(c.hours>0)) throw new Error('Hours must be more than zero — it is the slot’s length on the calendar.');
+    const res=await pbCheckSlot(c, r.id);
+    if(res.block) throw new Error('That truck can’t take this job — see the note under the spot.');
+    const p={ res_date:c.date, res_crew_id:String(c.crew), res_time:res.slots[0].time, res_hours:c.hours,
+      res_slots:res.slots.length>1?res.slots:null, res_product:c.product||null, res_yards:c.yards||null };
+    const a=$('#pc_addr'); if(a) p.address=a.value.trim()||null;
+    return p;
+  };
+  act($('#pc_reserve'), async()=>Object.assign(await slotPatch(), called(),
+    { status:'reserved', reserved_at:new Date().toISOString(), reserved_by:pbUser(), callback_date:null }),
+    p=>'✓ Reserved — '+pbWhen(p.res_date, p.res_time)+' on '+pbCrewName(p.res_crew_id)+
+      '. Penciled on the calendar; nothing is booked.');
+  act($('#pc_move'), async()=>Object.assign(await slotPatch(), {call_notes:$('#pc_notes').value.trim()||null}),
+    p=>'✓ Reservation updated — '+pbWhen(p.res_date, p.res_time)+' on '+pbCrewName(p.res_crew_id)+'.');
+  act($('#pc_noans'), async()=>Object.assign(called(), {status:'no_answer'}), 'Logged — no answer.');
+  act($('#pc_decline'), async()=>Object.assign(called(), {status:'declined', callback_date:null}),
+    'Logged — not this year. The offered slot is free again.');
+  act($('#pc_callback'), async()=>{
+    const d=$('#pc_cbdate').value; if(!d) throw new Error('Pick the call-back date.');
+    return Object.assign(called(), {status:'callback', callback_date:d}); },
+    p=>'↻ Call back '+dfmt(p.callback_date)+' — it turns red on the list that day.');
+  act($('#pc_reset'), async()=>({status:'new', callback_date:null,
+    call_notes:$('#pc_notes').value.trim()||null}), '↩ Back on the To call pile.');
+  act($('#pc_release'), async()=>({status:'released', call_notes:$('#pc_notes').value.trim()||null}),
+    'Spot released — the dashed chip is off the calendar.');
+  const qb=$('#pc_quote'); if(qb) qb.onclick=async()=>{
+    qb.disabled=true;
+    try{
+      /* edits made on the card ride into the quote */
+      if(r.status==='reserved'){ try{ r=await pbPatch(r.id, Object.assign(await slotPatch(),
+        {call_notes:$('#pc_notes').value.trim()||null})); }catch(e){} }
+      close(); await pbStartQuote(r);
+    }catch(e){ qb.disabled=false; cmsg(e.message, true); }
+  };
+}
+/* Reservation -> personalized quote. The quote form opens prefilled with
+   the customer, site, product, volume and the reserved slot; the rep
+   prices it and presses Hold or Schedule — THAT is the booking. The
+   reservation flips to "quoted" (its dashed chip clears) only once the
+   quote is actually held or scheduled, so a draft never loses the slot. */
+async function pbStartQuote(r){
+  if(r.quote_id){
+    let q=null; try{ q=await DB.getQuote(r.quote_id); }catch(e){}
+    if(q && !q.archived_at){
+      show('quote'); await openQuote(q);
+      State.fromPrebookId = r.status==='reserved' ? r.id : null;
+      return;
+    }
+  }
+  $('#newquote').click(); show('quote');
+  $('#q_customer').value=r.customer_name||'';
+  $('#q_phone').value=fmtPhoneTyped(r.phone||'');
+  $('#q_email').value=r.email||'';
+  $('#q_address').value=r.address||''; $('#q_city').value=r.city||''; $('#q_zip').value=r.zip||'';
+  if(r.cust_id){ $('#q_custno').value=String(r.cust_id).padStart(9,'0');
+    try{ $('#q_custno').dispatchEvent(new Event('input',{bubbles:true})); }catch(e){} }
+  const prod=pbProd(r.res_product||r.product||'');
+  if(prod && !$('#q_product').disabled && [...$('#q_product').options].some(o=>o.value===prod))
+    $('#q_product').value=prod;
+  const y=Number(r.res_yards!=null?r.res_yards:r.yards)||0;
+  if(y>0) $('#q_yards').value=y;
+  if(r.res_date){
+    $('#q_scheddate').value=r.res_date;
+    if(r.res_crew_id) $('#q_crew').value=String(r.res_crew_id);
+    if(r.res_time) $('#q_schedtime').value=pbHM(r.res_time);
+    try{ slotDurTouched=false; }catch(e){}
+  }
+  State.fromPrebookId=r.id;
+  try{ recalc(); }catch(e){}
+  msg('Pre-book reservation loaded — '+(r.customer_name||'')+
+    (r.res_date?': the reserved slot ('+pbWhen(r.res_date, r.res_time)+' on '+pbCrewName(r.res_crew_id)+
+      ') is in the Schedule section':'')+
+    '. Price it and send the quote; Hold or Schedule books the truck and clears the dashed Reserved chip.'+
+    (prod && $('#q_product').value!==prod ? ' Product “'+prod+'” is not on the rate card — pick one.' : ''), false);
+}
+/* The quote-save hook (called from saveQuote). */
+async function pbAfterQuoteSave(saved, status){
+  if(!State.fromPrebookId || !saved) return;
+  const booked=(status==='sent'||status==='won') && !!saved.scheduled_date;
+  try{
+    await pbPatch(State.fromPrebookId, Object.assign({quote_id:String(saved.id)},
+      booked ? {status:'quoted', confirmed_at:new Date().toISOString()} : {}));
+    if(booked) State.fromPrebookId=null;
+  }catch(e){}
+}
+/* ---- To Do: the confirmation pile -------------------------------------- */
+async function pbDueRows(){
+  if(!DB.prebookReserved) return {due:[], later:0};
+  if(PB.missing && Date.now()-PB.missing<600000) return {due:[], later:0};
+  let rows=[];
+  try{ rows=(await DB.prebookReserved(PREBOOK_SEASON))||[]; PB.missing=false; }
+  catch(e){ PB.missing=Date.now(); return {due:[], later:0}; }
+  rows=rows.filter(r=>r.res_date);
+  const due=rows.filter(r=>pbDaysTo(r.res_date)<=PB_CONFIRM_DAYS)
+    .sort((a,b)=>String(a.res_date).localeCompare(String(b.res_date)));
+  return {due, later:rows.length-due.length};
+}
+function pbTodoHtml(d){
+  if(!d || (!d.due.length && !d.later)) return '';
+  const head='📞 Pre-book confirmations — call '+PB_URGENT_DAYS+'–'+PB_CONFIRM_DAYS+' days ahead with the quote';
+  if(!d.due.length) return '<div class="small muted" style="margin:10px 0 14px">'+head+': nothing inside '+
+    PB_CONFIRM_DAYS+' days yet · '+d.later+' reservation'+(d.later>1?'s':'')+' further out (Pre-book tab).</div>';
+  return '<div class="small" style="font-weight:600;margin:10px 0 4px">'+head+' · '+d.due.length+
+    (d.later?' <span class="muted" style="font-weight:400">· '+d.later+' more further out</span>':'')+'</div>'+
+    '<table style="margin-bottom:14px"><thead><tr><th>Reserved date</th><th>Truck</th><th>Customer</th>'+
+    '<th>Job</th><th class="num">Days out</th><th style="min-width:230px">Call notes <span class="muted small">— never crew-facing</span></th>'+
+    '<th></th></tr></thead><tbody>'+
+    d.due.map(r=>{
+      const n=pbDaysTo(r.res_date);
+      const tel=String(r.phone||'').replace(/[^\d+]/g,'');
+      return '<tr><td style="white-space:nowrap">'+esc(dfmt(r.res_date))+
+        (r.res_time?'<br><span class="small muted">'+esc(fmtMin(toMin(pbHM(r.res_time))))+'</span>':'')+'</td>'+
+        '<td>'+esc(pbCrewName(r.res_crew_id))+'</td>'+
+        '<td><b>'+esc(r.customer_name||'(no name)')+'</b>'+
+          (r.quote_id?' <span class="tag">quote drafted</span>':'')+
+          (tel?'<br><a class="small" href="tel:'+esc(tel)+'">'+esc(fmtPhoneTyped(r.phone))+'</a>':'')+'</td>'+
+        '<td class="small">'+esc(pbJobTxt(r))+
+          (r.address?'<br><span class="muted">'+esc([r.address,r.city].filter(Boolean).join(', '))+'</span>':'')+'</td>'+
+        '<td class="num">'+(n<0 ? '<b style="color:var(--danger)">'+(-n)+' past</b>'
+          : '<b'+(n<=PB_URGENT_DAYS?' style="color:var(--warn)"':'')+'>'+n+'</b>'+
+            (n<=PB_URGENT_DAYS?'<br><span class="small" style="color:var(--warn)">confirm now</span>':''))+'</td>'+
+        '<td><textarea rows="2" data-pbn="'+esc(r.id)+'" style="min-width:220px" '+
+          'placeholder="what they said on the pre-book call…">'+esc(r.call_notes||'')+'</textarea></td>'+
+        '<td><div style="display:flex;flex-direction:column;gap:4px">'+
+          '<button type="button" class="btn sm" data-pbquote="'+esc(r.id)+'" style="background:var(--good);color:#fff" '+
+            'title="Prefilled quote — Hold or Schedule on it books the truck">'+(r.quote_id?'Open quote →':'Start quote →')+'</button>'+
+          '<button type="button" class="btn ghost sm" data-pbcard="'+esc(r.id)+'">Open / move</button>'+
+          '<button type="button" class="btn ghost sm" data-pbrel="'+esc(r.id)+'" style="color:var(--danger)">Release</button>'+
+        '</div></td></tr>'; }).join('')+'</tbody></table>';
+}
+function pbTodoWire(box){
+  box.querySelectorAll('[data-pbn]').forEach(ta=>ta.addEventListener('change', async()=>{
+    try{ await pbPatch(ta.dataset.pbn, {call_notes:ta.value.trim()||null}); toast('✓ Call note saved.', false); }
+    catch(e){ toast(pbErr(e), true); } }));
+  box.querySelectorAll('[data-pbcard]').forEach(b=>b.onclick=()=>pbCard(b.dataset.pbcard));
+  box.querySelectorAll('[data-pbquote]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    try{ const r=await DB.getPrebook(b.dataset.pbquote); if(r) await pbStartQuote(r); }
+    catch(e){ toast(pbErr(e), true); b.disabled=false; } });
+  box.querySelectorAll('[data-pbrel]').forEach(b=>{
+    /* two-step, like deleting an archived bid: the first press arms it */
+    b.onclick=async()=>{
+      if(b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='Really release?';
+        setTimeout(()=>{ if(b.isConnected){ b.dataset.armed=''; b.textContent='Release'; } }, 4000); return; }
+      b.disabled=true;
+      try{ await pbPatch(b.dataset.pbrel, {status:'released'});
+        toast('Spot released — the dashed chip is off the calendar.', false); renderTodo(); }
+      catch(e){ toast(pbErr(e), true); b.disabled=false; } };
   });
 }
 
