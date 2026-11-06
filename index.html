@@ -871,6 +871,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
           <button type="button" class="btn ghost sm" id="pb_vvet" style="flex:0 0 auto"
             title="Walk the list and take off customers who should not be called (one-time projects, etc.)">✂ Vet the list</button>
           <span style="flex:1 1 auto"></span>
+          <button type="button" class="btn ghost sm hide" id="pb_undo" style="flex:0 1 auto;max-width:min(420px,78vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            title="Take back the last pre-book action"></button>
           <span class="small hide" id="pb_stale" style="flex:0 0 auto;color:var(--warn);font-weight:600"></span>
           <button type="button" class="btn ghost sm" id="pb_reopt" style="flex:0 0 auto"
             title="Rebuild every open offer's slot — product first — around reservations and real bookings">⟳ Re-optimize schedule</button>
@@ -1445,7 +1447,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-06d-prebookask';   // shown in the header; check it after deploying
+const BUILD = '2026-11-06g-listvet';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3905,7 +3907,7 @@ async function renderMultiJobs(){
       'master projects: '+esc(e.message||'')+'</div>';
     return;
   }
-  rows=rows.filter(r=>!r.archived_at && r.batch_id);
+  rows=rows.filter(r=>!r.archived_at && r.batch_id && r.status!=='lost');
   const t=new Date();
   const tLoc=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+
     String(t.getDate()).padStart(2,'0');
@@ -12284,14 +12286,74 @@ async function pbReservedBetween(from, to){
     return r.filter(x=>pbSlotsOf(x).some(s=>s.date>=from && s.date<=to)); }
   catch(e){ PB.missing=Date.now(); return []; }
 }
-async function pbPatch(id, patch){
+async function pbPatch(id, patch, undoLabel){
   patch=Object.assign({updated_at:new Date().toISOString()}, patch);
+  /* an action worth undoing remembers what it overwrote (the whole row is
+     read first: the list keeps only the light columns) */
+  let before=null;
+  if(undoLabel){
+    try{ const full=await DB.getPrebook(id);
+      if(full){ before={}; Object.keys(patch).forEach(k=>{ if(k!=='updated_at') before[k]=(full[k]===undefined?null:full[k]); }); } }
+    catch(e){}
+  }
   const r=await DB.patchPrebook(id, patch);
   if(!r) throw new Error('⚠ NOT saved — the database changed nothing. Run sql/57_prebook.sql (it carries the update policy).');
   if(PB.rows){ const ex=PB.rows.find(x=>String(x.id)===String(id)); if(ex) Object.assign(ex, r); }
   bustCalCache();
   updatePrebookBadges().catch(()=>{});
+  if(before) pbSetUndo({ label:undoLabel, items:[{ids:[String(id)], before}] });
   return r;
+}
+/* ------------------------------ UNDO ------------------------------------
+   (per Taylor 2026-11-06: "the option to undo an action in the pre-book
+   section. I just reserved the spot for Kelsey Brooks and I want to undo
+   it.") The LAST pre-book action can be taken back: a call outcome, a
+   reservation, a release, a vetting keep / ask / remove (bulk too), a saved
+   offer, a re-optimize. One step, until the next action or a page reload —
+   the button sits in the Pre-book toolbar and floats for a moment on
+   whatever tab the action happened on. */
+function pbSetUndo(u){
+  PB.undo=u;
+  const b=$('#pb_undo');
+  /* a short label (the phone layout lifts every max-width in a button row);
+     the whole action is in the tooltip and on the floating chip */
+  if(b){ b.classList.toggle('hide', !u);
+    if(u){ b.textContent='↩ Undo: '+String(u.label).split(' — ')[0].slice(0,26); b.title='Undo: '+u.label; } }
+  let f=$('#pbundo_float'); if(f) f.remove();
+  clearTimeout(pbSetUndo.t);
+  if(!u) return;
+  f=document.createElement('div'); f.id='pbundo_float';
+  f.style.cssText='position:fixed;left:16px;bottom:16px;z-index:210;background:var(--panel);border:1px solid var(--line);'+
+    'border-radius:10px;box-shadow:var(--shadow);padding:8px 10px;display:flex;gap:10px;align-items:center;max-width:min(92vw,460px)';
+  f.innerHTML='<span class="small" style="flex:1 1 auto">'+esc(String(u.label).slice(0,90))+'</span>'+
+    '<button type="button" class="btn ghost sm" id="pbundo_btn" style="flex:0 0 auto">↩ Undo</button>';
+  document.body.appendChild(f);
+  $('#pbundo_btn').onclick=()=>pbUndo();
+  pbSetUndo.t=setTimeout(()=>{ const x=$('#pbundo_float'); if(x) x.remove(); }, 20000);
+}
+async function pbUndo(){
+  const u=PB.undo; if(!u) return;
+  const now=new Date().toISOString();
+  try{
+    if(u.plan){
+      const n=await DB.applyPrebookPlan(PREBOOK_SEASON, u.plan);
+      if(!(n>0)) throw new Error('⚠ NOT undone — the database changed nothing.');
+    }else{
+      for(const it of u.items){
+        const out=(it.ids.length===1)
+          ? [await DB.patchPrebook(it.ids[0], Object.assign({updated_at:now}, it.before))]
+          : await DB.patchPrebookMany(it.ids, Object.assign({updated_at:now}, it.before));
+        if(!out || !out.filter(Boolean).length) throw new Error('⚠ NOT undone — the database changed nothing.');
+      }
+    }
+    pbSetUndo(null);
+    await pbLoad(true);
+    bustCalCache(); updatePrebookBadges().catch(()=>{});
+    toast('↩ Undone — '+u.label, false);
+    if(!$('#view-prebook').classList.contains('hide')){ pbRenderStats(); pbRenderWeeks(); if(PB.view==='cal') pbRenderCal(); else pbRenderList(); }
+    if(!$('#view-todo').classList.contains('hide')) renderTodo();
+    if(!$('#view-cal').classList.contains('hide')) renderCal();
+  }catch(e){ toast(pbErr(e), true); }
 }
 /* Red pills: To Do = reservations inside the 60-day confirmation window;
    Pre-book = call-backs that have come due. Everyone on the rep side. */
@@ -12482,7 +12544,9 @@ function pbStatusHtml(r){
   else if(Number(r.attempts)>0)
     extra='<br><span class="small muted">'+r.attempts+' call'+(r.attempts>1?'s':'')+
       (r.last_call_at?' · '+esc(dfmt(String(r.last_call_at).slice(0,10))):'')+'</span>';
-  return '<span class="tag '+st[1]+'">'+esc(st[0])+'</span>'+extra;
+  return '<span class="tag '+st[1]+'">'+esc(st[0])+'</span>'+
+    (r.vetted_at && r.status!=='removed' ? ' <span class="small" style="color:var(--good)" title="Vetted — kept on the list">✓</span>' : '')+
+    (r.status==='removed' && r.removed_reason ? '<br><span class="small muted">'+esc(r.removed_reason)+'</span>' : '')+extra;
 }
 function pbRenderList(){
   const box=$('#pblist'); if(!box) return;
@@ -12519,14 +12583,20 @@ function pbRenderList(){
           (r.typical_value?' · '+money(r.typical_value):'')+'</span></td>'+
         '<td>'+pbOfferHtml(r)+'</td>'+
         '<td>'+pbStatusHtml(r)+'</td>'+
-        '<td><button type="button" class="btn sm" data-pbopen="'+esc(r.id)+'" style="white-space:nowrap">📞 Call</button></td></tr>';
+        '<td><div style="display:flex;gap:6px;align-items:center;white-space:nowrap">'+
+          '<button type="button" class="btn sm" data-pbopen="'+esc(r.id)+'" style="white-space:nowrap">📞 Call</button>'+
+          (['new','no_answer','callback'].includes(r.status||'new') ? pbVetPicker('data-pbvet', r.id)
+            : r.status==='removed' ? '<button type="button" class="btn ghost sm" data-pbrestore2="'+esc(r.id)+'">↩ Restore</button>' : '')+
+          '</div></td></tr>';
     }).join('')+'</tbody></table>'+
     (rows.length>show.length ? '<div style="text-align:center;margin-top:10px">'+
       '<button type="button" class="btn ghost sm" id="pb_more">Show '+Math.min(60, rows.length-show.length)+
       ' more ('+(rows.length-show.length)+' left)</button></div>' : '');
   box.querySelectorAll('[data-pbrow]').forEach(tr=>tr.onclick=e=>{
-    if(e.target.closest('[data-pbtel]')) return;
+    if(e.target.closest('[data-pbtel],[data-pbvet],[data-pbrestore2]')) return;
     pbCard(tr.dataset.pbrow); });
+  box.querySelectorAll('[data-pbvet]').forEach(sel=>sel.onchange=()=>pbVetPick(sel, sel.dataset.pbvet));
+  box.querySelectorAll('[data-pbrestore2]').forEach(b2=>b2.onclick=()=>pbVetApply([b2.dataset.pbrestore2],'restore'));
   const more=$('#pb_more'); if(more) more.onclick=()=>{ PB.shown+=60; pbRenderList(); };
 }
 function pbWireFilters(){
@@ -12543,6 +12613,7 @@ function pbWireFilters(){
   bind('pb_vcal',  ()=>pbSetView('cal'));
   bind('pb_vvet',  ()=>pbSetView('vet'));
   bind('pb_reopt', ()=>pbReoptimize());
+  bind('pb_undo',  ()=>pbUndo());
   bind('pb_vetkeep',   ()=>pbVetBulk('keep'));
   bind('pb_vetask',    ()=>pbVetBulk('ask'));
   bind('pb_vetremove', ()=>pbVetBulk('remove'));
@@ -12664,6 +12735,7 @@ async function pbCard(id){
       '<span style="display:flex;gap:6px;align-items:center">'+
       '<span class="tag '+(pbTier(r.score)==='A'?'g':pbTier(r.score)==='B'?'w':'')+'">priority '+pbTier(r.score)+' · '+(Number(r.score)||0)+'</span>'+
       '<span class="tag '+st[1]+'">'+esc(st[0])+'</span>'+
+      (['new','no_answer','callback'].includes(r.status||'new') ? pbVetPicker('data-pcvet', r.id) : '')+
       '<button type="button" class="btn ghost sm" id="pc_x">✕</button></span></div>'+
     (tel?'<div style="margin-top:6px;font-size:17px">📞 <a href="tel:'+esc(tel)+'">'+esc(fmtPhoneTyped(r.phone))+'</a>'+
       (r.site_contact?' <span class="small muted">· site contact: '+esc(r.site_contact)+'</span>':'')+'</div>':'')+
@@ -12739,7 +12811,10 @@ async function pbCard(id){
             'title="Opens a prefilled quote — Hold or Schedule on the quote is what books the truck">'+
             (r.quote_id?'Open the quote →':'Start quote →')+'</button>'+
             '<button type="button" class="btn ghost" id="pc_move" style="flex:0 0 auto">Save changes</button>'+
-            '<button type="button" class="btn ghost" id="pc_release" style="color:var(--danger);flex:0 0 auto">Release spot</button>'
+            '<button type="button" class="btn ghost" id="pc_unres" style="flex:0 0 auto" '+
+              'title="Reserved by mistake: back on the To call list with the offer intact (works any time, not just right after)">↩ Undo reservation</button>'+
+            '<button type="button" class="btn ghost" id="pc_release" style="color:var(--danger);flex:0 0 auto" '+
+              'title="The customer backed out: the spot is given up and the row files under Not this year">Release spot</button>'
           : '<button type="button" class="btn ghost" id="pc_quote" style="flex:0 0 auto">Open the quote →</button>')+
         '</div>'
       : '<div class="row" style="margin-top:12px">'+
@@ -12808,6 +12883,8 @@ async function pbCard(id){
   $('#pc_findbtn').onclick=findSlots;
   check();
   const close=()=>wrap.remove();
+  const cv=wrap.querySelector('[data-pcvet]'); if(cv) cv.onchange=()=>{ if(cv.value){ pbVetPick(cv, r.id, ()=>{
+    if(!$('#view-todo').classList.contains('hide')) renderTodo(); }); close(); } };
   $('#pc_x').onclick=close;
   wrap.onclick=e=>{ if(e.target===wrap) close(); };
   const cmsg=(t,bad)=>{ const m=$('#pc_msg'); if(m) m.innerHTML='<div class="note '+(bad?'bad':'ok')+
@@ -12821,8 +12898,9 @@ async function pbCard(id){
       if(!patch) return;
       wrap.querySelectorAll('button').forEach(b=>b.disabled=true);
       try{
-        await pbPatch(r.id, patch);
-        close(); toast(typeof okMsg==='function'?okMsg(patch):okMsg, false);
+        const said=typeof okMsg==='function'?okMsg(patch):okMsg;
+        await pbPatch(r.id, patch, (r.customer_name||'')+' — '+String(said).replace(/^[^A-Za-z0-9]+/,''));
+        close(); toast(said, false);
         if(!$('#view-prebook').classList.contains('hide')){ pbRenderStats(); pbRenderWeeks(); pbRenderList();
           if(PB.view==='cal') pbRenderCal(); }
         if(!$('#view-todo').classList.contains('hide')) renderTodo();
@@ -12888,6 +12966,10 @@ async function pbCard(id){
     p=>'↻ Call back '+dfmt(p.callback_date)+' — it turns red on the list that day.');
   act($('#pc_reset'), async()=>({status:'new', callback_date:null,
     call_notes:$('#pc_notes').value.trim()||null}), '↩ Back on the To call pile.');
+  act($('#pc_unres'), async()=>({ status:'new', res_date:null, res_crew_id:null, res_time:null, res_hours:null,
+      res_slots:null, res_product:null, res_yards:null, reserved_at:null, reserved_by:null,
+      call_notes:$('#pc_notes').value.trim()||null }),
+    'Reservation undone — back on the To call list, offer intact.');
   act($('#pc_release'), async()=>({status:'released', call_notes:$('#pc_notes').value.trim()||null}),
     'Spot released — the dashed chip is off the calendar.');
   const qb=$('#pc_quote'); if(qb) qb.onclick=async()=>{
@@ -13010,7 +13092,8 @@ function pbTodoWire(box){
       if(b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='Really release?';
         setTimeout(()=>{ if(b.isConnected){ b.dataset.armed=''; b.textContent='Release'; } }, 4000); return; }
       b.disabled=true;
-      try{ await pbPatch(b.dataset.pbrel, {status:'released'});
+      try{ const rr=(PB.rows||[]).find(x=>String(x.id)===String(b.dataset.pbrel))||{};
+        await pbPatch(b.dataset.pbrel, {status:'released'}, (rr.customer_name||'')+' — spot released');
         toast('Spot released — the dashed chip is off the calendar.', false); renderTodo(); }
       catch(e){ toast(pbErr(e), true); b.disabled=false; } };
   });
@@ -13250,7 +13333,7 @@ function pbVetBulk(kind){
   if(!PB.sel.size){ toast('Tick the rows first (the box in the header selects every row shown).', true); return; }
   pbVetApply([...PB.sel], kind);
 }
-async function pbVetApply(ids, kind){
+async function pbVetApply(ids, kind, why){
   const now=new Date().toISOString(), me=pbUser();
   const byId=new Map((PB.rows||[]).map(r=>[String(r.id), r]));
   /* a reservation or a quote is past vetting — release it from its card */
@@ -13258,7 +13341,7 @@ async function pbVetApply(ids, kind){
     return r && (kind==='restore' ? r.status==='removed' : !['reserved','quoted'].includes(r.status)); });
   const skipped=ids.length-okIds.length;
   if(!okIds.length){ toast(skipped?'Reserved and quoted rows are not vetted here — release them from their card.':'Nothing to change.', true); return; }
-  const reason=(($('#pb_vetreason')||{}).value)||PB_REASONS[0];
+  const reason=why||(($('#pb_vetreason')||{}).value)||PB_REASONS[0];
   const patch = kind==='keep' ? { vetted_at:now, vetted_by:me, pitch:false }
     /* ask first: on the list, vetted, and its slot released */
     : kind==='ask' ? { vetted_at:now, vetted_by:me, pitch:true, plan_date:null, plan_crew_id:null, plan_time:null,
@@ -13267,9 +13350,17 @@ async function pbVetApply(ids, kind){
     : { status:'new', removed_reason:null, removed_at:null, removed_by:null, vetted_at:null, vetted_by:null };
   if(kind==='keep' && DB._pb60===false) delete patch.pitch;   // sql/60 not run: plain keep still works
   patch.updated_at=now;
+  const groups=new Map();
+  okIds.forEach(i=>{ const r=byId.get(i), before={};
+    Object.keys(patch).forEach(k=>{ if(k!=='updated_at') before[k]=(r[k]===undefined?null:r[k]); });
+    const key=JSON.stringify(before);
+    (groups.get(key)||groups.set(key,{ids:[],before}).get(key)).ids.push(i); });
   try{
     const out=(await DB.patchPrebookMany(okIds, patch))||[];
     if(!out.length) throw new Error('⚠ NOT saved — the database changed nothing. Run sql/59_prebook_vet.sql.');
+    const one=out.length===1 ? ((byId.get(okIds[0])||{}).customer_name||'1 row') : out.length+' rows';
+    pbSetUndo({ label: one+' — '+(kind==='keep'?'kept':kind==='ask'?'set to ask-first':kind==='remove'?'removed ('+reason+')':'restored'),
+      items:[...groups.values()] });
     out.forEach(u=>{ const r=byId.get(String(u.id)); if(r) Object.assign(r, u); });
     okIds.forEach(i=>PB.sel.delete(i));
     bustCalCache(); updatePrebookBadges().catch(()=>{});
@@ -13277,8 +13368,25 @@ async function pbVetApply(ids, kind){
       : kind==='keep' ? '✓ '+out.length+' kept on the call list.'
       : kind==='remove' ? '✕ '+out.length+' removed — '+reason+'. Re-optimize when you are done vetting.'
       : '↩ '+out.length+' restored to the call list.'+(skipped?' ('+skipped+' skipped)':''), false);
-    pbRenderStats(); pbRenderWeeks(); pbRenderList();
+    pbRenderStats(); pbRenderWeeks(); if(PB.view==='cal') pbRenderCal(); else pbRenderList();
   }catch(e){ toast(pbErr(e), true); }
+}
+/* Vetting straight from the call list (per Taylor 2026-11-06: "I also want
+   to vet directly from the call list"): the same three verbs as the Vet
+   view, as one picker — on every open row of the list and on the call card. */
+function pbVetPicker(attr, id){
+  return '<select '+attr+'="'+esc(id)+'" title="Vet this row without leaving the call list" '+
+    'style="width:auto;max-width:92px;padding:4px 6px;font-size:12.5px">'+
+    '<option value="">Vet…</option><option value="keep">✓ Keep</option>'+
+    '<option value="ask">💬 Ask first (no slot held)</option>'+
+    '<optgroup label="Remove from the list — why?">'+
+    PB_REASONS.map(x=>'<option value="remove:'+esc(x)+'">✕ '+esc(x)+'</option>').join('')+'</optgroup></select>';
+}
+function pbVetPick(sel, id, after){
+  const v=sel.value; if(!v) return;
+  sel.value='';
+  const kind=v.split(':')[0], why=v.indexOf(':')>0 ? v.slice(v.indexOf(':')+1) : null;
+  pbVetApply([String(id)], kind, why).then(()=>{ if(after) after(); });
 }
 /* ========================= RE-OPTIMIZE ====================================
    Runs the product-first season optimizer (pbOptimize) in the browser on the
@@ -13394,8 +13502,14 @@ async function pbReoptimize(){
           plan_hours:Math.round(p.plan_hours*100)/100, plan_days:p.plan_days, plan_slots:p.plan_slots,
           plan_load:p.plan_load, plan_stops:p.plan_stops, plan_loads:p.plan_loads, plan_group:p.plan_group,
           plan_moved:!!p.plan_moved }; });
+      const prior=inp.movable.map(r=>({ id:r.id, plan_date:r.plan_date||null, plan_crew_id:r.plan_crew_id||null,
+        plan_time:pbHM(r.plan_time)||null, plan_hours:r.plan_hours!=null?Number(r.plan_hours):null,
+        plan_days:r.plan_days!=null?r.plan_days:null, plan_slots:null, plan_load:r.plan_load!=null?r.plan_load:null,
+        plan_stops:r.plan_stops!=null?r.plan_stops:null, plan_loads:r.plan_loads!=null?r.plan_loads:null,
+        plan_group:r.plan_group!=null?r.plan_group:null, plan_moved:!!r.plan_moved }));
       const n=await DB.applyPrebookPlan(PREBOOK_SEASON, payload);
       if(!(n>0)) throw new Error('⚠ NOT saved — the database changed nothing. Run sql/59_prebook_vet.sql.');
+      pbSetUndo({ label:'schedule re-optimized ('+n+' offers re-slotted)', plan:prior });
       await pbLoad(true);
       wrap.remove();
       toast('✓ Schedule re-optimized — '+n+' offers re-slotted.', false);
