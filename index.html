@@ -1447,7 +1447,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-06g-listvet';   // shown in the header; check it after deploying
+const BUILD = '2026-11-10-blockedit';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1990,6 +1990,7 @@ const DemoDB = {
   async blocks(){ return []; },
   async addBlock(){ throw new Error('Blockouts need live mode.'); },
   async delBlock(){ return null; },
+  async patchBlock(){ throw new Error('Blockouts need live mode.'); },
   /* Pre-book (sql/57): the demo bundle may carry a prebook array. */
   _pb(){ if(!this._prebook) this._prebook=((this.B&&this.B.prebook)||[]).map(r=>Object.assign({},r));
     return this._prebook; },
@@ -2553,6 +2554,14 @@ const LiveDB = {
   },
   async delBlock(id){
     return SB.rest('blockouts?id=eq.'+encodeURIComponent(id), {method:'DELETE'});
+  },
+  async patchBlock(id, patch){
+    const r = await SB.rest('blockouts?id=eq.'+encodeURIComponent(id),
+      {method:'PATCH', headers:{Prefer:'return=representation'},
+       body:JSON.stringify(patch)});
+    if(!r || !r.length) throw new Error('0 rows updated — the blockout may '+
+      'have been removed, or this sign-in is not allowed to edit blockouts.');
+    return r[0];
   },
   async setConfig(key, value){
     const r = await SB.rest('app_config?key=eq.'+encodeURIComponent(key),
@@ -6483,6 +6492,7 @@ async function calFetch(from, to){
     const t0 = r.from_time ? String(r.from_time).slice(0,5) : null;
     const t1 = r.to_time ? String(r.to_time).slice(0,5) : null;
     crews.forEach(cid=>gEvents.push({gid:'b'+r.id, internal:true, block:true,
+      blkId:r.id,
       summary:'🚫 '+(r.reason||'blocked'), crew_id:cid, date:r.date, time:t0,
       hours:(t0&&t1)?Math.max(0.5,(toMin(t1)-toMin(t0))/60):null, allDay:!t0}));
   });
@@ -7029,7 +7039,12 @@ function tgEvent(it, crew){
       esc(it.product||'')+'</div></div>';
   }
   if(it.google || it.internal || it.block){
-    return '<div class="tgev" title="'+esc(it.summary||'')+'" style="'+pos+
+    const beOk = !!(it.block && it.blkId && !Cal.crew && !officeEyes());
+    return '<div class="tgev"'+
+      (it.blkId?' data-blkid="'+esc(it.blkId)+'"':'')+
+      ' title="'+esc(it.summary||'')+
+      (beOk?' — tap to edit this blockout':'')+'" style="'+pos+
+      (beOk?'cursor:pointer;':'')+
       'background:'+(it.block
         ? 'repeating-linear-gradient(45deg,rgba(220,60,60,.16) 0 6px,transparent 6px 12px)'
         : 'rgba(150,155,165,.16)')+
@@ -7116,10 +7131,15 @@ function tgBanner(it, crew){
   const col = it.block ? 'var(--danger)'
             : (it.google||it.internal) ? '#9aa2ad' : ((crew&&crew.color)||'#888');
   const lbl = it.qid ? it.customer : String(it.summary||'');
+  /* An all-day blockout banner is tappable too (per Taylor 2026-11-10). */
+  const beOk = !!(it.block && it.blkId && !Cal.crew && !officeEyes());
   return '<div class="tgev" '+(it.qid?'data-qid="'+esc(it.qid)+'" ':'')+
-    'style="position:static;display:block;margin-top:2px;background:'+
+    (it.blkId?'data-blkid="'+esc(it.blkId)+'" ':'')+
+    'style="position:static;display:block;margin-top:2px;'+(beOk?'cursor:pointer;':'')+
+    'background:'+
     (it.qid ? col+'22' : 'rgba(150,155,165,.16)')+';border-left:3px solid '+col+
-    '" title="'+esc(lbl)+'">'+esc(String(lbl).slice(0,28))+'</div>';
+    '" title="'+esc(lbl)+(beOk?' — tap to edit this blockout':'')+'">'+
+    esc(String(lbl).slice(0,28))+'</div>';
 }
 /* A backup truck keeps the board clean: its column appears only when
    something is actually scheduled/blocked on it in the visible range. */
@@ -7209,6 +7229,11 @@ function wireTimegrid(grid){
     ch.onclick = e=>{ e.stopPropagation();
       if((!Cal.crew || (typeof BidCal!=='undefined' && BidCal)) && !officeEyes())
         bidCardById(ch.dataset.bidid); };
+  });
+  /* Blockout chips open the edit card — reps only (per Taylor 2026-11-10). */
+  grid.querySelectorAll('.tgev[data-blkid]').forEach(ch=>{
+    ch.onclick = e=>{ e.stopPropagation();
+      if(!Cal.crew && !officeEyes()) blockEditCard(ch.dataset.blkid); };
   });
   /* Empty grid space opens the two-action chooser (per Taylor: never the
      quote builder): pencil a BID onto the slot, or BLOCK the time out. */
@@ -10443,6 +10468,8 @@ async function loadSuggData(force){
                calSeen: calOk, calN: calOk ? busy.length : 0,
                blocks: iblocks.map(r=>({date:r.date, crew:String(r.crew_id),
                      time:r.from_time?String(r.from_time).slice(0,5):'',
+                     to:r.to_time?String(r.to_time).slice(0,5):'',
+                     reason:r.reason||'',
                      allDay:!r.from_time, summary:'🚫 '+(r.reason||'blocked'),
                      id:r.id, internal:true}))
                  .concat(backend!=='internal' && calOk ? busy.filter(e=>e.block) : []),
@@ -10465,9 +10492,14 @@ function renderBlockList(){
     '<div class="kv"><span class="k">🚫 '+esc(dfmt(b.date))+
     (b.allDay?'':' · '+esc(b.time||''))+' · <b>'+esc(crewName(String(b.crew)))+'</b>'+
     ' <span class="muted">'+esc(String(b.summary||'').replace(/^🚫\s*/,'').slice(0,60))+'</span></span>'+
+    '<span style="flex:0 0 auto">'+
+    (b.id&&b.internal?'<button class="btn ghost sm" data-editblock="'+esc(b.id)+'">✎ Edit</button> ':'')+
     (b.id?'<button class="btn ghost sm" data-unblock="'+esc(b.id)+'"'+
       (b.internal?' data-int="1"':'')+'>✕ Remove</button>':'')+
-    '</div>').join('');
+    '</span></div>').join('');
+  box.querySelectorAll('[data-editblock]').forEach(btn=>{
+    btn.onclick=()=>blockEditCard(btn.dataset.editblock);
+  });
   box.querySelectorAll('[data-unblock]').forEach(btn=>{
     btn.onclick=async()=>{
       btn.disabled=true;
@@ -10483,6 +10515,101 @@ function renderBlockList(){
       }catch(e){ blMsg(e.message, true); btn.disabled=false; }
     };
   });
+}
+/* Edit a blockout in place (per Taylor 2026-11-10: "create an edit
+   feature on the blockout time calendar") — opened from the board's
+   hatched chip or ✎ Edit on the Upcoming blockouts list. Date, truck,
+   times and reason are all editable; saving re-feeds the engine, the
+   suggestions and every board. Internal (blockouts-table) rows only —
+   which is every block since the Google retirement. */
+async function blockEditCard(id){
+  let b=(suggData.blocks||[]).find(x=>String(x.id)===String(id) && x.internal);
+  if(!b){
+    try{ await loadSuggData(true); }catch(e){}
+    b=(suggData.blocks||[]).find(x=>String(x.id)===String(id) && x.internal);
+  }
+  if(!b){ toast('Could not find that blockout — it may have been removed.', true); return; }
+  const old=$('#blkedit'); if(old) old.remove();
+  const wrap=document.createElement('div'); wrap.id='blkedit';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:120;'+
+    'display:flex;align-items:center;justify-content:center;padding:16px';
+  wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);'+
+    'border-radius:12px;max-width:520px;width:100%;max-height:85vh;overflow:auto;padding:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center">'+
+    '<b>🚫 Edit blockout</b>'+
+    '<button type="button" class="btn ghost sm" id="be_x">✕</button></div>'+
+    '<div class="small muted" style="margin-top:2px">Change the date, truck, times or '+
+    'reason — the board, slot suggestions and capacity notes follow the edit.</div>'+
+    '<div class="row" style="margin-top:10px">'+
+    '<div><label class="f">Date</label><input type="date" id="be_date"></div>'+
+    '<div><label class="f">Truck</label><select id="be_crew">'+
+    '<option value="*">All trucks</option>'+
+    (CREWS||[]).map(c=>'<option value="'+esc(c.id)+'">'+esc(crewLabel(c))+'</option>').join('')+
+    '</select></div>'+
+    '<div style="max-width:110px"><label class="f">From <span class="small muted">blank = all day</span></label>'+
+    '<input type="time" id="be_from" step="900"></div>'+
+    '<div style="max-width:110px"><label class="f">To</label>'+
+    '<input type="time" id="be_to" step="900"></div>'+
+    '</div>'+
+    '<div class="row" style="margin-top:8px">'+
+    '<div style="flex:2"><label class="f">Reason</label>'+
+    '<input type="text" id="be_reason" placeholder="Labor Day, PTO Shane, boom repair…"></div>'+
+    '</div>'+
+    '<div class="row" style="margin-top:12px">'+
+    '<button type="button" class="btn" id="be_save" '+
+    'style="background:var(--accent);color:var(--accent-ink)">Save changes</button>'+
+    '<button type="button" class="btn ghost" id="be_del" '+
+    'style="color:var(--danger);flex:0 0 auto">✕ Remove blockout</button>'+
+    '<div id="be_msg" style="flex:1 1 100%"></div>'+
+    '</div></div>';
+  document.body.appendChild(wrap);
+  $('#be_x').onclick=()=>wrap.remove();
+  wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
+  $('#be_date').value=b.date||'';
+  $('#be_crew').value=String(b.crew||'*');
+  $('#be_from').value=b.time||'';
+  $('#be_to').value=b.to||'';
+  $('#be_reason').value=b.reason||'';
+  const beMsg=(t,bad)=>{ const e0=$('#be_msg');
+    if(e0) e0.innerHTML='<div class="note '+(bad?'bad':'ok')+'">'+esc(t)+'</div>'; };
+  const refresh=async()=>{
+    bustCalCache(); bustSuggCache();
+    try{ await loadSuggData(true); }catch(e){}
+    renderSuggestionsDebounced(); refreshCrewLoad();
+    try{ renderBlockList(); }catch(e){}
+    try{ if(!$('#view-cal').classList.contains('hide')) renderCal(); }catch(e){}
+  };
+  $('#be_save').onclick=async()=>{
+    const date=$('#be_date').value;
+    if(!date){ beMsg('Pick a date.', true); return; }
+    const from=$('#be_from').value||null, to=$('#be_to').value||null;
+    if((from&&!to)||(!from&&to)){
+      beMsg('Give both times, or leave both blank for an all-day block.', true); return; }
+    if(from&&to&&toMin(to)<=toMin(from)){ beMsg('The To time must be after From.', true); return; }
+    const btn=$('#be_save'); btn.disabled=true; btn.textContent='Saving…';
+    try{
+      await DB.patchBlock(id, { date, crew_id:$('#be_crew').value,
+        from_time:from, to_time:to, reason:$('#be_reason').value.trim()||null });
+      await refresh();
+      blMsg('Blockout updated.', false);
+      wrap.remove();
+      toast('🚫 Blockout updated — the board and slot suggestions follow it.', false);
+    }catch(e){ beMsg(e.message, true); btn.disabled=false; btn.textContent='Save changes'; }
+  };
+  /* Remove is two-tap here — the card invites lingering fingers. */
+  $('#be_del').onclick=async()=>{
+    const btn=$('#be_del');
+    if(btn.dataset.arm!=='1'){ btn.dataset.arm='1';
+      btn.textContent='Tap again to remove'; return; }
+    btn.disabled=true;
+    try{
+      await DB.delBlock(id);
+      await refresh();
+      blMsg('Blockout removed.', false);
+      wrap.remove();
+      toast('Blockout removed.', false);
+    }catch(e){ beMsg(e.message, true); btn.disabled=false; }
+  };
 }
 let blMsgTimer=null;
 function blMsg(t,bad){
