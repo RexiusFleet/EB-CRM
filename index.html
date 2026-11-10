@@ -5,8 +5,11 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="cache-control" content="no-cache, must-revalidate">
 <meta http-equiv="pragma" content="no-cache">
-<title>Rexius Blower Quotes</title>
+<title>Rexius Blower Quotes2</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6b3c'/%3E%3Ctext x='16' y='23' font-family='system-ui,sans-serif' font-size='19' font-weight='700' fill='%23fff' text-anchor='middle'%3ER%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
   --bg:#f6f7f5; --panel:#ffffff; --panel-2:#fbfcfa; --ink:#1b2019; --muted:#5f6b5c;
@@ -17,6 +20,9 @@
   --shadow:0 1px 2px rgba(20,30,18,.06),0 4px 14px rgba(20,30,18,.05);
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  --disp:'Oswald','Arial Narrow','Helvetica Neue Condensed',system-ui,sans-serif;
+  --band:#33593f; --band-ink:#ffffff; --band-warn:#b5812f;
+  --chrome:#191c17; --chrome-ink:#f2f4f0; --chrome-mut:#aab3a6;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
@@ -25,6 +31,8 @@
   --bid:#d9ded4; --resv:#b79cf0;
   --danger-soft:#2a1717; --good:#6fbf7f; --thisq:#7fb0f5;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
+  --band:#24402d; --band-ink:#e2e9e0; --band-warn:#7a5a23;
+  --chrome:#0e110c; --chrome-ink:#e8ece5; --chrome-mut:#8e998a;
 }}
 :root[data-theme="dark"]{
   --bg:#12150f; --panel:#1a1e17; --panel-2:#161a13; --ink:#e8ece5; --muted:#9aa694;
@@ -33,6 +41,8 @@
   --bid:#d9ded4; --resv:#b79cf0;
   --danger-soft:#2a1717; --good:#6fbf7f; --thisq:#7fb0f5;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
+  --band:#24402d; --band-ink:#e2e9e0; --band-warn:#7a5a23;
+  --chrome:#0e110c; --chrome-ink:#e8ece5; --chrome-mut:#8e998a;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
@@ -43,25 +53,36 @@ input,select,textarea{font:inherit;color:inherit}
 .hide{display:none !important}
 
 /* ---------- chrome ---------- */
-header.top{position:sticky;top:0;z-index:50;background:var(--panel);border-bottom:1px solid var(--line);
-  display:flex;align-items:center;gap:16px;padding:10px 18px;flex-wrap:wrap}
+header.top{position:sticky;top:0;z-index:50;background:var(--chrome);border-bottom:3px solid var(--accent);
+  display:flex;align-items:center;gap:16px;padding:10px 18px;flex-wrap:wrap;color:var(--chrome-ink)}
 /* the auth control must never be the thing that gets squeezed off-screen */
 .userbox{flex:0 0 auto;margin-left:auto}
 .userbox #authbtn{white-space:nowrap}
 @media(max-width:900px){nav.tabs{order:3;width:100%}.searchwrap{max-width:none}}
-.brand{display:flex;align-items:center;gap:9px;font-weight:650;letter-spacing:-.02em;white-space:nowrap}
+.brand{display:flex;align-items:center;gap:9px;white-space:nowrap;
+  font-family:var(--disp);font-weight:600;font-size:19px;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--chrome-ink)}
 .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;
   color:var(--accent-ink);font-size:12px;font-weight:800}
 nav.tabs{display:flex;gap:2px;flex:1;flex-wrap:wrap}
-nav.tabs button{background:none;border:0;padding:7px 12px;border-radius:7px;color:var(--muted);font-weight:550;font-size:14px}
-nav.tabs button:hover{background:var(--line-2);color:var(--ink)}
-nav.tabs button[aria-current="true"]{background:var(--accent-soft);color:var(--accent)}
-/* New Bid and New Quote pop (per Taylor) — the two "start something" buttons. */
-nav.tabs button[data-view="bids"]{color:var(--warn);background:var(--warn-soft)}
-nav.tabs button[data-view="quote"]{color:var(--accent);background:var(--accent-soft)}
-nav.tabs button[data-view="bids"][aria-current="true"]{background:var(--warn);color:#fff}
-nav.tabs button[data-view="quote"][aria-current="true"]{background:var(--accent);color:var(--accent-ink)}
-.userbox{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+nav.tabs button{background:none;border:0;border-bottom:3px solid transparent;border-radius:0;
+  padding:8px 11px 6px;color:var(--chrome-mut);font-family:var(--disp);font-weight:500;
+  font-size:13.5px;letter-spacing:.05em;text-transform:uppercase}
+nav.tabs button:hover{color:var(--chrome-ink);background:rgba(255,255,255,.05)}
+nav.tabs button[aria-current="true"]{border-bottom-color:var(--good);color:var(--chrome-ink);background:none}
+/* New Bid and New Quote pop (per Taylor) — solid pills, like the Dept 14
+   PRODUCTION/SALES INPUT buttons. */
+nav.tabs button[data-view="bids"],nav.tabs button[data-view="quote"]{
+  border:0;border-radius:7px;padding:8px 13px;margin:0 2px;align-self:center}
+nav.tabs button[data-view="bids"]{color:#fff;background:var(--warn)}
+nav.tabs button[data-view="quote"]{color:#fff;background:#3d7a4f}
+nav.tabs button[data-view="bids"][aria-current="true"]{background:var(--warn);color:#fff;
+  box-shadow:inset 0 0 0 2px rgba(255,255,255,.55)}
+nav.tabs button[data-view="quote"][aria-current="true"]{background:#3d7a4f;color:#fff;
+  box-shadow:inset 0 0 0 2px rgba(255,255,255,.55)}
+.userbox{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--chrome-mut)}
+.userbox .btn.ghost{border-color:rgba(255,255,255,.3);color:var(--chrome-ink)}
+.userbox .btn.ghost:hover{background:rgba(255,255,255,.08)}
 .pill{border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;background:var(--panel-2)}
 .pill.demo{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
 .pill.live{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
@@ -74,8 +95,19 @@ main{max-width:1400px;margin:0 auto;padding:20px 18px 80px}
    grid, and finally the page -- which is why phones got a sideways scroll.
    Forcing min-width:0 lets the .scroll wrappers actually do their clipping. */
 .grid>*,.qgrid>*{min-width:0}
-.card>h3{padding:13px 16px;border-bottom:1px solid var(--line-2);font-size:13px;text-transform:uppercase;
-  letter-spacing:.06em;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.card>h3{padding:11px 16px;border-bottom:0;font-size:14px;text-transform:uppercase;
+  letter-spacing:.07em;font-family:var(--disp);font-weight:600;
+  background:var(--band);color:var(--band-ink);border-radius:11px 11px 0 0;
+  display:flex;justify-content:space-between;align-items:center;gap:8px}
+.card>h3 .muted,.card>h3 .small{color:color-mix(in srgb, var(--band-ink) 72%, transparent)}
+.card>h3 a{color:var(--band-ink)}
+.card>h3 .btn{background:#fff;color:var(--band);border:0}
+.card>h3 .btn:hover{filter:none;background:#f0f3ee}
+.card>h3 .btn.ghost{background:none;border:1px solid color-mix(in srgb, var(--band-ink) 45%, transparent);
+  color:var(--band-ink)}
+.card>h3 .btn.ghost:hover{background:color-mix(in srgb, var(--band-ink) 12%, transparent)}
+/* the bid side of the house wears the dried-amber band */
+#view-bids .card>h3,#view-bidlist .card>h3{background:var(--band-warn)}
 .card>.body{padding:16px}
 .grid{display:grid;gap:16px}
 .btn{background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:9px 15px;font-weight:600;font-size:14px}
@@ -1455,7 +1487,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-10c-dragcal';   // shown in the header; check it after deploying
+const BUILD = '2026-11-10d-look';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
