@@ -85,8 +85,8 @@ nav.tabs button[data-view="quote"][aria-current="true"]{background:#3d7a4f;color
 .histbtns{display:flex;gap:4px;flex:0 0 auto}
 .histbtns button{background:none;border:1px solid rgba(255,255,255,.25);color:var(--chrome-ink);
   border-radius:7px;width:30px;height:30px;font-size:15px;line-height:1;padding:0}
-.histbtns button:hover:not(:disabled){background:rgba(255,255,255,.08)}
-.histbtns button:disabled{opacity:.3;cursor:default}
+.histbtns button:hover:not(.dim){background:rgba(255,255,255,.08)}
+.histbtns button.dim{opacity:.3}
 body.crewmode .histbtns,body.bidmode .histbtns,body.officemode .histbtns,
 body.drivermode .histbtns{display:none}
 .userbox{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--chrome-mut)}
@@ -381,8 +381,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
 <header class="top">
   <div class="brand"><span class="dot">R</span> Blower Quotes</div>
   <div class="histbtns">
-    <button type="button" id="undoBtn" disabled title="Nothing to undo">↺</button>
-    <button type="button" id="redoBtn" disabled title="Nothing to redo">↻</button>
+    <button type="button" id="undoBtn" class="dim" title="Nothing to undo yet">↺</button>
+    <button type="button" id="redoBtn" class="dim" title="Nothing to redo — redo lights up after an undo">↻</button>
   </div>
   <nav class="tabs" id="tabs">
     <button data-view="bids">New Bid</button>
@@ -1502,7 +1502,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-12c-undoredo';   // shown in the header; check it after deploying
+const BUILD = '2026-11-12d-undoredo';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2727,10 +2727,11 @@ const AppUndo={ u:[], r:[], MAX:20, busy:false,
     this.u.push(e); if(this.u.length>this.MAX) this.u.shift();
     this.r.length=0; this.ui(); },
   ui(){ const bu=$('#undoBtn'), br=$('#redoBtn');
-    if(bu){ bu.disabled=!this.u.length;
-      bu.title=this.u.length?'Undo: '+this.u[this.u.length-1].label:'Nothing to undo'; }
-    if(br){ br.disabled=!this.r.length;
-      br.title=this.r.length?'Redo: '+this.r[this.r.length-1].label:'Nothing to redo'; } },
+    if(bu){ bu.classList.toggle('dim', !this.u.length);
+      bu.title=this.u.length?'Undo: '+this.u[this.u.length-1].label:'Nothing to undo yet'; }
+    if(br){ br.classList.toggle('dim', !this.r.length);
+      br.title=this.r.length?'Redo: '+this.r[this.r.length-1].label
+        :'Nothing to redo — redo lights up after an undo'; } },
   raw(table,id,vals){
     if(table==='quotes')    return DB.patchQuote(id, vals);
     if(table==='bids')      return DB.patchBid(id, vals);
@@ -2752,12 +2753,22 @@ const AppUndo={ u:[], r:[], MAX:20, busy:false,
   },
   async step(dir){
     const from=dir==='undo'?this.u:this.r, to=dir==='undo'?this.r:this.u;
-    if(!from.length || this.busy) return;
+    if(!from.length){
+      /* a tap on an empty arrow explains itself (iPads have no hover) */
+      toast(dir==='undo'
+        ? 'Nothing to undo yet — the arrows track changes saved since this page loaded.'
+        : (this.u.length
+          ? '↻ Nothing to redo — press ↺ first, then ↻ puts it back.'
+          : 'Nothing to redo — ↻ re-applies whatever ↺ just took back.'), true);
+      return;
+    }
+    if(this.busy) return;
     const e=from.pop(); this.busy=true;
     try{
       await this.apply(e, dir);
       to.push(e);
-      toast((dir==='undo'?'↺ Undid: ':'↻ Redid: ')+e.label, false);
+      toast((dir==='undo'?'↺ Undid: ':'↻ Redid: ')+e.label+
+        (dir==='undo'?' — ↻ puts it back.':''), false);
     }catch(err){
       from.push(e);
       toast((dir==='undo'?'Undo':'Redo')+' failed — '+(err.message||err), true);
