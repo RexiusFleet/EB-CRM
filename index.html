@@ -82,6 +82,13 @@ nav.tabs button[data-view="bids"][aria-current="true"]{background:var(--warn);co
   box-shadow:inset 0 0 0 2px rgba(255,255,255,.55)}
 nav.tabs button[data-view="quote"][aria-current="true"]{background:#3d7a4f;color:#fff;
   box-shadow:inset 0 0 0 2px rgba(255,255,255,.55)}
+.histbtns{display:flex;gap:4px;flex:0 0 auto}
+.histbtns button{background:none;border:1px solid rgba(255,255,255,.25);color:var(--chrome-ink);
+  border-radius:7px;width:30px;height:30px;font-size:15px;line-height:1;padding:0}
+.histbtns button:hover:not(:disabled){background:rgba(255,255,255,.08)}
+.histbtns button:disabled{opacity:.3;cursor:default}
+body.crewmode .histbtns,body.bidmode .histbtns,body.officemode .histbtns,
+body.drivermode .histbtns{display:none}
 .userbox{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--chrome-mut)}
 .userbox .btn.ghost{border-color:rgba(255,255,255,.3);color:var(--chrome-ink)}
 .userbox .btn.ghost:hover{background:rgba(255,255,255,.08)}
@@ -373,6 +380,10 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
 
 <header class="top">
   <div class="brand"><span class="dot">R</span> Blower Quotes</div>
+  <div class="histbtns">
+    <button type="button" id="undoBtn" disabled title="Nothing to undo">↺</button>
+    <button type="button" id="redoBtn" disabled title="Nothing to redo">↻</button>
+  </div>
   <nav class="tabs" id="tabs">
     <button data-view="bids">New Bid</button>
     <button data-view="quote" aria-current="true">New Quote</button>
@@ -797,6 +808,8 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
             <div id="bd_measrows"></div>
             <div class="row" style="margin-top:6px;align-items:center">
               <button type="button" class="btn ghost sm" id="bd_measadd" style="flex:0 0 auto">+ Add area</button>
+              <button type="button" class="btn ghost sm hide" id="bd_measundo" style="flex:0 0 auto"
+                title="Bring back the last measurement line deleted from this bid (kept on this device for 30 days)">↩ Restore deleted line</button>
               <div class="small" id="bd_meastotal" style="align-self:center"></div>
             </div>
           </div>
@@ -1489,7 +1502,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-10e-look';   // shown in the header; check it after deploying
+const BUILD = '2026-11-12c-undoredo';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -2030,10 +2043,18 @@ const DemoDB = {
       .sort((a,b)=>String(b.scheduled_date).localeCompare(String(a.scheduled_date)))
       .slice(0,30);
   },
-  async blocks(){ return []; },
-  async addBlock(){ throw new Error('Blockouts need live mode.'); },
-  async delBlock(){ return null; },
-  async patchBlock(){ throw new Error('Blockouts need live mode.'); },
+  /* In-memory blockouts, so the demo behaves like the live app (and the
+     app-wide undo journal has something real to rewrite). */
+  async blocks(from,to){ return (this._blocks||[])
+    .filter(b=>(!from||b.date>=from)&&(!to||b.date<=to)); },
+  async addBlock(row){ this._blocks=this._blocks||[]; this._blkSeq=(this._blkSeq||0)+1;
+    const r=Object.assign({id:'b'+this._blkSeq}, row); this._blocks.push(r); return r; },
+  async delBlock(id){ this._blocks=(this._blocks||[]).filter(b=>String(b.id)!==String(id));
+    return null; },
+  async patchBlock(id, patch){
+    const b=(this._blocks||[]).find(x=>String(x.id)===String(id));
+    if(!b) throw new Error('0 rows updated — the blockout may have been removed.');
+    Object.assign(b, patch); return b; },
   /* Pre-book (sql/57): the demo bundle may carry a prebook array. */
   _pb(){ if(!this._prebook) this._prebook=((this.B&&this.B.prebook)||[]).map(r=>Object.assign({},r));
     return this._prebook; },
@@ -2690,6 +2711,136 @@ const LiveDB = {
 };
 
 let DB = LIVE ? LiveDB : DemoDB;
+/* ============== APP-WIDE UNDO / REDO (per Taylor 2026-11-12:
+   "I also want a full redo button for the whole app") ==============
+   Every deliberate saved CHANGE — a quote update, a drag/retime, the
+   Save #s row, a bid pencil-in / un-pencil / resize, a blockout add,
+   edit or remove — is journaled with the exact before-image of the
+   fields it overwrote, and the header ↺ / ↻ walk the stack both ways
+   (20 steps, this tab's session only). Deliberately NOT journaled:
+   the bid worksheet (it autosaves every keystroke — a mis-deleted
+   measurement line has its own ↩ Restore), new-row creations other
+   than blockouts (undoing a brand-new quote would mean archiving work),
+   and the Pre-book tab, which keeps its own ↩ Undo. */
+const AppUndo={ u:[], r:[], MAX:20, busy:false,
+  push(e){ if(this.busy) return;
+    this.u.push(e); if(this.u.length>this.MAX) this.u.shift();
+    this.r.length=0; this.ui(); },
+  ui(){ const bu=$('#undoBtn'), br=$('#redoBtn');
+    if(bu){ bu.disabled=!this.u.length;
+      bu.title=this.u.length?'Undo: '+this.u[this.u.length-1].label:'Nothing to undo'; }
+    if(br){ br.disabled=!this.r.length;
+      br.title=this.r.length?'Redo: '+this.r[this.r.length-1].label:'Nothing to redo'; } },
+  raw(table,id,vals){
+    if(table==='quotes')    return DB.patchQuote(id, vals);
+    if(table==='bids')      return DB.patchBid(id, vals);
+    if(table==='blockouts') return DB.patchBlock(id, vals);
+    throw new Error('cannot rewrite '+table);
+  },
+  async apply(e, dir){
+    if(e.kind==='patch') return this.raw(e.table, e.id, dir==='undo'?e.before:e.after);
+    if(e.kind==='insert'){        // a blockout that was added
+      if(dir==='undo') return DB.delBlock(e.id);
+      const row=await DB.addBlock(e.after);
+      if(row && row.id!=null) e.id=row.id; return row;
+    }
+    if(e.kind==='delete'){        // a blockout that was removed
+      if(dir==='redo') return DB.delBlock(e.id);
+      const row=await DB.addBlock(e.before);
+      if(row && row.id!=null) e.id=row.id; return row;
+    }
+  },
+  async step(dir){
+    const from=dir==='undo'?this.u:this.r, to=dir==='undo'?this.r:this.u;
+    if(!from.length || this.busy) return;
+    const e=from.pop(); this.busy=true;
+    try{
+      await this.apply(e, dir);
+      to.push(e);
+      toast((dir==='undo'?'↺ Undid: ':'↻ Redid: ')+e.label, false);
+    }catch(err){
+      from.push(e);
+      toast((dir==='undo'?'Undo':'Redo')+' failed — '+(err.message||err), true);
+    }
+    this.busy=false; this.ui(); this.refresh();
+  },
+  undo(){ return this.step('undo'); },
+  redo(){ return this.step('redo'); },
+  refresh(){
+    try{ bustCalCache(); }catch(e){}
+    try{ bustSuggCache(); loadSuggData(true).then(()=>{
+      try{ renderBlockList(); }catch(e){} }).catch(()=>{}); }catch(e){}
+    try{ renderSuggestionsDebounced(); refreshCrewLoad(); }catch(e){}
+    try{ if(!$('#view-cal').classList.contains('hide')) renderCal(); }catch(e){}
+    try{ if(!$('#view-quotes').classList.contains('hide')) renderQuotesList(); }catch(e){}
+    try{ if(!$('#view-bidlist').classList.contains('hide')) renderBidsList(); }catch(e){}
+    try{ if(!$('#view-multi').classList.contains('hide')) renderMultiJobs(); }catch(e){}
+    try{ if(!$('#view-todo').classList.contains('hide')) renderTodo(); }catch(e){}
+  }
+};
+(function(){
+  const nice={quotes:'quote', bids:'bid', blockouts:'blockout'};
+  async function beforeOf(table, id, patch){
+    try{
+      let row=null;
+      if(table==='quotes') row=await DB.getQuote(id);
+      else if(table==='bids')
+        row=(((await DB.listBids())||[]).find(b=>String(b.id)===String(id)))||null;
+      else if(table==='blockouts'){
+        const b=((typeof suggData!=='undefined'&&suggData&&suggData.blocks)||[])
+          .find(x=>String(x.id)===String(id) && x.internal);
+        if(b) row={date:b.date, crew_id:b.crew, from_time:b.time||null,
+                   to_time:b.to||null, reason:b.reason||null};
+      }
+      if(!row) return null;
+      const before={};
+      Object.keys(patch||{}).forEach(k=>{ before[k]= row[k]===undefined?null:row[k]; });
+      return {before, row};
+    }catch(e){ return null; }
+  }
+  function lbl(table, row, patch){
+    const n=Object.keys(patch||{}).length;
+    const who=(row&&(row.customer_name||row.reason||row.date))||'';
+    return nice[table]+(who?' · '+who:'')+' ('+n+' field'+(n===1?'':'s')+')';
+  }
+  ['patchQuote','setBooking','patchBid','patchBlock'].forEach(fn=>{
+    const orig=DB[fn] && DB[fn].bind(DB); if(!orig) return;
+    const table= fn==='patchBid'?'bids': fn==='patchBlock'?'blockouts':'quotes';
+    DB[fn]=async function(id, patch){
+      const b4=AppUndo.busy?null:await beforeOf(table, id, patch);
+      const out=await orig(id, patch);
+      if(b4) AppUndo.push({kind:'patch', table, id, before:b4.before,
+        after:Object.assign({}, patch), label:lbl(table, b4.row, patch), at:Date.now()});
+      return out;
+    };
+  });
+  const origSave=DB.saveQuote && DB.saveQuote.bind(DB);
+  if(origSave) DB.saveQuote=async function(q, id){
+    const b4=(id && !AppUndo.busy)?await beforeOf('quotes', id, q):null;
+    const out=await origSave(q, id);
+    if(b4) AppUndo.push({kind:'patch', table:'quotes', id, before:b4.before,
+      after:Object.assign({}, q), label:lbl('quotes', b4.row, q), at:Date.now()});
+    return out;
+  };
+  const origAdd=DB.addBlock && DB.addBlock.bind(DB);
+  if(origAdd) DB.addBlock=async function(row){
+    const out=await origAdd(row);
+    if(!AppUndo.busy && out && out.id!=null)
+      AppUndo.push({kind:'insert', table:'blockouts', id:out.id,
+        after:Object.assign({}, row),
+        label:'blockout · '+(row.reason||row.date||''), at:Date.now()});
+    return out;
+  };
+  const origDel=DB.delBlock && DB.delBlock.bind(DB);
+  if(origDel) DB.delBlock=async function(id){
+    const b4=AppUndo.busy?null
+      :await beforeOf('blockouts', id, {date:1,crew_id:1,from_time:1,to_time:1,reason:1});
+    const out=await origDel(id);
+    if(b4) AppUndo.push({kind:'delete', table:'blockouts', id, before:b4.row,
+      label:'blockout removed · '+(b4.row.reason||b4.row.date||''), at:Date.now()});
+    return out;
+  };
+})();
 
 /* ==================== Google Calendar, via Apps Script ====================
    Nobody authorises anything. A small Apps Script web app owns every Calendar
@@ -3160,7 +3311,7 @@ function show(v){
   document.body.classList.toggle('calwide', v==='cal');
   ['quote','bids','bidlist','quotes','cal','dash','rates','reports','todo','sugg','multi','prebook'].forEach(x=>$('#view-'+x).classList.toggle('hide', x!==v));
   if(v==='quote')  renderSchedCalDebounced();
-  if(v==='bids'){  fillBidProducts(); bdDraftRestore(); }
+  if(v==='bids'){  fillBidProducts(); bdDraftRestore(); try{ bdTrashUI(); }catch(e){} }
   if(v==='bidlist') renderBidsList();
   if(v==='cal')    renderCal();
   if(v==='quotes') renderQuotesList();
@@ -9630,6 +9781,26 @@ function bdDraftRestore(){
   if(!BidSt.id) bdMsg('Restored the bid you were working on. It will save itself once it has '+
     'a customer or an address.', false);
 }
+/* Deleted measurement lines are kept ON THIS DEVICE for 30 days, per bid,
+   so a mis-tapped ✕ is recoverable — per Taylor 2026-11-12: a line on the
+   Nic Telew bid was deleted with no way back (the autosave had already
+   written over it). localStorage rx_bid_trash; ↩ Restore pops the most
+   recent line for the open bid. */
+const BdTrash={
+  KEY:'rx_bid_trash',
+  load(){ try{ return (JSON.parse(localStorage.getItem(this.KEY)||'[]')||[])
+      .filter(t=>t && t.row && (Date.now()-t.at) < 30*86400000); }catch(e){ return []; } },
+  save(list){ try{ localStorage.setItem(this.KEY, JSON.stringify(list.slice(-25))); }catch(e){} },
+  push(row){ const l=this.load();
+    l.push({bid:String(BidSt.id||'new'), at:Date.now(), row}); this.save(l); },
+  mine(){ const k=String(BidSt.id||'new'); return this.load().filter(t=>t.bid===k); },
+  pop(){ const l=this.load(), k=String(BidSt.id||'new');
+    for(let i=l.length-1;i>=0;i--){ if(l[i].bid===k){ const t=l.splice(i,1)[0];
+      this.save(l); return t.row; } }
+    return null; }
+};
+function bdTrashUI(){ const b=$('#bd_measundo');
+  if(b) b.classList.toggle('hide', !BdTrash.mine().length); }
 function bidTotals(){
   const sqft = BidSt.meas.reduce((t,m)=>t+(m.off?0:svSqft(m)), 0);
   if($('#bd_depth').value==='fill')
@@ -9676,10 +9847,28 @@ function renderBidMeas(){
       renderBidTotal(); bdChanged(); };
     row.querySelectorAll('input').forEach(inp=>inp.addEventListener('input', upd));
     row.querySelector('.m_on').addEventListener('change', upd);
-    row.querySelector('.m_del').onclick=()=>{ BidSt.meas.splice(Number(row.dataset.bmi),1);
+    row.querySelector('.m_del').onclick=()=>{
+      /* Deleting a filled-in area takes TWO taps (per Taylor 2026-11-12:
+         "confirm upon delete of the area items for bids") — the ✕ turns
+         into a red "sure?" for 3 s first. An empty row goes in one tap. */
+      const btn=row.querySelector('.m_del');
+      const m0=BidSt.meas[Number(row.dataset.bmi)];
+      const hasData=!!(m0&&(m0.label||m0.l||m0.w||m0.sf));
+      if(hasData && btn.dataset.arm!=='1'){
+        btn.dataset.arm='1'; btn.textContent='sure?';
+        btn.style.color='var(--danger)'; btn.style.borderColor='var(--danger)';
+        clearTimeout(btn._t);
+        btn._t=setTimeout(()=>{ btn.dataset.arm='';
+          btn.textContent='✕'; btn.style.color=''; btn.style.borderColor=''; }, 3000);
+        return;
+      }
+      clearTimeout(btn._t);
+      const gone=BidSt.meas.splice(Number(row.dataset.bmi),1)[0];
+      if(gone && (gone.label||gone.l||gone.w||gone.sf)) BdTrash.push(gone);
       renderBidMeas(); bdChanged(); };
   });
   renderBidTotal();
+  bdTrashUI();
 }
 function renderBidTotal(){
   const box=$('#bd_meastotal'); if(!box) return;
@@ -11942,6 +12131,16 @@ function wire(){
     renderBidsList();
   }, 150));
   $('#bd_measadd').onclick=()=>{ BidSt.meas.push({label:'',l:'',w:'',sf:''}); renderBidMeas(); bdChanged(); };
+  const ub=$('#undoBtn'), rb=$('#redoBtn');
+  if(ub) ub.onclick=()=>AppUndo.undo();
+  if(rb) rb.onclick=()=>AppUndo.redo();
+  const bu=$('#bd_measundo');
+  if(bu) bu.onclick=()=>{
+    const r=BdTrash.pop();
+    if(!r){ bdTrashUI(); return; }
+    BidSt.meas.push(r); renderBidMeas(); bdChanged();
+    toast('↩ Measurement line restored — give the numbers a look.', false);
+  };
   $('#bd_depth').addEventListener('change', renderBidTotal);
   /* Every typed field on the worksheet feeds the autosave (the measurement
      rows and photos call bdChanged themselves). */
