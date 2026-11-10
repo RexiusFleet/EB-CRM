@@ -54,26 +54,28 @@ input,select,textarea{font:inherit;color:inherit}
 
 /* ---------- chrome ---------- */
 header.top{position:sticky;top:0;z-index:50;background:var(--chrome);border-bottom:3px solid var(--accent);
-  display:flex;align-items:center;gap:16px;padding:10px 18px;flex-wrap:wrap;color:var(--chrome-ink)}
+  display:flex;align-items:center;gap:10px;padding:10px 14px;flex-wrap:wrap;color:var(--chrome-ink)}
 /* the auth control must never be the thing that gets squeezed off-screen */
 .userbox{flex:0 0 auto;margin-left:auto}
 .userbox #authbtn{white-space:nowrap}
 @media(max-width:900px){nav.tabs{order:3;width:100%}.searchwrap{max-width:none}}
 .brand{display:flex;align-items:center;gap:9px;white-space:nowrap;
-  font-family:var(--disp);font-weight:600;font-size:19px;letter-spacing:.04em;
+  font-family:var(--disp);font-weight:600;font-size:16px;letter-spacing:.02em;
   text-transform:uppercase;color:var(--chrome-ink)}
 .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center;
   color:var(--accent-ink);font-size:12px;font-weight:800}
-nav.tabs{display:flex;gap:2px;flex:1;flex-wrap:wrap}
+nav.tabs{display:flex;gap:1px;flex:1;flex-wrap:nowrap;overflow-x:auto;min-width:0;
+  scrollbar-width:none}
+nav.tabs::-webkit-scrollbar{display:none}
 nav.tabs button{background:none;border:0;border-bottom:3px solid transparent;border-radius:0;
-  padding:8px 11px 6px;color:var(--chrome-mut);font-family:var(--disp);font-weight:500;
-  font-size:13.5px;letter-spacing:.05em;text-transform:uppercase}
+  padding:7px 7px 5px;color:var(--chrome-mut);font-family:var(--disp);font-weight:500;
+  font-size:12px;letter-spacing:.02em;text-transform:uppercase;white-space:nowrap;flex:0 0 auto}
 nav.tabs button:hover{color:var(--chrome-ink);background:rgba(255,255,255,.05)}
 nav.tabs button[aria-current="true"]{border-bottom-color:var(--good);color:var(--chrome-ink);background:none}
 /* New Bid and New Quote pop (per Taylor) — solid pills, like the Dept 14
    PRODUCTION/SALES INPUT buttons. */
 nav.tabs button[data-view="bids"],nav.tabs button[data-view="quote"]{
-  border:0;border-radius:7px;padding:8px 13px;margin:0 2px;align-self:center}
+  border:0;border-radius:7px;padding:6px 9px;margin:0 1px;align-self:center}
 nav.tabs button[data-view="bids"]{color:#fff;background:var(--warn)}
 nav.tabs button[data-view="quote"]{color:#fff;background:#3d7a4f}
 nav.tabs button[data-view="bids"][aria-current="true"]{background:var(--warn);color:#fff;
@@ -1487,7 +1489,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-10d-look';   // shown in the header; check it after deploying
+const BUILD = '2026-11-10e-look';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
