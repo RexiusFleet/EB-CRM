@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="cache-control" content="no-cache, must-revalidate">
 <meta http-equiv="pragma" content="no-cache">
-<title>Rexius Blower Quotes2</title>
+<title>Rexius Blower Quotes</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6b3c'/%3E%3Ctext x='16' y='23' font-family='system-ui,sans-serif' font-size='19' font-weight='700' fill='%23fff' text-anchor='middle'%3ER%3C/text%3E%3C/svg%3E">
 <style>
 :root{
@@ -200,6 +200,14 @@ tr:last-child td{border-bottom:0}
   color:var(--ink);user-select:none;-webkit-user-select:none}
 .tgev.app{cursor:grab;touch-action:none}
 .tgev.dragging{opacity:.8;z-index:50;box-shadow:0 8px 20px rgba(0,0,0,.35);cursor:grabbing}
+.tgsel{position:absolute;left:2px;right:2px;border:2px dashed var(--accent);border-radius:6px;
+  background:color-mix(in srgb, var(--accent) 10%, transparent);z-index:40;pointer-events:none;
+  font-size:11px;font-weight:600;color:var(--accent);padding:2px 5px}
+.tgrs{position:absolute;left:0;right:0;bottom:0;height:9px;cursor:ns-resize;touch-action:none;z-index:5}
+.tgrs:after{content:'';position:absolute;left:50%;transform:translateX(-50%);bottom:2px;
+  width:26px;height:3px;border-radius:2px;background:currentColor;opacity:.45}
+[data-guard="1"] .tgrs{display:none}
+.tgev.resizing{z-index:50;box-shadow:0 8px 20px rgba(0,0,0,.35)}
 body.crewmode .tgev{font-size:13px}
 body.bidmode .bid-convert{display:none}
 body.bidmode #tabs button{display:none}
@@ -1447,7 +1455,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-10-blockedit';   // shown in the header; check it after deploying
+const BUILD = '2026-11-10c-dragcal';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -1909,6 +1917,7 @@ const DemoDB = {
   },
   async appConfig(){ return Object.assign({capacity_mode:'dry'}, this._cfg||{}); },
   async setConfig(key, value){ (this._cfg=this._cfg||{})[key]=value; return {key, value}; },
+  async putConfig(key, value){ return this.setConfig(key, value); },
   async bookingsBetween(from,to){
     const back=(d=>{ const x=new Date(d+'T00:00:00'); x.setDate(x.getDate()-14);
       return x.toISOString().slice(0,10); })(from);
@@ -2566,6 +2575,13 @@ const LiveDB = {
   async setConfig(key, value){
     const r = await SB.rest('app_config?key=eq.'+encodeURIComponent(key),
       {method:'PATCH', headers:{Prefer:'return=representation'}, body:JSON.stringify({value})});
+    return r && r[0];
+  },
+  /* Upsert — for keys that may not exist yet (mj_hidden). */
+  async putConfig(key, value){
+    const r = await SB.rest('app_config?on_conflict=key',
+      {method:'POST', headers:{Prefer:'resolution=merge-duplicates,return=representation'},
+       body:JSON.stringify({key, value})});
     return r && r[0];
   },
   async tableCounts(){
@@ -3921,6 +3937,14 @@ async function renderMultiJobs(){
   const tLoc=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+
     String(t.getDate()).padStart(2,'0');
   const done=m=>!!(m.status==='won' && m.scheduled_date && m.scheduled_date<tLoc);
+  /* Hidden projects (per Taylor 2026-11-10: "hide the Coos Bay School
+     Dist #9 from the multi-job tab") — batch ids in app_config
+     mj_hidden, shared by everyone; the quotes themselves are untouched.
+     "N hidden" at the bottom shows and un-hides them. */
+  let mjHidden=[];
+  try{ const cfg=await DB.appConfig();
+    mjHidden=JSON.parse(cfg.mj_hidden||'[]')||[]; }catch(e){}
+  if(!Array.isArray(mjHidden)) mjHidden=[];
   const by={};
   rows.forEach(r=>{ (by[r.batch_id]=by[r.batch_id]||[]).push(r); });
   const projs=Object.keys(by).map(bid=>{
@@ -3932,11 +3956,14 @@ async function renderMultiJobs(){
       tot: ms.reduce((a,m)=>a+quotePrice(m),0),
       yds: ms.reduce((a,m)=>a+(Number(m.yards)||0),0),
       next:((ms.find(m=>!done(m)&&m.scheduled_date)||{}).scheduled_date)||null,
-      last:((ms.filter(m=>m.scheduled_date).slice(-1)[0])||{}).scheduled_date||null };
+      last:((ms.filter(m=>m.scheduled_date).slice(-1)[0])||{}).scheduled_date||null,
+      hidden: mjHidden.indexOf(bid)>=0 };
   });
-  const open=projs.filter(p=>p.d<p.n)
+  const shown=p=>MJ.showHidden ? p.hidden : !p.hidden;
+  const nHid=projs.filter(p=>p.hidden).length;
+  const open=projs.filter(p=>p.d<p.n && shown(p))
     .sort((a,b2)=>String(a.next||'9999').localeCompare(String(b2.next||'9999')));
-  const comp=projs.filter(p=>p.d>=p.n)
+  const comp=projs.filter(p=>p.d>=p.n && shown(p))
     .sort((a,b2)=>String(b2.last||'').localeCompare(String(a.last||'')));
   const jobLine=m=>'<div class="kv" style="padding-left:18px"><span class="k">'+
     (m.scheduled_date
@@ -3962,7 +3989,11 @@ async function renderMultiJobs(){
       (p.pn?' <span class="muted">· Project '+esc(p.pn)+'</span>':'')+
       (!showAll&&p.next?' <span class="muted small">· next '+esc(dfmt(p.next))+'</span>':'')+
       '</span><span><b class="small">'+p.d+' of '+p.n+' job'+(p.n===1?'':'s')+
-      ' completed</b> · <b>'+money(p.tot)+'</b></span></div>'+
+      ' completed</b> · <b>'+money(p.tot)+'</b> '+
+      '<button type="button" class="btn ghost sm" data-mjhide="'+esc(p.bid)+'" '+
+      'title="'+(p.hidden?'Put this project back on the tab'
+        :'Hide this project from the Multi-Jobs tab (for everyone) — the quotes are untouched')+
+      '">'+(p.hidden?'↩ Unhide':'Hide')+'</button></span></div>'+
       /* Volume + rate breakdown, summarized BY PRODUCT (per Taylor
          2026-11-05: "I want the line item breakdown summary by
          product") — one line per product with its yards, combined
@@ -4015,7 +4046,28 @@ async function renderMultiJobs(){
     '<span class="muted small">— every job delivered</span></div>'+
     (comp.length
       ? comp.map(p=>projRow(p,true)).join('')
-      : '<div class="muted small" style="padding:6px 0">None yet.</div>');
+      : '<div class="muted small" style="padding:6px 0">None yet.</div>')+
+    (nHid||MJ.showHidden
+      ? '<div class="small" style="margin-top:14px"><button type="button" '+
+        'class="btn ghost sm" id="mj_showhid">'+
+        (MJ.showHidden?'↩ Back to the list':'👁 '+nHid+' hidden project'+(nHid===1?'':'s')+
+        ' — show')+'</button></div>'
+      : '');
+  const sh=$('#mj_showhid');
+  if(sh) sh.onclick=()=>{ MJ.showHidden=!MJ.showHidden; renderMultiJobs(); };
+  box.querySelectorAll('[data-mjhide]').forEach(b2=>b2.onclick=async ev=>{
+    ev.stopPropagation();
+    b2.disabled=true;
+    const bid=b2.dataset.mjhide, was=mjHidden.indexOf(bid)>=0;
+    const ids=was ? mjHidden.filter(x=>x!==bid) : mjHidden.concat([bid]);
+    try{
+      await DB.putConfig('mj_hidden', JSON.stringify(ids));
+      if(was && !ids.length) MJ.showHidden=false;
+      toast(was?'↩ Back on the Multi-Jobs tab.'
+        :'Hidden from the Multi-Jobs tab — find it again under "hidden projects" at the bottom.', false);
+      renderMultiJobs();
+    }catch(e){ toast(e.message, true); b2.disabled=false; }
+  });
   const mc=$('#multicount'); if(mc) mc.textContent=open.length?'· '+open.length+' open':'';
   box.querySelectorAll('[data-mjtog]').forEach(d=>d.onclick=()=>{
     MJ.open[d.dataset.mjtog]=!MJ.open[d.dataset.mjtog]; renderMultiJobs();
@@ -7020,12 +7072,16 @@ function tgEvent(it, crew){
   const pos = 'top:'+top.toFixed(1)+'px;height:'+h.toFixed(1)+'px;left:calc('+left+
     '% + 2px);width:calc('+w+'% - 4px);';
   if(it.bid){
-    return '<div class="tgev" data-bidid="'+esc(it.bidId)+'" title="'+esc(it.summary||'')+
+    const rsOk = (!Cal.crew || (typeof BidCal!=='undefined' && BidCal)) && !officeEyes();
+    return '<div class="tgev" data-bidid="'+esc(it.bidId)+'" data-s="'+it.s+'" data-e="'+it.e+
+      '" title="'+esc(it.summary||'')+
       ' — penciled bid, tap for details" style="'+pos+
       /* black bid chips (per Taylor 2026-12-04; --bid flips light in dark mode) */
       'background:color-mix(in srgb, var(--bid) 10%, transparent);cursor:pointer;'+
       'border:2px dashed var(--bid);color:var(--bid);font-weight:600">'+
-      '<b>'+esc(fmtMin(it.s))+'</b> '+esc(String(it.summary||'').slice(0,40))+'</div>';
+      '<b>'+esc(fmtMin(it.s))+'</b> '+esc(String(it.summary||'').slice(0,40))+
+      (rsOk?'<div class="tgrs" data-rs="bid" title="Drag to change the bid\'s hours"></div>':'')+
+      '</div>';
   }
   if(it.resv){
     /* Pre-book reservation: dashed purple, the only purple on the board. */
@@ -7041,7 +7097,7 @@ function tgEvent(it, crew){
   if(it.google || it.internal || it.block){
     const beOk = !!(it.block && it.blkId && !Cal.crew && !officeEyes());
     return '<div class="tgev"'+
-      (it.blkId?' data-blkid="'+esc(it.blkId)+'"':'')+
+      (it.blkId?' data-blkid="'+esc(it.blkId)+'" data-s="'+it.s+'" data-e="'+it.e+'"':'')+
       ' title="'+esc(it.summary||'')+
       (beOk?' — tap to edit this blockout':'')+'" style="'+pos+
       (beOk?'cursor:pointer;':'')+
@@ -7050,7 +7106,9 @@ function tgEvent(it, crew){
         : 'rgba(150,155,165,.16)')+
       ';border-left:3px solid '+(it.block?'var(--danger)':'#9aa2ad')+'">'+
       '<b>'+esc(fmtMin(it.s))+'</b> '+esc(String(it.summary||'').slice(0,64))+
-      (it.google?'<div class="muted" style="font-size:10px">Google</div>':'')+'</div>';
+      (it.google?'<div class="muted" style="font-size:10px">Google</div>':'')+
+      (beOk?'<div class="tgrs" data-rs="blk" title="Drag to change the end time"></div>':'')+
+      '</div>';
   }
   const col = (crew && crew.color) || '#888';
   const timeTxt = fmtMin(toMin(it.time))+'–'+fmtMin(toMin(it.time)+Math.round((it.hours||1)*60));
@@ -7236,15 +7294,91 @@ function wireTimegrid(grid){
       if(!Cal.crew && !officeEyes()) blockEditCard(ch.dataset.blkid); };
   });
   /* Empty grid space opens the two-action chooser (per Taylor: never the
-     quote builder): pencil a BID onto the slot, or BLOCK the time out. */
+     quote builder): pencil a BID onto the slot, or BLOCK the time out.
+     A plain click/tap = default length; CLICK-AND-DRAG paints the slot
+     first, so the hours and times arrive prefilled (per Taylor
+     2026-11-10). Mouse drags only — a touch drag must stay a scroll. */
   grid.querySelectorAll('.tgcol').forEach(col=>{
-    col.addEventListener('click', e=>{
-      if(Cal.crew || officeEyes() || e.target.closest('.tgev')) return;
-      const rect = col.getBoundingClientRect();
-      let min = TG.START + Math.round(((e.clientY-rect.top)/TG.PXH*60)/30)*30;
-      min = Math.max(TG.START, Math.min(TG.END-60, min));
-      calAddCard(col.dataset.date, col.dataset.crew, hhmm(min));
+    let sel=null;
+    const yMin = e => {
+      const rect=col.getBoundingClientRect();
+      const m = TG.START + Math.round(((e.clientY-rect.top)/TG.PXH*60)/30)*30;
+      return Math.max(TG.START, Math.min(TG.END, m));
+    };
+    const clean=()=>{ if(sel&&sel.box) sel.box.remove(); sel=null; };
+    col.addEventListener('pointerdown', e=>{
+      if(Cal.crew || officeEyes() || e.button || e.target.closest('.tgev')) return;
+      if(grid.dataset.guard==='1') return;   // the pre-book plan: look, don't book
+      sel={ m0:yMin(e), box:null, mouse:e.pointerType==='mouse' };
+      if(sel.mouse){ try{ col.setPointerCapture(e.pointerId); }catch(err){} }
     });
+    col.addEventListener('pointermove', e=>{
+      if(!sel || !sel.mouse) return;
+      const m1=yMin(e);
+      if(m1===sel.m0 && !sel.box) return;
+      const lo=Math.min(sel.m0,m1), hi=Math.max(Math.max(sel.m0,m1), lo+30);
+      if(!sel.box){ sel.box=document.createElement('div'); sel.box.className='tgsel';
+        col.appendChild(sel.box); }
+      sel.box.style.top=((lo-TG.START)/60*TG.PXH)+'px';
+      sel.box.style.height=Math.max(20,(hi-lo)/60*TG.PXH-2)+'px';
+      sel.box.textContent=fmtMin(lo)+' – '+fmtMin(hi);
+      sel.lo=lo; sel.hi=hi;
+    });
+    col.addEventListener('pointerup', e=>{
+      if(!sel) return;
+      const s2=sel; clean();
+      if(s2.box && s2.hi-s2.lo>=30){
+        calAddCard(col.dataset.date, col.dataset.crew, hhmm(s2.lo), (s2.hi-s2.lo)/60);
+      } else {
+        const m=Math.max(TG.START, Math.min(TG.END-60, s2.m0));
+        calAddCard(col.dataset.date, col.dataset.crew, hhmm(m));
+      }
+    });
+    col.addEventListener('pointercancel', clean);
+  });
+  /* Drag the bottom edge of a BID or BLOCKOUT chip to change its length —
+     only those two (per Taylor 2026-11-10): booked quote events keep their
+     engine-computed hours and move by whole-chip drag as before. 15-min
+     snap, 30-min floor, done by the board's last hour. */
+  grid.querySelectorAll('.tgrs').forEach(h=>{
+    const ch=h.parentElement;
+    let rz=null;
+    h.onclick=e=>e.stopPropagation();
+    h.addEventListener('pointerdown', e=>{
+      if(grid.dataset.guard==='1' || e.button) return;
+      e.stopPropagation(); e.preventDefault();
+      rz={ y0:e.clientY, s:Number(ch.dataset.s)||TG.START,
+           e0:Number(ch.dataset.e)||(TG.START+60), en:null, moved:false };
+      try{ h.setPointerCapture(e.pointerId); }catch(err){}
+      ch.classList.add('resizing');
+    });
+    h.addEventListener('pointermove', e=>{
+      if(!rz) return;
+      const dm=Math.round(((e.clientY-rz.y0)/TG.PXH*60)/15)*15;
+      const en=Math.max(rz.s+30, Math.min(TG.END, rz.e0+dm));
+      if(en!==rz.en){ rz.en=en; rz.moved=true;
+        ch.style.height=Math.max(24,(en-rz.s)/60*TG.PXH-2)+'px'; }
+    });
+    h.addEventListener('pointerup', async e=>{
+      if(!rz) return; const r=rz; rz=null; ch.classList.remove('resizing');
+      if(!r.moved || r.en==null || r.en===r.e0) return;
+      const hrs=Math.round((r.en-r.s)/60*100)/100;
+      try{
+        if(h.dataset.rs==='bid'){
+          await DB.patchBid(ch.dataset.bidid, {scheduled_hours: hrs});
+          toast('📌 Bid visit now '+hrs+' h — ends '+fmtMin(r.en)+'.', false);
+        } else {
+          await DB.patchBlock(ch.dataset.blkid, {to_time: hhmm(r.en)});
+          bustSuggCache();
+          try{ await loadSuggData(true); }catch(e2){}
+          renderSuggestionsDebounced(); refreshCrewLoad();
+          toast('🚫 Blockout now ends '+fmtMin(r.en)+' — the engine follows it.', false);
+        }
+        bustCalCache(); renderCal();
+      }catch(err){ toast(err.message, true); bustCalCache(); renderCal(); }
+    });
+    h.addEventListener('pointercancel', ()=>{ if(rz){ rz=null;
+      ch.classList.remove('resizing'); renderCal(); } });
   });
   /* Drag to move: vertical = retime (15-min snap), across = day/truck. */
   grid.querySelectorAll('.tgev.app').forEach(ch=>{
@@ -7676,21 +7810,23 @@ async function calBlockCard(){
   renderBlockList();
 }
 /* The Calendar tab's "add" chooser: pencil a bid here, or block the time. */
-async function calAddCard(date, crewId, time){
+async function calAddCard(date, crewId, time, hours){
   const old=$('#addcard'); if(old) old.remove();
   const crewName=(((CREWS||[]).find(c=>String(c.id)===String(crewId)))||{}).name||'truck';
   let bids=[];
   try{ bids=((await DB.listBids())||[]).filter(b=>b.status!=='quoted' && !b.archived_at); }
   catch(e){}
-  const endT=(()=>{ const m=Math.min(18*60, toMin(time)+120);
-    return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0'); })();
+  /* A drag-painted slot arrives with its own length (per Taylor 2026-11-10). */
+  const endMin=Math.min(TG.END, toMin(time)+Math.round((hours||2)*60));
+  const endT=String(Math.floor(endMin/60)).padStart(2,'0')+':'+String(endMin%60).padStart(2,'0');
   const wrap=document.createElement('div'); wrap.id='addcard';
   wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;'+
     'display:flex;align-items:center;justify-content:center;padding:16px';
   wrap.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);'+
     'border-radius:12px;max-width:460px;width:100%;max-height:85vh;overflow:auto;padding:16px">'+
     '<div style="display:flex;justify-content:space-between;align-items:center">'+
-    '<b>'+esc(dfmt(date))+' · '+esc(crewName)+' · '+esc(fmtMin(toMin(time)))+'</b>'+
+    '<b>'+esc(dfmt(date))+' · '+esc(crewName)+' · '+esc(fmtMin(toMin(time)))+
+    (hours?'–'+esc(fmtMin(endMin)):'')+'</b>'+
     '<button type="button" class="btn ghost sm" id="ac_x">✕</button></div>'+
     '<div style="margin-top:12px;border:1px dashed var(--warn);border-radius:10px;padding:10px 12px">'+
     '<div class="small" style="font-weight:600;color:var(--warn)">📌 Pencil a bid here</div>'+
@@ -7702,7 +7838,7 @@ async function calAddCard(date, crewId, time){
         bids.map(b=>'<option value="'+esc(b.id)+'">'+esc(b.customer_name||'(no name)')+
           (b.address_raw?' — '+esc(b.address_raw):'')+'</option>').join('')+'</select></div>'+
         '<div style="max-width:110px"><label class="f">Hours</label>'+
-        '<input type="number" id="ac_hours" step="0.5" min="0.5" value="2" class="mono"></div>'+
+        '<input type="number" id="ac_hours" step="0.5" min="0.5" value="'+(hours||2)+'" class="mono"></div>'+
         '</div>'+
         '<button type="button" class="btn sm" id="ac_book" '+
         'style="background:var(--warn);margin-top:8px">Pencil it in</button>'+
@@ -7734,7 +7870,10 @@ async function calAddCard(date, crewId, time){
     '</div></div>';
   document.body.appendChild(wrap);
   $('#ac_x').onclick=()=>wrap.remove();
-  wrap.onclick=e=>{ if(e.target===wrap) wrap.remove(); };
+  /* The card opens on pointerup, so the drag's own trailing click lands on
+     the fresh backdrop — ignore backdrop taps for the first beat. */
+  const born=Date.now();
+  wrap.onclick=e=>{ if(e.target===wrap && Date.now()-born>250) wrap.remove(); };
   const bk=$('#ac_book');
   if(bk) bk.onclick=async()=>{
     bk.disabled=true;
