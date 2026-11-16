@@ -1502,7 +1502,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-12d-undoredo';   // shown in the header; check it after deploying
+const BUILD = '2026-11-16-blockfix';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -7564,7 +7564,7 @@ function wireTimegrid(grid){
           await DB.patchBid(ch.dataset.bidid, {scheduled_hours: hrs});
           toast('📌 Bid visit now '+hrs+' h — ends '+fmtMin(r.en)+'.', false);
         } else {
-          await DB.patchBlock(ch.dataset.blkid, {to_time: hhmm(r.en)});
+          await patchBlockSafe(ch.dataset.blkid, {to_time: hhmm(r.en)});
           bustSuggCache();
           try{ await loadSuggData(true); }catch(e2){}
           renderSuggestionsDebounced(); refreshCrewLoad();
@@ -10895,6 +10895,24 @@ function renderBlockList(){
    times and reason are all editable; saving re-feeds the engine, the
    suggestions and every board. Internal (blockouts-table) rows only —
    which is every block since the Google retirement. */
+/* Edit a blockout even on a database still missing sql/61 (the blockouts
+   table shipped with INSERT and DELETE policies only — sql/28 predates
+   editing — so an UPDATE comes back "0 rows"). The fallback removes the
+   row and re-adds it with the merged values; both of those verbs have
+   always worked. Run sql/61 and the clean single-PATCH path takes over. */
+async function patchBlockSafe(id, patch){
+  try{ return await DB.patchBlock(id, patch); }
+  catch(e){
+    if(!/0 rows/i.test(e.message||'')) throw e;
+    const b=((typeof suggData!=='undefined'&&suggData&&suggData.blocks)||[])
+      .find(x=>String(x.id)===String(id) && x.internal);
+    if(!b) throw e;
+    const merged=Object.assign({ date:b.date, crew_id:b.crew,
+      from_time:b.time||null, to_time:b.to||null, reason:b.reason||null }, patch);
+    await DB.delBlock(id);
+    return await DB.addBlock(merged);
+  }
+}
 async function blockEditCard(id){
   let b=(suggData.blocks||[]).find(x=>String(x.id)===String(id) && x.internal);
   if(!b){
@@ -10961,7 +10979,7 @@ async function blockEditCard(id){
     if(from&&to&&toMin(to)<=toMin(from)){ beMsg('The To time must be after From.', true); return; }
     const btn=$('#be_save'); btn.disabled=true; btn.textContent='Saving…';
     try{
-      await DB.patchBlock(id, { date, crew_id:$('#be_crew').value,
+      await patchBlockSafe(id, { date, crew_id:$('#be_crew').value,
         from_time:from, to_time:to, reason:$('#be_reason').value.trim()||null });
       await refresh();
       blMsg('Blockout updated.', false);
