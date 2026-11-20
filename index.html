@@ -89,6 +89,16 @@ nav.tabs button[data-view="quote"][aria-current="true"]{background:#3d7a4f;color
 .histbtns button.dim{opacity:.3}
 body.crewmode .histbtns,body.bidmode .histbtns,body.officemode .histbtns,
 body.drivermode .histbtns{display:none}
+body.splitview main{max-width:none;display:grid;grid-template-columns:1fr 1fr;
+  gap:16px;align-items:start}
+body.splitview main>*{grid-column:1/-1}
+body.splitview #view-quote{grid-column:1;grid-row:1}
+body.splitview #view-bids{grid-column:2;grid-row:1}
+body.splitview .qgrid{grid-template-columns:1fr}
+#splitclose{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:95;
+  background:var(--chrome);color:var(--chrome-ink);border:1px solid rgba(255,255,255,.3);
+  border-radius:999px;padding:9px 16px;font-weight:600;font-size:14px;box-shadow:var(--shadow)}
+@media(max-width:1100px){body.splitview main{grid-template-columns:1fr}}
 .userbox{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--chrome-mut)}
 .userbox .btn.ghost{border-color:rgba(255,255,255,.3);color:var(--chrome-ink)}
 .userbox .btn.ghost:hover{background:rgba(255,255,255,.08)}
@@ -535,6 +545,22 @@ dialog::backdrop{background:rgba(10,14,9,.55)}
                   <option value="4">4&quot;</option>
                   <option value="fill">Fill up — no set depth</option>
                 </select></div>
+            </div>
+            <!-- Quick area calculator (per Taylor 2026-11-20): phone-call
+                 math — L × W or a straight square footage per area, volume
+                 suggested at the quote's depth, one tap into Yards; the
+                 areas ride onto a bid created from this quote. -->
+            <div style="margin-top:4px">
+              <button type="button" class="btn ghost sm" id="qcalc_tog">🧮 Area calculator</button>
+              <div id="qcalcbox" class="hide" style="border:1px dashed var(--line);
+                border-radius:10px;padding:10px 12px;margin-top:6px">
+                <div id="qcalc_rows"></div>
+                <div class="row" style="margin-top:6px">
+                  <button type="button" class="btn ghost sm" id="qcalc_add"
+                    style="flex:0 0 auto">+ Add area</button>
+                  <div id="qcalc_total" class="small" style="align-self:center;flex:1"></div>
+                </div>
+              </div>
             </div>
             <!-- Seed add-on (per Taylor 2026-12-14): only when a
                  Terraseeding product is selected. -->
@@ -1502,7 +1528,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-16-blockfix';   // shown in the header; check it after deploying
+const BUILD = '2026-11-20-callbid';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -3306,6 +3332,7 @@ function renderAuth(){
 }
 
 function show(v){
+  if(typeof SplitView!=='undefined' && SplitView) exitSplit();
   $$('#tabs button').forEach(b=>b.setAttribute('aria-current', String(b.dataset.view===v)));
   // The tab bar scrolls sideways on phones -- keep the active tab in sight.
   const cur=$('#tabs button[aria-current="true"]');
@@ -10278,6 +10305,148 @@ function poolAdd(list){
    -> a button that schedules a NEW bid prefilled from this quote; a
    connected open bid -> its visit line + Open. Cached per quote id so
    recalc's constant re-renders cost nothing. */
+/* ---- Quick area calculator (per Taylor 2026-11-20) ---- */
+function qcalcYards(){
+  const sf=(State.qcalc||[]).reduce((t,m)=>t+svSqft(m),0);
+  const depV=$('#q_depth').value;
+  if(depV==='fill') return {sqft:Math.round(sf), depth:0, yards:0};
+  const depth=parseFloat(depV)||2;
+  return {sqft:Math.round(sf), depth,
+          yards: sf>0 ? Math.ceil(sf*(depth/12)/27*2)/2 : 0};
+}
+function qcalcRender(){
+  const box=$('#qcalc_rows'); if(!box) return;
+  State.qcalc=State.qcalc||[];
+  box.innerHTML=State.qcalc.map((m,i)=>{
+    const sf=Math.round(svSqft(m));
+    const lw=parseFloat(m.l)>0&&parseFloat(m.w)>0;
+    return '<div class="row" style="margin-top:6px" data-qci="'+i+'">'+
+      '<div><label class="f">L (ft)</label><input type="number" class="qc_l num mono" '+
+        'step="0.5" min="0" value="'+(m.l??'')+'"></div>'+
+      '<div><label class="f">W (ft)</label><input type="number" class="qc_w num mono" '+
+        'step="0.5" min="0" value="'+(m.w??'')+'"></div>'+
+      '<div><label class="f">or sq ft</label><input type="number" class="qc_sf num mono" '+
+        'step="1" min="0" value="'+(lw?'':(m.sf??''))+'"'+(lw?' disabled':'')+'></div>'+
+      '<div class="qc_out mono small" style="flex:0 0 86px;align-self:end;'+
+        'padding-bottom:12px"><b>'+(sf?sf.toLocaleString():'—')+'</b> sf</div>'+
+      '<button type="button" class="btn ghost sm qc_del" '+
+        'style="flex:0 0 auto;align-self:end" title="Remove this area">✕</button>'+
+      '</div>';
+  }).join('');
+  box.querySelectorAll('[data-qci]').forEach(row=>{
+    const m=State.qcalc[Number(row.dataset.qci)];
+    const upd=()=>{
+      m.l=row.querySelector('.qc_l').value;
+      m.w=row.querySelector('.qc_w').value;
+      const sfIn=row.querySelector('.qc_sf');
+      if(parseFloat(m.l)>0 && parseFloat(m.w)>0){ m.sf=''; sfIn.value=''; sfIn.disabled=true; }
+      else{ sfIn.disabled=false; m.sf=sfIn.value; }
+      const sf=Math.round(svSqft(m));
+      row.querySelector('.qc_out').innerHTML='<b>'+(sf?sf.toLocaleString():'—')+'</b> sf';
+      qcalcTotal();
+    };
+    row.querySelectorAll('input').forEach(i2=>i2.addEventListener('input', upd));
+    row.querySelector('.qc_del').onclick=()=>{
+      State.qcalc.splice(Number(row.dataset.qci),1); qcalcRender(); };
+  });
+  qcalcTotal();
+}
+function qcalcTotal(){
+  const t=$('#qcalc_total'); if(!t) return;
+  const r=qcalcYards();
+  if(!(r.sqft>0)){
+    t.innerHTML='<span class="muted">Type L × W, or a straight square footage.</span>'; return; }
+  if(!r.depth){
+    t.innerHTML='<b>'+r.sqft.toLocaleString()+' sq ft</b> · <span class="muted">Fill up — '+
+      'set the yards directly</span>'; return; }
+  const cur=parseFloat($('#q_yards').value)||0;
+  t.innerHTML='<b>'+r.sqft.toLocaleString()+' sq ft</b> × '+r.depth+'&Prime; ≈ <b>'+
+    r.yards+' yd</b> '+
+    (Math.abs(cur-r.yards)<0.01
+      ? '<span class="tag g">in the quote</span>'
+      : '<button type="button" class="btn sm" id="qcalc_use" '+
+        'style="padding:3px 10px">Use '+r.yards+' yd</button>');
+  const u=$('#qcalc_use');
+  if(u) u.onclick=()=>{
+    $('#q_yards').value=r.yards;
+    $('#q_yards').dispatchEvent(new Event('input',{bubbles:true}));
+    recalc(); qcalcTotal();
+  };
+}
+/* The calculator's areas, shaped like a bid's measurements. */
+function qcalcMeasPayload(depth_in){
+  const rows=(State.qcalc||[]).filter(m=>svSqft(m)>0);
+  if(!rows.length) return null;
+  const r=qcalcYards();
+  return { areas: rows.map(m=>({ label:'',
+             l:parseFloat(m.l)||null, w:parseFloat(m.w)||null,
+             sf:(parseFloat(m.l)>0&&parseFloat(m.w)>0)?null:(parseFloat(m.sf)||null) })),
+           sqft:r.sqft, depth_in:depth_in, suggested_yards:r.yards||null };
+}
+/* ---- side-by-side: the quote AND the bid worksheet at once ---- */
+let SplitView=false;
+function enterSplit(){
+  SplitView=true;
+  document.body.classList.add('splitview');
+  $('#view-quote').classList.remove('hide');
+  let c=$('#splitclose');
+  if(!c){
+    c=document.createElement('button');
+    c.id='splitclose'; c.type='button';
+    c.textContent='✕ Close side-by-side';
+    c.onclick=()=>{ exitSplit(); show('quote');
+      try{ renderBidPanel(); }catch(e){} };
+    document.body.appendChild(c);
+  }
+  c.classList.remove('hide');
+}
+function exitSplit(){
+  SplitView=false;
+  document.body.classList.remove('splitview');
+  const c=$('#splitclose'); if(c) c.classList.add('hide');
+}
+/* 🧮 New bid from this call (per Taylor 2026-11-20): the customer just
+   said their square footage mid-call — save the quote, start a LINKED
+   bid carrying the contact block + the calculator's areas, and open it
+   side-by-side with the quote. Convert already flows a from_quote_id
+   bid back into this same quote. */
+async function bidFromCall(){
+  if(!State.savedQuoteId){
+    await saveQuote();
+    if(!State.savedQuoteId){
+      toast('Could not save this quote yet — see the message next to Save quote.', true);
+      return;
+    }
+  }
+  const depth=$('#q_depth').value==='fill' ? 0 : (parseFloat($('#q_depth').value)||null);
+  const payload={
+    customer_name: $('#q_customer').value.trim()||null,
+    phone:         $('#q_phone').value.trim()||null,
+    address_raw:   $('#q_address').value.trim()||null,
+    city:          $('#q_city').value.trim()||null,
+    zip:           $('#q_zip').value.trim()||null,
+    product:       $('#q_product').value||null,
+    depth_in:      depth,
+    created_by:    (State.user&&State.user.email)||null,
+    from_quote_id: State.savedQuoteId,
+    measurements:  qcalcMeasPayload(depth)
+  };
+  if(!payload.measurements) delete payload.measurements;
+  let b=null;
+  try{ b=await DB.saveBid(payload); }
+  catch(e){
+    toast(/from_quote_id/i.test(e.message||'')
+      ? 'Run sql/50_bid_visits.sql in Supabase first.' : e.message, true);
+    return;
+  }
+  if(!b && DB.mode!=='demo'){ toast('Nothing saved — check sql/29_bids.sql.', true); return; }
+  bpBidCache={ qid:String(State.savedQuoteId), bid:b };
+  openBid(b);
+  enterSplit();
+  toast('🧮 Bid started and linked to the quote. The areas from the call are on the '+
+    'worksheet — fill it out now, or schedule the visit later; Convert flows it '+
+    'back into this quote.', false);
+}
 let bpBidCache = { qid:null, bid:null };
 async function renderBidConnect(){
   const box=$('#bp_connect'); if(!box) return;
@@ -10311,15 +10480,21 @@ async function renderBidConnect(){
     const ob=$('#bp_openbid');
     if(ob) ob.onclick=async()=>{
       let b2=null; try{ b2=await DB.getBid(b.id); }catch(e){}
-      if(b2) openBid(b2); else toast('Could not open that bid.', true);
+      if(b2){ openBid(b2); enterSplit(); }   // side-by-side with the quote
+      else toast('Could not open that bid.', true);
     };
   }else{
     box.innerHTML='<div class="row" style="margin-bottom:10px;align-items:center">'+
       '<button type="button" class="btn ghost sm" id="bp_newbid" style="flex:0 0 auto">'+
       '📌 Schedule a bid visit</button>'+
-      '<span class="small muted" style="align-self:center">no bid attached — pencil a '+
-      'walk-through onto the calendar</span></div>';
+      '<button type="button" class="btn ghost sm" id="bp_callbid" style="flex:0 0 auto">'+
+      '🧮 New bid from this call</button>'+
+      '<span class="small muted" style="align-self:center">pencil a walk-through onto '+
+      'the calendar, or start the bid right now from what the customer says — either '+
+      'way it links to this quote</span></div>';
     const nb=$('#bp_newbid'); if(nb) nb.onclick=openBidVisitDialog;
+    const cb=$('#bp_callbid'); if(cb) cb.onclick=()=>{ cb.disabled=true;
+      bidFromCall().finally(()=>{ cb.disabled=false; }); };
   }
 }
 function openBidVisitDialog(){
@@ -12147,6 +12322,8 @@ function wire(){
     SchedUI.forcePick=false; updateSchedMode();
     setHistoryCollapsed(false);
     State.fromBidId=null; State.bidNotes=null; renderBidRef();
+    State.qcalc=[]; try{ const bx=$('#qcalcbox'); if(bx) bx.classList.add('hide');
+      qcalcRender(); }catch(e){}
     State.fromPrebookId=null;
     State.batchId=null; try{ renderBatchPanel(); }catch(e){}
     svReset();
@@ -12163,6 +12340,21 @@ function wire(){
   const ub=$('#undoBtn'), rb=$('#redoBtn');
   if(ub) ub.onclick=()=>AppUndo.undo();
   if(rb) rb.onclick=()=>AppUndo.redo();
+  const qt=$('#qcalc_tog');
+  if(qt) qt.onclick=()=>{
+    const bx=$('#qcalcbox'); bx.classList.toggle('hide');
+    if(!bx.classList.contains('hide')){
+      if(!(State.qcalc&&State.qcalc.length)){ State.qcalc=[{l:'',w:'',sf:''}]; }
+      qcalcRender();
+    }
+  };
+  const qa=$('#qcalc_add');
+  if(qa) qa.onclick=()=>{ (State.qcalc=State.qcalc||[]).push({l:'',w:'',sf:''}); qcalcRender(); };
+  $('#q_depth').addEventListener('change', ()=>{ try{ qcalcTotal(); }catch(e){} });
+  $('#q_yards').addEventListener('input', ()=>{ try{ qcalcTotal(); }catch(e){} });
+  /* a brand-new quote shows the bid-connect verbs without waiting for a
+     yards/measurement re-render */
+  try{ renderBidPanel(); }catch(e){}
   const bu=$('#bd_measundo');
   if(bu) bu.onclick=()=>{
     const r=BdTrash.pop();
@@ -12307,6 +12499,8 @@ function wire(){
         depth_in:      parseFloat($('#q_depth').value)||null,
         created_by:    (State.user&&State.user.email)||null,
         from_quote_id: State.savedQuoteId,
+        measurements:  qcalcMeasPayload($('#q_depth').value==='fill'?0
+                         :(parseFloat($('#q_depth').value)||null)) || undefined,
         assigned_to:   $('#bv_who').value.trim()||null,
         remind_days:   $('#bv_remind').value===''?null:Number($('#bv_remind').value),
         scheduled_date:  $('#bv_date').value||null,
