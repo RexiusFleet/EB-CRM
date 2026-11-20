@@ -1528,7 +1528,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-20-callbid';   // shown in the header; check it after deploying
+const BUILD = '2026-11-20b-numbadge';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -6697,16 +6697,19 @@ async function calFetch(from, to){
     /* Per Taylor: each calendar entry shows THAT TRIP's yards, not the
        whole project. Slots split by their load counts; a legacy
        two-truck split goes by each leg's hours; one trip = the total. */
-    /* Internal jobs have no customer numbers — their one needed number
-       is the internal project # (per Taylor 2026-11-03). */
-    const erpN = b.internal
-      ? ((b.internal_no && String(b.internal_no).trim()) ? 3 : 0)
-      : [b.account_no, b.so_no, b.project_no].filter(v=>v&&String(v).trim()).length;
+    /* The ✓#s check waits for EVERY number (per Taylor 2026-11-20 — the
+       internal # alone was lighting it green): internal jobs need the
+       internal # + Order Nbr + Project; normal jobs Customer # + Order
+       Nbr + Project. Anything less shows "N of 3 #s". */
+    const erpN = (b.internal
+      ? [b.internal_no, b.so_no, b.project_no]
+      : [b.account_no, b.so_no, b.project_no])
+      .filter(v=>v&&String(v).trim()).length;
     const push = (crew,date,time,hours,lbl,si,y)=>{ if(date) jobs.push({qid:b.id,
       customer:b.customer_name||'', product:b.product||'',
       addr: b.address_raw||'',
       yards: (y!=null? y : totY), totYards: totY,
-      erp: erpN===3 ? 'full' : erpN ? 'partial' : 'none',
+      erp: erpN===3 ? 'full' : erpN ? 'partial' : 'none', erpN: erpN,
       closed: !!b.closed_out_at, inv: !!b.invoice_sent_at, fb: !!b.feedback_open,
       /* bidAmt, NOT 'bid' — it.bid already flags penciled BID chips. */
       bidAmt: b.bid_amount!=null?Number(b.bid_amount):null,
@@ -7381,7 +7384,7 @@ function tgEvent(it, crew){
       (!Cal.crew && it.erp ? (it.erp==='full'
         ? ' <span style="color:var(--good);font-weight:700">✓#s</span>'
         : ' <span style="color:var(--warn);font-weight:700">'+
-          (it.erp==='partial'?'#s…':'no #s')+'</span>') : '')+
+          (it.erp==='partial'?(it.erpN||1)+' of 3 #s':'no #s')+'</span>') : '')+
       (DriverView && it.bidAmt!=null ? (function(){
         const disc=it.fbVol!=null && it.totYards && it.fbVol<it.totYards;
         const cpy=disc?prodCostYd(it.product):null;
@@ -7434,12 +7437,11 @@ function visibleCrews(d, days){
       if(sel.length) return sel;
     }
   }
-  return (CREWS||[]).filter(c=>{
-    if(!c.backup) return true;
-    const id=String(c.id);
-    return (d.jobs||[]).some(j=>String(j.crew_id)===id && days.includes(j.date)) ||
-           (d.gEvents||[]).some(g=>String(g.crew_id)===id && days.includes(g.date));
-  });
+  /* Backup trucks used to hide when idle (2026-10-29); per Taylor
+     2026-11-20 every truck's column always shows, so December's empty
+     #58 is still there to drag jobs, paint slots and block time on.
+     The engine still never auto-suggests a backup truck. */
+  return (CREWS||[]).slice();
 }
 function renderCalWeek(grid, days, d){
   const today = calFmt(new Date());
