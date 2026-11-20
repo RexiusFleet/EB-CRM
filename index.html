@@ -1528,7 +1528,7 @@ const YARDS = [
   {name:'Hwy 99 retail', addr:'150 Hwy 99, Eugene, OR'}
 ];
 
-const BUILD = '2026-11-20b-numbadge';   // shown in the header; check it after deploying
+const BUILD = '2026-11-20c-calcbid';   // shown in the header; check it after deploying
 const SCRIPT_WANT = '2026-11-26-suggestmail';  // the deployed script version this app needs
 const CONFIG = {
   SUPABASE_URL:      'https://jmvciokrclgtsnlrtvwg.supabase.co',
@@ -10358,21 +10358,46 @@ function qcalcTotal(){
   const r=qcalcYards();
   if(!(r.sqft>0)){
     t.innerHTML='<span class="muted">Type L × W, or a straight square footage.</span>'; return; }
+  /* → Turn into a bid (per Taylor 2026-11-20): the calculation itself
+     converts — same linked-bid flow as 🧮 New bid from this call. */
+  const toBid='<button type="button" class="btn ghost sm" id="qcalc_tobid" '+
+    'style="padding:3px 10px" title="Start a bid linked to this quote with these '+
+    'areas on its worksheet — opens side-by-side">→ Turn into a bid</button>';
   if(!r.depth){
     t.innerHTML='<b>'+r.sqft.toLocaleString()+' sq ft</b> · <span class="muted">Fill up — '+
-      'set the yards directly</span>'; return; }
-  const cur=parseFloat($('#q_yards').value)||0;
-  t.innerHTML='<b>'+r.sqft.toLocaleString()+' sq ft</b> × '+r.depth+'&Prime; ≈ <b>'+
-    r.yards+' yd</b> '+
-    (Math.abs(cur-r.yards)<0.01
-      ? '<span class="tag g">in the quote</span>'
-      : '<button type="button" class="btn sm" id="qcalc_use" '+
-        'style="padding:3px 10px">Use '+r.yards+' yd</button>');
-  const u=$('#qcalc_use');
-  if(u) u.onclick=()=>{
-    $('#q_yards').value=r.yards;
-    $('#q_yards').dispatchEvent(new Event('input',{bubbles:true}));
-    recalc(); qcalcTotal();
+      'set the yards directly</span> '+toBid;
+  }else{
+    const cur=parseFloat($('#q_yards').value)||0;
+    t.innerHTML='<b>'+r.sqft.toLocaleString()+' sq ft</b> × '+r.depth+'&Prime; ≈ <b>'+
+      r.yards+' yd</b> '+
+      (Math.abs(cur-r.yards)<0.01
+        ? '<span class="tag g">in the quote</span>'
+        : '<button type="button" class="btn sm" id="qcalc_use" '+
+          'style="padding:3px 10px">Use '+r.yards+' yd</button>')+' '+toBid;
+    const u=$('#qcalc_use');
+    if(u) u.onclick=()=>{
+      $('#q_yards').value=r.yards;
+      $('#q_yards').dispatchEvent(new Event('input',{bubbles:true}));
+      recalc(); qcalcTotal();
+    };
+  }
+  const tb=$('#qcalc_tobid');
+  if(tb) tb.onclick=async()=>{
+    tb.disabled=true;
+    try{
+      /* a bid already linked to this quote? open it instead of doubling */
+      let ex=null;
+      if(State.savedQuoteId){
+        try{ ex=await DB.bidForQuote(State.savedQuoteId); }catch(e){}
+      }
+      if(ex && ex.status!=='quoted' && !ex.archived_at){
+        openBid(ex); enterSplit();
+        toast('This quote already has a bid — opened side-by-side. The calculator\'s '+
+          'areas stay on the quote; add any new ones on the worksheet.', false);
+      }else{
+        await bidFromCall();
+      }
+    }finally{ tb.disabled=false; }
   };
 }
 /* The calculator's areas, shaped like a bid's measurements. */
